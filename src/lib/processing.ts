@@ -82,51 +82,54 @@ export async function addDocument(examId: number, filename: string, bytes: Buffe
   return docId;
 }
 
-const running = new Set<number>();
+const running = new Map<number, Promise<void>>();
 
-/** Send each unprocessed slide to Claude for notes. Safe to call again to resume. */
-export async function processDocument(docId: number) {
-  if (running.has(docId)) return;
-  running.add(docId);
-  try {
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as
-      | { filename: string; exam_id: number }
-      | undefined;
-    if (!doc) return;
-    db.prepare("UPDATE documents SET status = 'processing', error = NULL WHERE id = ?").run(docId);
-    const pages = db
-      .prepare("SELECT * FROM pages WHERE document_id = ? AND status != 'done' ORDER BY page_number")
-      .all(docId) as PageRow[];
-
-    await mapLimit(pages, 4, async (page) => {
-      try {
-        const notes = await noteSlide(doc.filename, page);
-        savePageNotes(page, notes);
-      } catch (err) {
-        db.prepare("UPDATE pages SET status = 'error', error = ? WHERE id = ?").run(String(err), page.id);
-      }
-    });
-
-    const failed = db
-      .prepare("SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status != 'done'")
-      .get(docId) as { n: number };
-    if (failed.n > 0) {
-      db.prepare("UPDATE documents SET status = 'error', error = ? WHERE id = ?").run(
-        `${failed.n} slide(s) could not be processed. Use "Retry" to try them again.`,
-        docId,
-      );
-      return;
-    }
-    db.prepare("UPDATE documents SET status = 'done' WHERE id = ?").run(docId);
-
-    // When the last lecture for this exam finishes, (re)build the topic map automatically.
-    const pending = db
-      .prepare("SELECT COUNT(*) n FROM documents WHERE exam_id = ? AND status IN ('pending','processing')")
-      .get(doc.exam_id) as { n: number };
-    if (pending.n === 0) void buildTopicMap(doc.exam_id);
-  } finally {
-    running.delete(docId);
+/** Send each unprocessed slide to Claude for notes. Safe to call again: resumes, or joins a run in progress. */
+export function processDocument(docId: number): Promise<void> {
+  let p = running.get(docId);
+  if (!p) {
+    p = runDocument(docId).finally(() => running.delete(docId));
+    running.set(docId, p);
   }
+  return p;
+}
+
+async function runDocument(docId: number) {
+  const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as
+    | { filename: string; exam_id: number }
+    | undefined;
+  if (!doc) return;
+  db.prepare("UPDATE documents SET status = 'processing', error = NULL WHERE id = ?").run(docId);
+  const pages = db
+    .prepare("SELECT * FROM pages WHERE document_id = ? AND status != 'done' ORDER BY page_number")
+    .all(docId) as PageRow[];
+
+  await mapLimit(pages, 4, async (page) => {
+    try {
+      const notes = await noteSlide(doc.filename, page);
+      savePageNotes(page, notes);
+    } catch (err) {
+      db.prepare("UPDATE pages SET status = 'error', error = ? WHERE id = ?").run(String(err), page.id);
+    }
+  });
+
+  const failed = db
+    .prepare("SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status != 'done'")
+    .get(docId) as { n: number };
+  if (failed.n > 0) {
+    db.prepare("UPDATE documents SET status = 'error', error = ? WHERE id = ?").run(
+      `${failed.n} slide(s) could not be processed. Use "Retry" to try them again.`,
+      docId,
+    );
+    return;
+  }
+  db.prepare("UPDATE documents SET status = 'done' WHERE id = ?").run(docId);
+
+  // When the last lecture for this exam finishes, (re)build the topic map automatically.
+  const pending = db
+    .prepare("SELECT COUNT(*) n FROM documents WHERE exam_id = ? AND status IN ('pending','processing')")
+    .get(doc.exam_id) as { n: number };
+  if (pending.n === 0) void buildTopicMap(doc.exam_id);
 }
 
 async function noteSlide(lecture: string, page: PageRow): Promise<SlideNotes> {

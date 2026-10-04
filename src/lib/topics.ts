@@ -26,7 +26,19 @@ Rules:
 
 type PageForMap = PageRow & { filename: string };
 
-export async function buildTopicMap(examId: number) {
+const inflight = new Map<number, Promise<void>>();
+
+/** Build (or rebuild) an exam's topic map. Concurrent calls for the same exam share one run. */
+export function buildTopicMap(examId: number): Promise<void> {
+  let p = inflight.get(examId);
+  if (!p) {
+    p = runTopicMap(examId).finally(() => inflight.delete(examId));
+    inflight.set(examId, p);
+  }
+  return p;
+}
+
+async function runTopicMap(examId: number) {
   db.prepare("UPDATE exams SET topic_status = 'building', topic_error = NULL WHERE id = ?").run(examId);
   try {
     const pages = db
