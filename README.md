@@ -7,6 +7,10 @@ A study tool for dental students, built around their own lecture PDFs. Many stud
 - **Topic map, study sessions with tutor chat, practice exams (recall / INBDE-style case / image), daily spaced review, progress.**
 - **Memory across exams:** each user's concept mastery, slide library and session summaries carry over from one exam to the next.
 - **Spending tracker:** Settings shows each user's estimated AI spend.
+- **Calendar and study planner:** year and month calendar with exams (each one is an exam workspace) and busy days. A paced day-by-day plan across all upcoming exams, "Today's plan" on the home page, tasks that tick themselves off, and a calendar subscription link for Google or Apple Calendar.
+- **Practice:** recall, case, image, and **INBDE-style case sets** (one patient, 3–5 questions).
+- **Classes:** invite codes, and shared exams classmates can add with no AI cost. Progress stays private, and a reported question is hidden class-wide.
+- **Admin** (`/admin`, first account): users, password resets with a temporary password, account removal, spending, backup status.
 
 ## Run it locally
 
@@ -28,6 +32,17 @@ Data goes to `./data` (SQLite + PDFs + slide images) unless `DATA_DIR` is set.
 Measured on the Claude path with a real 53-slide lecture. The ChatGPT figures are estimates. Questions from abandoned or skipped practice exams are reused instead of being regenerated.
 
 `CLAUDE_MODEL` and `OPENAI_MODEL` override the defaults.
+
+## Tests
+
+`npm test` runs the Vitest suite (planner, classes, auth, data isolation, spaced review, database upgrade). Each run uses a throwaway database.
+
+## Backups and restore
+
+- Every day the app copies a database snapshot (`db/study-YYYY-MM-DD.db.gz`, last 14 kept) and any new lecture PDFs (`pdfs/doc-<id>.pdf`) to the Railway bucket `dental-study-backups` (`BACKUP_S3_*` variables). Status and a "Back up now" button are on `/admin`.
+- `railway run npx tsx scripts/list-backups.mts` lists what's stored.
+- `railway run npx tsx scripts/inspect-backup.mts` summarizes the latest snapshot (users, exams, lecture status).
+- **Restore** into an empty volume: `DATA_DIR=/data npx tsx scripts/restore-backup.mts [YYYY-MM-DD]` (run it inside the service). It restores the database and PDFs, then re-renders the slide images.
 
 ## Deploy
 
