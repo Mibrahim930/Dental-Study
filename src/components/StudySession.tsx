@@ -1,0 +1,354 @@
+"use client";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { SlideImage } from "./SlideImage";
+import { masteryColor, pct } from "@/lib/format";
+
+type TopicLite = { id: number; position: number; title: string; emphasized: boolean };
+type ChatMsg = { id?: number; role: "user" | "assistant"; content: string };
+type LessonData = {
+  topic: { id: number; title: string; summary: string; emphasized: boolean };
+  concepts: { id: number; name: string; mastery: number | null; earlier_exams: string[] }[];
+  lesson: {
+    explanation: string;
+    key_points: string[];
+    slides: { page_id: number; caption: string }[];
+    checks: { question: string; options: string[]; correct_index: number; explanation: string }[];
+    connections: string | null;
+  };
+  aspects: Record<number, number>;
+};
+
+export function StudySession(props: {
+  examId: number;
+  examName: string;
+  sessionId: number;
+  initialPosition: number;
+  topics: TopicLite[];
+  initialChat: ChatMsg[];
+}) {
+  const { examId, sessionId, topics } = props;
+  const router = useRouter();
+  const [position, setPosition] = useState(props.initialPosition);
+  // Lesson results are tagged with their position so stale responses never show on the wrong topic.
+  const [result, setResult] = useState<{ position: number; data?: LessonData; error?: string } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [visited, setVisited] = useState<Set<number>>(new Set([props.initialPosition]));
+  const [ending, setEnding] = useState(false);
+  const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/sessions/${sessionId}/lesson?position=${position}`)
+      .then(async (res) => {
+        const json = await res.json();
+        if (!cancelled) setResult(res.ok ? { position, data: json } : { position, error: json.error ?? "Could not load this topic." });
+      })
+      .catch((err) => !cancelled && setResult({ position, error: String(err) }));
+    // Warm up the next topic so it's ready when the student gets there.
+    if (position + 1 < topics.length) void fetch(`/api/sessions/${sessionId}/lesson?position=${position + 1}&prefetch=1`);
+    return () => {
+      cancelled = true;
+    };
+  }, [position, attempt, sessionId, topics.length]);
+
+  const current = result?.position === position ? result : null;
+  const data = current?.data ?? null;
+  const error = current?.error ?? "";
+
+  const go = (pos: number) => {
+    setPosition(pos);
+    setVisited((v) => new Set(v).add(pos));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  async function endSession() {
+    setEnding(true);
+    const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+    const json = await res.json();
+    setEndSummary(json.summary ?? null);
+  }
+
+  async function practiceCovered() {
+    const topicIds = topics.filter((t) => visited.has(t.position)).map((t) => t.id);
+    const res = await fetch(`/api/exams/${examId}/attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 3)), mode: "tutor", style: "mixed", topicIds }),
+    });
+    const { id } = await res.json();
+    router.push(`/attempts/${id}`);
+  }
+
+  const topic = topics[position];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <Link href={`/exams/${examId}`} className="text-sm text-slate-500 hover:underline">← {props.examName}</Link>
+          <h1 className="text-xl font-semibold">
+            Topic {position + 1} of {topics.length}: {topic.title}
+          </h1>
+        </div>
+        <button className="btn-secondary" onClick={endSession} disabled={ending}>
+          End session
+        </button>
+      </div>
+
+      {endSummary !== undefined && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4">
+          <div className="card max-w-md space-y-3">
+            <h2 className="text-lg font-semibold">Session saved</h2>
+            {endSummary && <p className="text-sm text-slate-700">{endSummary}</p>}
+            <p className="text-sm text-slate-600">
+              Want to lock it in? Take a short practice exam on the {visited.size} topic{visited.size === 1 ? "" : "s"} you covered.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-primary" onClick={practiceCovered}>Practice exam on these topics</button>
+              <Link className="btn-secondary" href={`/exams/${examId}`}>Not now</Link>
+            </div>
+          </div>
+        </div>
+      )}
+      {ending && endSummary === undefined && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30">
+          <div className="card text-sm">Saving session notes…</div>
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-[200px_1fr_360px]">
+        <nav className="hidden max-h-[80vh] overflow-y-auto lg:block">
+          <ol className="space-y-1 text-sm">
+            {topics.map((t) => (
+              <li key={t.id}>
+                <button
+                  onClick={() => go(t.position)}
+                  className={`w-full rounded-md px-2 py-1 text-left ${
+                    t.position === position ? "bg-teal-700 text-white" : visited.has(t.position) ? "text-slate-800 hover:bg-slate-100" : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  {t.position + 1}. {t.title} {t.emphasized && "★"}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+
+        <article className="min-w-0 space-y-4">
+          {!data && !error && (
+            <div className="card animate-pulse text-sm text-slate-500">Preparing this topic from your slides… (first time takes ~30s)</div>
+          )}
+          {error && (
+            <div className="card text-sm text-red-600">
+              {error} <button className="btn-ghost" onClick={() => { setResult(null); setAttempt((a) => a + 1); }}>Try again</button>
+            </div>
+          )}
+          {data && <Lesson key={data.topic.id} data={data} sessionId={sessionId} />}
+
+          <div className="flex justify-between">
+            <button className="btn-secondary" disabled={position === 0} onClick={() => go(position - 1)}>← Previous</button>
+            {position + 1 < topics.length ? (
+              <button className="btn-primary" onClick={() => go(position + 1)}>Next topic →</button>
+            ) : (
+              <button className="btn-primary" onClick={endSession}>Finish session</button>
+            )}
+          </div>
+        </article>
+
+        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} />
+      </div>
+    </div>
+  );
+}
+
+function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
+  const { lesson, concepts, topic } = data;
+  const [zoom, setZoom] = useState<number | null>(null);
+  return (
+    <>
+      <section className="card space-y-3">
+        <div className="flex flex-wrap gap-1">
+          {topic.emphasized && <span className="badge bg-amber-100 text-amber-800">★ Emphasized in lecture</span>}
+          {concepts.map((c) => (
+            <span key={c.id} className={`badge ${masteryColor(c.mastery)}`} title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : ""}>
+              {c.name}
+              {c.mastery != null && ` · ${pct(c.mastery)}`}
+              {c.earlier_exams.length > 0 && " ↺"}
+            </span>
+          ))}
+        </div>
+        <div className="prose-study">
+          <ReactMarkdown>{lesson.explanation}</ReactMarkdown>
+        </div>
+      </section>
+
+      {lesson.slides.length > 0 && (
+        <section className="grid gap-3 sm:grid-cols-2">
+          {lesson.slides.map((s) => (
+            <figure key={s.page_id} className="card space-y-2 p-3">
+              <button onClick={() => setZoom(s.page_id)} className="block w-full">
+                <SlideImage pageId={s.page_id} alt={s.caption} />
+              </button>
+              <figcaption className="text-sm text-slate-600">{s.caption}</figcaption>
+            </figure>
+          ))}
+        </section>
+      )}
+      {zoom != null && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/80 p-4" onClick={() => setZoom(null)}>
+          <div className="w-full max-w-5xl">
+            <SlideImage pageId={zoom} alt="Slide" />
+          </div>
+        </div>
+      )}
+
+      <section className="card border-teal-200 bg-teal-50/50">
+        <h3 className="mb-2 font-semibold text-teal-900">Key points</h3>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-slate-800">
+          {lesson.key_points.map((k) => (
+            <li key={k}>{k}</li>
+          ))}
+        </ul>
+      </section>
+
+      {lesson.connections && (
+        <section className="card border-indigo-200 bg-indigo-50/50 text-sm">
+          <h3 className="mb-1 font-semibold text-indigo-900">↺ Connects to earlier exams</h3>
+          <p className="text-slate-800">{lesson.connections}</p>
+        </section>
+      )}
+
+      {lesson.checks.map((c, i) => (
+        <QuickCheck key={i} check={c} index={i} sessionId={sessionId} topicId={topic.id} />
+      ))}
+    </>
+  );
+}
+
+function QuickCheck({
+  check,
+  index,
+  sessionId,
+  topicId,
+}: {
+  check: LessonData["lesson"]["checks"][number];
+  index: number;
+  sessionId: number;
+  topicId: number;
+}) {
+  const [chosen, setChosen] = useState<number | null>(null);
+  const answered = chosen != null;
+  function choose(i: number) {
+    if (answered) return;
+    setChosen(i);
+    void fetch(`/api/sessions/${sessionId}/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId, question: check.question, correct: i === check.correct_index }),
+    });
+  }
+  return (
+    <section className="card space-y-2">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Quick check {index + 1}</div>
+      <p className="font-medium">{check.question}</p>
+      <div className="grid gap-2">
+        {check.options.map((o, i) => (
+          <button
+            key={i}
+            onClick={() => choose(i)}
+            className={`rounded-lg border px-3 py-2 text-left text-sm ${
+              !answered
+                ? "border-slate-300 hover:bg-slate-50"
+                : i === check.correct_index
+                  ? "border-emerald-500 bg-emerald-50"
+                  : i === chosen
+                    ? "border-rose-400 bg-rose-50"
+                    : "border-slate-200 text-slate-500"
+            }`}
+          >
+            {String.fromCharCode(65 + i)}. {o}
+          </button>
+        ))}
+      </div>
+      {answered && (
+        <p className="text-sm text-slate-700">
+          <strong>{chosen === check.correct_index ? "Correct. " : "Not quite. "}</strong>
+          {check.explanation}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function TutorChat({ sessionId, position, initial }: { sessionId: number; position: number; initial: ChatMsg[] }) {
+  const [messages, setMessages] = useState<ChatMsg[]>(initial);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const bottom = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [messages]);
+
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    setMessages((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    const res = await fetch(`/api/sessions/${sessionId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, position }),
+    });
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let acc = "";
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      acc += decoder.decode(value, { stream: true });
+      setMessages((m) => [...m.slice(0, -1), { role: "assistant", content: acc }]);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <aside className="card flex h-[80vh] flex-col p-0 lg:sticky lg:top-4">
+      <div className="border-b border-slate-200 px-4 py-3">
+        <h2 className="font-semibold">Ask the tutor</h2>
+        <p className="text-xs text-slate-500">Answers come from your lectures and remember your past sessions.</p>
+      </div>
+      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+        {messages.length === 0 && (
+          <p className="text-sm text-slate-500">
+            Try: &quot;What&apos;s the difference between SIP and SAP?&quot; or &quot;Quiz me on this topic.&quot;
+          </p>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-6 bg-teal-700 text-white" : "mr-2 bg-slate-100 text-slate-800"}`}
+          >
+            {m.role === "assistant" ? (
+              <div className="prose-study text-sm">
+                <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
+              </div>
+            ) : (
+              m.content
+            )}
+          </div>
+        ))}
+        <div ref={bottom} />
+      </div>
+      <form onSubmit={send} className="flex gap-2 border-t border-slate-200 p-3">
+        <input className="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything…" />
+        <button className="btn-primary" disabled={busy || !input.trim()}>Send</button>
+      </form>
+    </aside>
+  );
+}
