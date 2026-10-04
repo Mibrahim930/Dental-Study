@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS exams (
   course TEXT,
   exam_date TEXT,
   kind TEXT NOT NULL DEFAULT 'block',              -- block | quiz | practical | board | other
+  source_exam_id INTEGER,                          -- set when added from a classmate's shared exam
   status TEXT NOT NULL DEFAULT 'active',           -- active | archived
   topic_status TEXT NOT NULL DEFAULT 'none',       -- none | building | ready | error
   topic_error TEXT,
@@ -132,6 +133,16 @@ CREATE TABLE IF NOT EXISTS session_checks (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Board-style case: one patient shared by several questions.
+CREATE TABLE IF NOT EXISTS cases (
+  id INTEGER PRIMARY KEY,
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  scenario TEXT NOT NULL,
+  patient_box TEXT NOT NULL,                       -- JSON
+  image_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS questions (
   id INTEGER PRIMARY KEY,
   exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
@@ -145,6 +156,8 @@ CREATE TABLE IF NOT EXISTS questions (
   explanation TEXT NOT NULL,
   source_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
   image_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
+  case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,   -- set for questions in a board-style case set
+  root_question_id INTEGER,                                 -- original question this was copied from (class sharing)
   flagged INTEGER NOT NULL DEFAULT 0,
   flag_note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -223,6 +236,31 @@ CREATE TABLE IF NOT EXISTS plan_tasks (
 );
 CREATE INDEX IF NOT EXISTS plan_tasks_user_date ON plan_tasks(user_id, date);
 
+-- Classes: students share exams (lectures already read by AI) with classmates via an invite code.
+CREATE TABLE IF NOT EXISTS classes (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  invite_code TEXT NOT NULL UNIQUE,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS class_members (
+  class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (class_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS shared_exams (
+  id INTEGER PRIMARY KEY,
+  class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  shared_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  shared_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(class_id, exam_id)
+);
+
 -- Every AI call, for the per-user spending tracker.
 CREATE TABLE IF NOT EXISTS ai_usage (
   id INTEGER PRIMARY KEY,
@@ -246,6 +284,14 @@ function columns(db: Database.Database, table: string): string[] {
 function migrate(db: Database.Database) {
   if (!columns(db, "exams").includes("user_id")) db.exec("ALTER TABLE exams ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
   if (!columns(db, "documents").includes("batch_id")) db.exec("ALTER TABLE documents ADD COLUMN batch_id TEXT");
+  if (!columns(db, "questions").includes("case_id")) {
+    db.exec(`CREATE TABLE IF NOT EXISTS cases (
+      id INTEGER PRIMARY KEY, exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE, scenario TEXT NOT NULL,
+      patient_box TEXT NOT NULL, image_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+    db.exec("ALTER TABLE questions ADD COLUMN case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE");
+    db.exec("ALTER TABLE questions ADD COLUMN root_question_id INTEGER");
+  }
+  if (!columns(db, "exams").includes("source_exam_id")) db.exec("ALTER TABLE exams ADD COLUMN source_exam_id INTEGER");
   if (!columns(db, "attempts").includes("task_id")) db.exec("ALTER TABLE attempts ADD COLUMN task_id INTEGER");
   if (!columns(db, "exams").includes("kind")) db.exec("ALTER TABLE exams ADD COLUMN kind TEXT NOT NULL DEFAULT 'block'");
   if (!columns(db, "documents").includes("backed_up")) db.exec("ALTER TABLE documents ADD COLUMN backed_up INTEGER NOT NULL DEFAULT 0");
@@ -373,6 +419,8 @@ export type Question = {
   concept_id: number | null;
   type: "recall" | "case" | "image";
   patient_box: string | null;
+  case_id: number | null;
+  root_question_id: number | null;
   stem: string;
   options: string;
   correct_index: number;

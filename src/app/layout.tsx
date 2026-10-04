@@ -27,6 +27,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/calendar" className="text-slate-600 hover:text-slate-900">Calendar</Link>
             <Link href="/review" className="text-slate-600 hover:text-slate-900">Daily review</Link>
             <Link href="/progress" className="text-slate-600 hover:text-slate-900">Progress</Link>
+            <Link href="/classes" className="text-slate-600 hover:text-slate-900">Classes</Link>
             {user.is_admin ? (
               <Link href="/admin" className="ml-auto text-slate-600 hover:text-slate-900">Admin</Link>
             ) : null}

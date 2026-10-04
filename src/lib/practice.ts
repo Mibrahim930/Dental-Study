@@ -8,7 +8,7 @@ import { mastery, recordConceptResult, upsertConcept, weakConcepts, type Concept
 import { credentials } from "./credentials";
 import { examOwner } from "./db";
 
-export type Style = "mixed" | "recall" | "case";
+export type Style = "mixed" | "recall" | "case" | "caseset";
 export type Mode = "tutor" | "timed";
 export const SECONDS_PER_QUESTION = 72;
 
@@ -102,6 +102,8 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
         )
         .all(...weak.map((c) => c.id), examId) as Topic[])
     : [];
+  if (opts.style === "caseset") return finishGeneration(attemptId, await buildCaseSets(topics, opts.size));
+
   const pastCount = pastTopics.length ? Math.max(1, Math.round(opts.size * 0.12)) : 0;
   const plan = [...allocate(topics, opts.size - pastCount), ...allocate(pastTopics, pastCount)];
 
@@ -115,7 +117,12 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
   if (created.length === 0) throw new Error("No questions could be generated.");
 
   // Interleave topics so the exam doesn't run topic by topic.
-  const shuffled = created.sort(() => Math.random() - 0.5);
+  finishGeneration(attemptId, created.sort(() => Math.random() - 0.5));
+}
+
+function finishGeneration(attemptId: number, questionIds: number[]) {
+  if (questionIds.length === 0) throw new Error("No questions could be generated.");
+  const shuffled = questionIds;
   const insert = db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, ?)");
   db.transaction(() => {
     shuffled.forEach((qid, i) => insert.run(attemptId, qid, i));
@@ -131,12 +138,138 @@ function unusedQuestions(topicId: number, style: Style, limit: number): number[]
   return (
     db
       .prepare(
-        `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.type IN (${types.map(() => "?").join(",")})
+        `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.case_id IS NULL AND q.type IN (${types.map(() => "?").join(",")})
          AND NOT EXISTS (SELECT 1 FROM attempt_questions aq WHERE aq.question_id = q.id AND aq.chosen_index IS NOT NULL)
          ORDER BY RANDOM() LIMIT ?`,
       )
       .all(topicId, ...types, limit) as { id: number }[]
   ).map((r) => r.id);
+}
+
+// ---- Board-style case sets: one patient, several questions ----
+
+const PatientBox = z.object({
+  patient: z.string().describe("Age, sex"),
+  chief_complaint: z.string(),
+  medical_history: z.string(),
+  medications: z.string(),
+  allergies: z.string(),
+  dental_history: z.string(),
+  findings: z.string().describe("Clinical and radiographic findings, test results (cold, EPT, percussion, palpation, probing, mobility)"),
+});
+
+const GeneratedCases = z.object({
+  cases: z.array(
+    z.object({
+      scenario: z.string().describe("1-3 sentences introducing the patient's visit, without revealing any answer"),
+      patient_box: PatientBox,
+      image_page_id: z.number().nullable().describe("ID of an [IMAGE-CASE] slide whose clinical image fits this patient, or null"),
+      questions: z
+        .array(
+          z.object({
+            stem: z.string(),
+            options: z.array(z.string()).describe("Exactly 5 answer choices, no letter prefixes"),
+            correct_index: z.number().describe("0-based index of the correct option"),
+            explanation: z.string().describe("Why the answer is correct and why the main distractors are wrong. Cite the slide"),
+            source_page_id: z.number().describe("ID of the slide this question is based on"),
+            concept: z.string().describe("The concept tested; use one of the listed concept names"),
+          }),
+        )
+        .describe("3-5 questions about this same patient"),
+    }),
+  ),
+});
+
+const CASE_SYSTEM = `You write INBDE-style case sets for a dental student, based strictly on their lecture slides.
+Each case is one realistic patient (patient box: age/sex, chief complaint, medical history, medications, allergies, dental history, findings)
+followed by 3-5 single-best-answer questions about that same patient that build on each other, for example:
+diagnosis → what test or finding confirms it → emergency/definitive treatment → prognosis, complication or follow-up.
+- 5 options per question, plausible distractors, no "all/none of the above".
+- The scenario and patient box must not give away answers. Later questions may reveal what earlier ones asked.
+- If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image.
+- Prioritize slides marked ★IMPORTANT or with annotations. Every fact must be supported by the slides.`;
+
+/** Case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
+async function buildCaseSets(topics: Topic[], size: number): Promise<number[]> {
+  const caseCount = Math.max(1, Math.round(size / 4));
+  const groups: number[][] = [];
+  await mapLimit(allocate(topics, caseCount), 3, async ({ topic, count }) => {
+    const reused = unusedCases(topic.id, count);
+    groups.push(...reused);
+    if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length)));
+  });
+  // Shuffle the order of cases, but keep each case's questions together and in order.
+  return groups.sort(() => Math.random() - 0.5).flat();
+}
+
+function unusedCases(topicId: number, limit: number): number[][] {
+  const caseIds = (
+    db
+      .prepare(
+        `SELECT c.id FROM cases c WHERE EXISTS (SELECT 1 FROM questions q WHERE q.case_id = c.id AND q.topic_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.case_id = c.id AND q.flagged = 1)
+         AND NOT EXISTS (SELECT 1 FROM questions q JOIN attempt_questions aq ON aq.question_id = q.id WHERE q.case_id = c.id AND aq.chosen_index IS NOT NULL)
+         ORDER BY RANDOM() LIMIT ?`,
+      )
+      .all(topicId, limit) as { id: number }[]
+  ).map((r) => r.id);
+  return caseIds.map((id) => (db.prepare("SELECT id FROM questions WHERE case_id = ? ORDER BY id").all(id) as { id: number }[]).map((r) => r.id));
+}
+
+async function generateCases(topic: Topic, count: number): Promise<number[][]> {
+  const userId = examOwner(topic.exam_id);
+  const pages = topicPages(topic);
+  const imageIds = new Set(pages.filter((p) => parseNotes(p)?.case_image_box).map((p) => p.id));
+  const concepts = (
+    db.prepare("SELECT c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(topic.id) as { name: string }[]
+  ).map((c) => c.name);
+  const notes = slideNotesText(pages).replace(/\[P(\d+)\]/g, (m, id) => (imageIds.has(Number(id)) ? `${m} [IMAGE-CASE]` : m));
+
+  const out = await generate({
+    creds: credentials(userId),
+    purpose: "case sets",
+    schema: GeneratedCases,
+    system: CASE_SYSTEM,
+    effort: "medium",
+    maxTokens: 32000,
+    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} case set${count === 1 ? "" : "s"}.\n\nSlides:\n${notes}`,
+  });
+
+  const valid = new Set(pages.map((p) => p.id));
+  const insertCase = db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) VALUES (?, ?, ?, ?)");
+  const insertQ = db.prepare(
+    `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id, case_id)
+     VALUES (?, ?, ?, 'case', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const groups: number[][] = [];
+  for (const c of out.cases.slice(0, count)) {
+    const qs = c.questions.filter((q) => q.options.length >= 2 && q.correct_index >= 0 && q.correct_index < q.options.length);
+    if (qs.length === 0) continue;
+    const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
+    const box = JSON.stringify(c.patient_box);
+    const caseId = Number(insertCase.run(topic.exam_id, c.scenario, box, image).lastInsertRowid);
+    groups.push(
+      qs.map((q) => {
+        const order = q.options.map((_, i) => i).sort(() => Math.random() - 0.5);
+        return Number(
+          insertQ.run(
+            topic.exam_id,
+            topic.id,
+            upsertConcept(userId, q.concept),
+            box,
+            q.stem,
+            JSON.stringify(order.map((i) => q.options[i])),
+            order.indexOf(q.correct_index),
+            q.explanation,
+            valid.has(q.source_page_id) ? q.source_page_id : null,
+            image,
+            caseId,
+          ).lastInsertRowid,
+        );
+      }),
+    );
+  }
+  return groups;
 }
 
 async function generateForTopic(topic: Topic, count: number, style: Style): Promise<number[]> {

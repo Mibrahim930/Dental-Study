@@ -6,7 +6,7 @@ export function PracticeForm({ examId, topics }: { examId: number; topics: { id:
   const router = useRouter();
   const [size, setSize] = useState(25);
   const [mode, setMode] = useState<"tutor" | "timed">("tutor");
-  const [style, setStyle] = useState<"mixed" | "recall" | "case">("mixed");
+  const [style, setStyle] = useState<"mixed" | "recall" | "case" | "caseset">("mixed");
   const [selected, setSelected] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +36,7 @@ export function PracticeForm({ examId, topics }: { examId: number; topics: { id:
         label="Question style"
         value={style}
         onChange={setStyle}
-        options={[["mixed", "Mixed"], ["recall", "Recall only"], ["case", "Case & image (board style)"]]}
+        options={[["mixed", "Mixed"], ["recall", "Recall only"], ["case", "Case & image"], ["caseset", "Case sets (INBDE)"]]}
       />
       <details className="text-sm">
         <summary className="cursor-pointer text-slate-600">

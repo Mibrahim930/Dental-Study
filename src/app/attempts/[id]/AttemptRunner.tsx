@@ -113,7 +113,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         header={
           <div className="text-xs text-slate-500">
             Question {index + 1} of {questions.length}
-            {q.type !== "recall" && <span className="ml-2 badge bg-sky-100 text-sky-800">{q.type === "case" ? "Case" : "Image"}</span>}
+            {q.type !== "recall" && !q.caseInfo && <span className="ml-2 badge bg-sky-100 text-sky-800">{q.type === "case" ? "Case" : "Image"}</span>}
           </div>
         }
       />

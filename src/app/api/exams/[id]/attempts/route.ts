@@ -13,7 +13,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/
   const id = startAttempt(examId, {
     size,
     mode: body.mode === "timed" ? "timed" : "tutor",
-    style: body.style === "recall" || body.style === "case" ? body.style : "mixed",
+    style: body.style === "recall" || body.style === "case" || body.style === "caseset" ? body.style : "mixed",
     topicIds: body.topicIds,
   });
   return NextResponse.json({ id });

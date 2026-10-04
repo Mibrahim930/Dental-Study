@@ -14,6 +14,7 @@ export type QuestionData = {
   flagged: boolean;
   topic: string | null;
   concept: string | null;
+  caseInfo?: { number: number; index: number; size: number; scenario: string } | null;
   correct_index?: number;
   explanation?: string;
   source?: { page_id: number; filename: string | null; page_number: number | null } | null;
@@ -58,6 +59,14 @@ export function QuestionCard({
   return (
     <div className="card space-y-4">
       {header}
+      {q.caseInfo && (
+        <div className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-950">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-700">
+            Case {q.caseInfo.number} · Question {q.caseInfo.index} of {q.caseInfo.size}
+          </div>
+          {q.caseInfo.scenario}
+        </div>
+      )}
       {q.patient_box && (
         <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm sm:grid-cols-[150px_1fr]">
           {Object.entries(q.patient_box).map(([k, v]) => (
