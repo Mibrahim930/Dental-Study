@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "import": "tsx --env-file=.env.local scripts/import-lectures.ts"
+    "import": "tsx --env-file=.env.local scripts/import-lectures.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
