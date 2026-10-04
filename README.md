@@ -28,4 +28,10 @@ Every Claude call uses `claude-opus-5-5` by default (set `AI_MODEL` to change it
 
 ## Deploy
 
-The app needs a server with a persistent disk, because it stores SQLite and the image files on disk. Railway, Render and Fly.io all work. Mount a volume, set `DATA_DIR` to it, set the env vars above, then build with `npm run build` and start with `npm start`.
+Live at https://dental-study-production.up.railway.app (Railway project "truthful-education").
+
+- Every push to `main` on GitHub deploys automatically.
+- All data (database, PDFs, slide images) lives on the Railway volume mounted at `/data` (`DATA_DIR=/data`). Nothing is stored in Git.
+- Service variables: `ANTHROPIC_API_KEY`, `APP_PASSCODE`, `DATA_DIR`.
+
+To host somewhere else, use a server with a persistent disk (Render and Fly.io also work). Point `DATA_DIR` at the disk, run `npm run build`, then `npm start`.
