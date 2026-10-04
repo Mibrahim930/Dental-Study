@@ -6,8 +6,19 @@ export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? "./data");
 export const FILES_DIR = path.join(DATA_DIR, "files");
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  provider TEXT,                                   -- anthropic | openai
+  api_key_enc TEXT,                                -- AES-GCM encrypted with SECRET_KEY
+  api_key_last4 TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS exams (
   id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   course TEXT,
   exam_date TEXT,
@@ -24,6 +35,7 @@ CREATE TABLE IF NOT EXISTS documents (
   page_count INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'pending',          -- pending | processing | done | error
   error TEXT,
+  batch_id TEXT,                                   -- Anthropic Message Batch reading this lecture's slides
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -50,11 +62,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
 
 CREATE TABLE IF NOT EXISTS concepts (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
   attempts INTEGER NOT NULL DEFAULT 0,
   correct INTEGER NOT NULL DEFAULT 0,
   last_seen TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS topics (
@@ -75,8 +89,10 @@ CREATE TABLE IF NOT EXISTS topic_concepts (
 );
 
 CREATE TABLE IF NOT EXISTS glossary (
-  abbr TEXT PRIMARY KEY COLLATE NOCASE,
-  meaning TEXT NOT NULL
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  abbr TEXT NOT NULL COLLATE NOCASE,
+  meaning TEXT NOT NULL,
+  UNIQUE(user_id, abbr)
 );
 
 CREATE TABLE IF NOT EXISTS study_sessions (
@@ -153,7 +169,50 @@ CREATE TABLE IF NOT EXISTS review_cards (
   due TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Every AI call, for the per-user spending tracker.
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
+
+function columns(db: Database.Database, table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+}
+
+/** Upgrade databases created before user accounts existed. Old rows get user_id NULL and are claimed by the first account. */
+function migrate(db: Database.Database) {
+  if (!columns(db, "exams").includes("user_id")) db.exec("ALTER TABLE exams ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
+  if (!columns(db, "documents").includes("batch_id")) db.exec("ALTER TABLE documents ADD COLUMN batch_id TEXT");
+  if (!columns(db, "concepts").includes("user_id")) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      CREATE TABLE concepts_new (
+        id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE,
+        attempts INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_seen TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(user_id, name));
+      INSERT INTO concepts_new (id, name, attempts, correct, last_seen, created_at) SELECT id, name, attempts, correct, last_seen, created_at FROM concepts;
+      DROP TABLE concepts;
+      ALTER TABLE concepts_new RENAME TO concepts;`);
+    db.pragma("foreign_keys = ON");
+  }
+  if (!columns(db, "glossary").includes("user_id")) {
+    db.exec(`
+      CREATE TABLE glossary_new (user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, abbr TEXT NOT NULL COLLATE NOCASE, meaning TEXT NOT NULL, UNIQUE(user_id, abbr));
+      INSERT INTO glossary_new (abbr, meaning) SELECT abbr, meaning FROM glossary;
+      DROP TABLE glossary;
+      ALTER TABLE glossary_new RENAME TO glossary;`);
+  }
+}
 
 declare global {
   var __db: Database.Database | undefined;
@@ -164,6 +223,12 @@ function open(): Database.Database {
   const db = new Database(path.join(DATA_DIR, "study.db"));
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Old databases: add the new columns before running SCHEMA (its indexes may reference them).
+  const hasExams = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exams'").get();
+  if (hasExams) {
+    db.exec(SCHEMA.slice(0, SCHEMA.indexOf("CREATE TABLE IF NOT EXISTS exams"))); // users table first
+    migrate(db);
+  }
   db.exec(SCHEMA);
   return db;
 }
@@ -171,8 +236,18 @@ function open(): Database.Database {
 // Reuse one connection across hot reloads in dev.
 export const db: Database.Database = globalThis.__db ?? (globalThis.__db = open());
 
+export type User = {
+  id: number;
+  email: string;
+  password_hash: string;
+  provider: "anthropic" | "openai" | null;
+  api_key_enc: string | null;
+  api_key_last4: string | null;
+};
+
 export type Exam = {
   id: number;
+  user_id: number;
   name: string;
   course: string | null;
   exam_date: string | null;
@@ -232,6 +307,12 @@ export type Question = {
   flagged: number;
 };
 
-export function getExam(id: number): Exam | undefined {
-  return db.prepare("SELECT * FROM exams WHERE id = ?").get(id) as Exam | undefined;
+/** An exam, only if it belongs to this user. */
+export function getExam(id: number, userId: number): Exam | undefined {
+  return db.prepare("SELECT * FROM exams WHERE id = ? AND user_id = ?").get(id, userId) as Exam | undefined;
+}
+
+/** Owner of an exam (for background jobs that run without a request). */
+export function examOwner(examId: number): number {
+  return (db.prepare("SELECT user_id FROM exams WHERE id = ?").get(examId) as { user_id: number }).user_id;
 }

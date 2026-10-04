@@ -2,10 +2,15 @@ import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
 import { getLesson } from "@/lib/study";
 import { topicConcepts } from "@/lib/memory";
+import { apiUser, notFound, unauthorized } from "@/lib/user";
+import { ownsSession } from "@/lib/owner";
 
 export const maxDuration = 300;
 
 export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id]/lesson">) {
+  const user = await apiUser();
+  if (!user) return unauthorized();
+  if (!ownsSession(user.id, Number((await ctx.params).id))) return notFound();
   const sessionId = Number((await ctx.params).id);
   const url = new URL(request.url);
   const position = Number(url.searchParams.get("position") ?? 0);

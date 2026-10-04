@@ -18,7 +18,7 @@ export default function LoginPage() {
     setBusy(false);
     // Full page load: client-side navigation could reuse a cached "redirect to /login" from before sign-in.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    if (res.ok) window.location.assign("/");
+    if (res.ok) window.location.assign("/account");
     else setError("That passcode didn't work.");
   }
 

@@ -8,14 +8,16 @@ import { Uploader } from "@/components/Uploader";
 import { PracticeForm } from "@/components/PracticeForm";
 import { ActionButton } from "@/components/ActionButton";
 import { setArchived, updateExam } from "@/app/actions";
+import { requireUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 type DocWithProgress = DocumentRow & { done: number; failed: number };
 
 export default async function ExamPage(props: PageProps<"/exams/[id]">) {
+  const user = await requireUser();
   const id = Number((await props.params).id);
-  const exam = getExam(id);
+  const exam = getExam(id, user.id);
   if (!exam) notFound();
 
   const docs = db

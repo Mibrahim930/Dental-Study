@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { db, type PageRow } from "./db";
+import { db, examOwner, type PageRow } from "./db";
+import { credentials } from "./credentials";
 import { generate } from "./ai";
 import { parseNotes } from "./processing";
 import { upsertConcept } from "./memory";
@@ -64,11 +65,14 @@ async function runTopicMap(examId: number) {
           ` | concepts: ${n.concepts.join("; ")}`,
       );
     }
-    const existing = (db.prepare("SELECT name FROM concepts ORDER BY name").all() as { name: string }[]).map(
+    const userId = examOwner(examId);
+    const existing = (db.prepare("SELECT name FROM concepts WHERE user_id = ? ORDER BY name").all(userId) as { name: string }[]).map(
       (c) => c.name,
     );
 
     const map = await generate({
+      creds: credentials(userId),
+      purpose: "topic map",
       schema: TopicMap,
       system: SYSTEM,
       effort: "medium",
@@ -92,7 +96,7 @@ async function runTopicMap(examId: number) {
         const topicId = Number(
           insertTopic.run(examId, position++, t.title, t.summary, JSON.stringify(ids), t.emphasized ? 1 : 0).lastInsertRowid,
         );
-        for (const name of t.concepts) link.run(topicId, upsertConcept(name));
+        for (const name of t.concepts) link.run(topicId, upsertConcept(userId, name));
       });
       db.prepare("UPDATE exams SET topic_status = 'ready' WHERE id = ?").run(examId);
     });

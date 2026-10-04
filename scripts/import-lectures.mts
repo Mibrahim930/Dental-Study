@@ -1,27 +1,29 @@
 // Bulk-import lecture PDFs into an exam from the command line.
-//   npm run import -- "Endo Block Exam" 2026-11-12 "/path/to/lectures" [more files or folders...]
-// If an exam with that name exists, the lectures are added to it.
+//   npm run import -- you@example.com "Endo Block Exam" 2026-11-12 "/path/to/lectures" [more files or folders...]
+// The account must exist and have an API key. If that user has an exam with this name, lectures are added to it.
 import fs from "fs";
 import path from "path";
 import { db } from "../src/lib/db";
-import { addDocument, processDocument } from "../src/lib/processing";
+import { addDocument, pollBatches, processDocument } from "../src/lib/processing";
 import { buildTopicMap } from "../src/lib/topics";
 
 async function main() {
-  const [name, date, ...inputs] = process.argv.slice(2);
-  if (!name || inputs.length === 0) {
-    console.error('Usage: npm run import -- "Exam name" YYYY-MM-DD|- <pdf files or folders...>');
+  const [email, name, date, ...inputs] = process.argv.slice(2);
+  if (!email || !name || inputs.length === 0) {
+    console.error('Usage: npm run import -- you@example.com "Exam name" YYYY-MM-DD|- <pdf files or folders...>');
     process.exit(1);
   }
+  const user = db.prepare("SELECT id FROM users WHERE email = ?").get(email.toLowerCase()) as { id: number } | undefined;
+  if (!user) throw new Error(`No account for ${email}. Create it on the site first.`);
   const files = inputs.flatMap((p) =>
     fs.statSync(p).isDirectory()
       ? fs.readdirSync(p).filter((f) => f.toLowerCase().endsWith(".pdf")).sort().map((f) => path.join(p, f))
       : [p],
   );
 
-  let exam = db.prepare("SELECT id FROM exams WHERE name = ?").get(name) as { id: number } | undefined;
+  let exam = db.prepare("SELECT id FROM exams WHERE user_id = ? AND name = ?").get(user.id, name) as { id: number } | undefined;
   if (!exam) {
-    const id = db.prepare("INSERT INTO exams (name, exam_date) VALUES (?, ?)").run(name, date && date !== "-" ? date : null).lastInsertRowid;
+    const id = db.prepare("INSERT INTO exams (user_id, name, exam_date) VALUES (?, ?, ?)").run(user.id, name, date && date !== "-" ? date : null).lastInsertRowid;
     exam = { id: Number(id) };
     console.log(`Created exam "${name}" (#${exam.id})`);
   }
@@ -41,6 +43,11 @@ async function main() {
     console.log(`Slides read: ${r.done}/${r.total}${r.failed ? ` (${r.failed} failed)` : ""}`);
   }, 15000);
   await Promise.all(docIds.map((id) => processDocument(id)));
+  // Claude lectures run as batches; wait for them to finish.
+  while ((db.prepare(`SELECT COUNT(*) n FROM documents WHERE id IN (${docIds.join(",")}) AND status = 'processing'`).get() as { n: number }).n > 0) {
+    await new Promise((r) => setTimeout(r, 30000));
+    await pollBatches();
+  }
   clearInterval(timer);
 
   console.log("Building topic map…");

@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dueCards, countDue } from "@/lib/practice";
 import { parseNotes } from "@/lib/processing";
+import { apiUser, unauthorized } from "@/lib/user";
 
 export async function GET(request: Request) {
+  const user = await apiUser();
+  if (!user) return unauthorized();
   const limit = Math.min(Number(new URL(request.url).searchParams.get("limit") ?? 20), 200);
-  const cards = dueCards(limit).map((q) => ({
+  const cards = dueCards(user.id, limit).map((q) => ({
     card_id: q.card_id,
     id: q.id,
     type: q.type,
@@ -17,7 +20,7 @@ export async function GET(request: Request) {
     image: imageFor(q.image_page_id),
     source_page_id: q.source_page_id,
   }));
-  return NextResponse.json({ due: countDue(), cards });
+  return NextResponse.json({ due: countDue(user.id), cards });
 }
 
 function imageFor(pageId: number | null) {

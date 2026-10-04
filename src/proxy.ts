@@ -1,15 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { AUTH_COOKIE, passcodeToken } from "@/lib/auth";
+import { GATE_COOKIE, gateOk, SESSION_COOKIE, sessionUserId } from "@/lib/auth";
 
-export async function proxy(request: NextRequest) {
-  const passcode = process.env.APP_PASSCODE;
-  if (!passcode) return NextResponse.next(); // no passcode set: open access (local use)
-  const token = request.cookies.get(AUTH_COOKIE)?.value;
-  if (token && token === (await passcodeToken(passcode))) return NextResponse.next();
-  if (request.nextUrl.pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-  }
-  return NextResponse.redirect(new URL("/login", request.url));
+// Pages reachable with only the site passcode (before having an account).
+const ACCOUNT_PATHS = ["/account", "/api/account/signin", "/api/account/signup", "/help/api-keys"];
+
+export function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const isApi = pathname.startsWith("/api/");
+  const deny = (to: string) =>
+    isApi ? NextResponse.json({ error: "Please sign in again." }, { status: 401 }) : NextResponse.redirect(new URL(to, request.url));
+
+  if (!gateOk(request.cookies.get(GATE_COOKIE)?.value)) return deny("/login");
+  if (ACCOUNT_PATHS.includes(pathname)) return NextResponse.next();
+  if (!sessionUserId(request.cookies.get(SESSION_COOKIE)?.value)) return deny("/account");
+  return NextResponse.next();
 }
 
 export const config = {

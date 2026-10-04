@@ -2,7 +2,8 @@ import fs from "fs";
 import path from "path";
 import * as mupdf from "mupdf";
 import { db, FILES_DIR, type PageRow } from "./db";
-import { generate, mapLimit } from "./ai";
+import { batchResults, createBatch, generate, mapLimit } from "./ai";
+import { credentials, type Credentials } from "./credentials";
 import { buildTopicMap } from "./topics";
 import { NOTES_SYSTEM, SlideNotes } from "./notes";
 
@@ -48,7 +49,11 @@ export async function addDocument(examId: number, filename: string, bytes: Buffe
 
 const running = new Map<number, Promise<void>>();
 
-/** Send each unprocessed slide to Claude for notes. Safe to call again: resumes, or joins a run in progress. */
+/**
+ * Read every unprocessed slide of a lecture. Safe to call again: resumes, or joins a run in progress.
+ * Claude users go through the Batch API (half price, finishes within minutes to an hour; see pollBatches).
+ * ChatGPT users are processed slide by slide.
+ */
 export function processDocument(docId: number): Promise<void> {
   let p = running.get(docId);
   if (!p) {
@@ -58,36 +63,69 @@ export function processDocument(docId: number): Promise<void> {
   return p;
 }
 
-async function runDocument(docId: number) {
-  const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as
-    | { filename: string; exam_id: number }
-    | undefined;
-  if (!doc) return;
-  db.prepare("UPDATE documents SET status = 'processing', error = NULL WHERE id = ?").run(docId);
-  const pages = db
-    .prepare("SELECT * FROM pages WHERE document_id = ? AND status != 'done' ORDER BY page_number")
-    .all(docId) as PageRow[];
+type DocInfo = { id: number; filename: string; exam_id: number; batch_id: string | null; user_id: number | null };
 
+function docInfo(docId: number): DocInfo | undefined {
+  return db
+    .prepare("SELECT d.id, d.filename, d.exam_id, d.batch_id, e.user_id FROM documents d JOIN exams e ON e.id = d.exam_id WHERE d.id = ?")
+    .get(docId) as DocInfo | undefined;
+}
+
+function pendingPages(docId: number): PageRow[] {
+  return db.prepare("SELECT * FROM pages WHERE document_id = ? AND status != 'done' ORDER BY page_number").all(docId) as PageRow[];
+}
+
+function failDoc(docId: number, error: string) {
+  db.prepare("UPDATE documents SET status = 'error', error = ?, batch_id = NULL WHERE id = ?").run(error, docId);
+}
+
+async function runDocument(docId: number) {
+  const doc = docInfo(docId);
+  if (!doc) return;
+  if (!doc.user_id) return failDoc(docId, "This lecture has no owner yet. Sign in to claim it.");
+  let creds: Credentials;
+  try {
+    creds = credentials(doc.user_id);
+  } catch (err) {
+    return failDoc(docId, String(err instanceof Error ? err.message : err));
+  }
+  db.prepare("UPDATE documents SET status = 'processing', error = NULL WHERE id = ?").run(docId);
+  if (doc.batch_id) return; // a batch is already running; pollBatches() will finish it
+
+  const pages = pendingPages(docId);
+  if (creds.provider === "anthropic" && pages.length > 3) {
+    try {
+      const batchId = await createBatch(
+        creds,
+        SlideNotes,
+        pages.map((p) => ({ customId: String(p.id), ...slideRequest(doc.filename, p) })),
+      );
+      db.prepare("UPDATE documents SET batch_id = ? WHERE id = ?").run(batchId, docId);
+      return;
+    } catch (err) {
+      console.error(`Batch create failed for document ${docId}; processing directly`, err);
+    }
+  }
+  await processDirectly(creds, doc, pages);
+  finishDocument(doc);
+}
+
+async function processDirectly(creds: Credentials, doc: DocInfo, pages: PageRow[]) {
   await mapLimit(pages, 4, async (page) => {
     try {
-      const notes = await noteSlide(doc.filename, page);
-      savePageNotes(page, notes);
+      const req = slideRequest(doc.filename, page);
+      const notes = await generate({ creds, purpose: "read slides", schema: SlideNotes, ...req });
+      savePageNotes(creds.userId, page, notes);
     } catch (err) {
       db.prepare("UPDATE pages SET status = 'error', error = ? WHERE id = ?").run(String(err), page.id);
     }
   });
+}
 
-  const failed = db
-    .prepare("SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status != 'done'")
-    .get(docId) as { n: number };
-  if (failed.n > 0) {
-    db.prepare("UPDATE documents SET status = 'error', error = ? WHERE id = ?").run(
-      `${failed.n} slide(s) could not be processed. Use "Retry" to try them again.`,
-      docId,
-    );
-    return;
-  }
-  db.prepare("UPDATE documents SET status = 'done' WHERE id = ?").run(docId);
+function finishDocument(doc: DocInfo) {
+  const failed = (db.prepare("SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status != 'done'").get(doc.id) as { n: number }).n;
+  if (failed > 0) return failDoc(doc.id, `${failed} slide(s) could not be processed. Use "Retry" to try them again.`);
+  db.prepare("UPDATE documents SET status = 'done', batch_id = NULL WHERE id = ?").run(doc.id);
 
   // When the last lecture for this exam finishes, (re)build the topic map automatically.
   const pending = db
@@ -96,24 +134,54 @@ async function runDocument(docId: number) {
   if (pending.n === 0) void buildTopicMap(doc.exam_id);
 }
 
-async function noteSlide(lecture: string, page: PageRow): Promise<SlideNotes> {
-  const image = fs.readFileSync(path.join(FILES_DIR, page.image_path)).toString("base64");
-  return generate({
-    schema: SlideNotes,
-    system: NOTES_SYSTEM,
-    effort: "low",
-    maxTokens: 8000,
-    content: [
-      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-      {
-        type: "text",
-        text: `Lecture: ${lecture}\nSlide ${page.page_number}\n\nExtracted text layer:\n${page.text || "(none)"}`,
-      },
-    ],
-  });
+let polling = false;
+
+/** Check running slide batches; save finished results. Called every minute from instrumentation.ts. */
+export async function pollBatches() {
+  if (polling) return;
+  polling = true;
+  try {
+    const docs = db.prepare("SELECT id FROM documents WHERE batch_id IS NOT NULL AND status = 'processing'").all() as { id: number }[];
+    for (const { id } of docs) {
+      const doc = docInfo(id);
+      if (!doc?.batch_id || !doc.user_id) continue;
+      try {
+        const creds = credentials(doc.user_id);
+        const results = await batchResults(creds, "read slides (batch)", SlideNotes, doc.batch_id);
+        if (!results) continue; // still running
+        const byId = new Map(pendingPages(id).map((p) => [String(p.id), p]));
+        for (const r of results) {
+          const page = byId.get(r.customId);
+          if (page && r.ok) savePageNotes(creds.userId, page, r.value);
+        }
+        db.prepare("UPDATE documents SET batch_id = NULL WHERE id = ?").run(id);
+        // Anything the batch couldn't do gets one direct retry.
+        const leftover = pendingPages(id);
+        if (leftover.length) await processDirectly(creds, doc, leftover);
+        finishDocument(doc);
+      } catch (err) {
+        console.error(`Polling batch for document ${id} failed`, err);
+      }
+    }
+  } finally {
+    polling = false;
+  }
 }
 
-function savePageNotes(page: PageRow, notes: SlideNotes) {
+function slideRequest(lecture: string, page: PageRow) {
+  const image = fs.readFileSync(path.join(FILES_DIR, page.image_path)).toString("base64");
+  return {
+    system: NOTES_SYSTEM,
+    effort: "low" as const,
+    maxTokens: 8000,
+    content: [
+      { type: "image" as const, base64: image },
+      { type: "text" as const, text: `Lecture: ${lecture}\nSlide ${page.page_number}\n\nExtracted text layer:\n${page.text || "(none)"}` },
+    ],
+  };
+}
+
+function savePageNotes(userId: number, page: PageRow, notes: SlideNotes) {
   const tx = db.transaction(() => {
     db.prepare(
       "UPDATE pages SET status = 'done', error = NULL, title = ?, notes_json = ?, emphasized = ?, has_case = ? WHERE id = ?",
@@ -126,17 +194,22 @@ function savePageNotes(page: PageRow, notes: SlideNotes) {
         .filter(Boolean)
         .join("\n"),
     );
-    const gloss = db.prepare("INSERT OR IGNORE INTO glossary (abbr, meaning) VALUES (?, ?)");
-    for (const a of notes.abbreviations) gloss.run(a.abbr.trim(), a.meaning.trim());
+    const gloss = db.prepare("INSERT OR IGNORE INTO glossary (user_id, abbr, meaning) VALUES (?, ?, ?)");
+    for (const a of notes.abbreviations) gloss.run(userId, a.abbr.trim(), a.meaning.trim());
   });
   tx();
 }
 
-/** On server start, resume any lecture that was mid-processing when the app stopped. */
-export function resumeUnfinished() {
-  const docs = db.prepare("SELECT id FROM documents WHERE status = 'processing'").all() as { id: number }[];
+/** Resume lectures that were mid-processing when the app stopped (optionally only one user's). */
+export function resumeUnfinished(userId?: number) {
+  const docs = db
+    .prepare(
+      `SELECT d.id FROM documents d JOIN exams e ON e.id = d.exam_id
+       WHERE d.status IN ('processing','error') AND d.batch_id IS NULL ${userId ? "AND e.user_id = ?" : "AND d.status = 'processing'"}`,
+    )
+    .all(...(userId ? [userId] : [])) as { id: number }[];
   for (const d of docs) void processDocument(d.id);
-  db.prepare("UPDATE exams SET topic_status = 'none' WHERE topic_status = 'building'").run();
+  if (!userId) db.prepare("UPDATE exams SET topic_status = 'none' WHERE topic_status = 'building'").run();
 }
 
 export function parseNotes(page: Pick<PageRow, "notes_json">): SlideNotes | null {

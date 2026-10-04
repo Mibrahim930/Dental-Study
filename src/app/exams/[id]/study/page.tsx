@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { db, getExam, type Topic } from "@/lib/db";
 import { StudySession } from "@/components/StudySession";
+import { requireUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,8 @@ type SessionRow = { id: number; current_position: number; ended_at: string | nul
 export default async function StudyPage(props: PageProps<"/exams/[id]/study">) {
   const examId = Number((await props.params).id);
   const search = await props.searchParams;
-  const exam = getExam(examId);
+  const user = await requireUser();
+  const exam = getExam(examId, user.id);
   if (!exam) notFound();
   const topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
   if (topics.length === 0) redirect(`/exams/${examId}`);

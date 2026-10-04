@@ -5,6 +5,8 @@ import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { slideNotesText, topicPages } from "./study";
 import { mastery, recordConceptResult, upsertConcept, weakConcepts, type ConceptRow } from "./memory";
+import { credentials } from "./credentials";
+import { examOwner } from "./db";
 
 export type Style = "mixed" | "recall" | "case";
 export type Mode = "tutor" | "timed";
@@ -91,7 +93,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
   if (topics.length === 0) throw new Error("This exam has no topics yet. Upload lectures and wait for the topic map.");
 
   // ~12% of questions revisit weak concepts from earlier exams (shared memory).
-  const weak = weakConcepts(5, examId);
+  const weak = weakConcepts(examOwner(examId), 5, examId);
   const pastTopics = weak.length
     ? (db
         .prepare(
@@ -105,7 +107,10 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
 
   const created: number[] = [];
   await mapLimit(plan, 4, async ({ topic, count }) => {
-    created.push(...(await generateForTopic(topic, count, opts.style)));
+    // Reuse questions written earlier that were never answered (abandoned or skipped exams); only write new ones for the rest.
+    const reused = unusedQuestions(topic.id, opts.style, count);
+    created.push(...reused);
+    if (count - reused.length > 0) created.push(...(await generateForTopic(topic, count - reused.length, opts.style)));
   });
   if (created.length === 0) throw new Error("No questions could be generated.");
 
@@ -121,7 +126,21 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
   })();
 }
 
+function unusedQuestions(topicId: number, style: Style, limit: number): number[] {
+  const types = style === "recall" ? ["recall"] : style === "case" ? ["case", "image"] : ["recall", "case", "image"];
+  return (
+    db
+      .prepare(
+        `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.type IN (${types.map(() => "?").join(",")})
+         AND NOT EXISTS (SELECT 1 FROM attempt_questions aq WHERE aq.question_id = q.id AND aq.chosen_index IS NOT NULL)
+         ORDER BY RANDOM() LIMIT ?`,
+      )
+      .all(topicId, ...types, limit) as { id: number }[]
+  ).map((r) => r.id);
+}
+
 async function generateForTopic(topic: Topic, count: number, style: Style): Promise<number[]> {
+  const userId = examOwner(topic.exam_id);
   const pages = topicPages(topic);
   const imageCases = pages.filter((p) => parseNotes(p)?.case_image_box);
   const concepts = (
@@ -142,6 +161,8 @@ async function generateForTopic(topic: Topic, count: number, style: Style): Prom
   );
 
   const out = await generate({
+    creds: credentials(userId),
+    purpose: "practice questions",
     schema: GeneratedQuestions,
     system: SYSTEM,
     effort: "medium",
@@ -169,7 +190,7 @@ async function generateForTopic(topic: Topic, count: number, style: Style): Prom
         insert.run(
           topic.exam_id,
           topic.id,
-          upsertConcept(q.concept),
+          upsertConcept(userId, q.concept),
           type,
           q.patient_box ? JSON.stringify(q.patient_box) : null,
           q.stem,
@@ -205,10 +226,10 @@ export function answerQuestion(attemptId: number, questionId: number, chosen: nu
 
 export function finishAttempt(attemptId: number) {
   const stats = db
-    .prepare("SELECT COUNT(*) total, SUM(correct) right FROM attempt_questions WHERE attempt_id = ?")
-    .get(attemptId) as { total: number; right: number | null };
+    .prepare("SELECT COUNT(*) total, SUM(correct) n_right FROM attempt_questions WHERE attempt_id = ?")
+    .get(attemptId) as { total: number; n_right: number | null };
   db.prepare("UPDATE attempts SET status = 'finished', finished_at = datetime('now'), score = ? WHERE id = ?").run(
-    stats.total ? (stats.right ?? 0) / stats.total : 0,
+    stats.total ? (stats.n_right ?? 0) / stats.total : 0,
     attemptId,
   );
 }
@@ -226,19 +247,17 @@ export function addReviewCard(questionId: number) {
   );
 }
 
-export function dueCards(limit: number) {
+const DUE_FROM = `FROM review_cards r JOIN questions q ON q.id = r.question_id JOIN exams e ON e.id = q.exam_id
+  WHERE e.user_id = ? AND r.due <= ? AND q.flagged = 0`;
+
+export function dueCards(userId: number, limit: number) {
   return db
-    .prepare(
-      `SELECT r.id AS card_id, q.* FROM review_cards r JOIN questions q ON q.id = r.question_id
-       WHERE r.due <= ? AND q.flagged = 0 ORDER BY r.due LIMIT ?`,
-    )
-    .all(new Date().toISOString(), limit) as (Question & { card_id: number })[];
+    .prepare(`SELECT r.id AS card_id, q.* ${DUE_FROM} ORDER BY r.due LIMIT ?`)
+    .all(userId, new Date().toISOString(), limit) as (Question & { card_id: number })[];
 }
 
-export function countDue(): number {
-  return (db.prepare("SELECT COUNT(*) n FROM review_cards r JOIN questions q ON q.id = r.question_id WHERE r.due <= ? AND q.flagged = 0").get(
-    new Date().toISOString(),
-  ) as { n: number }).n;
+export function countDue(userId: number): number {
+  return (db.prepare(`SELECT COUNT(*) n ${DUE_FROM}`).get(userId, new Date().toISOString()) as { n: number }).n;
 }
 
 export function reviewCard(cardId: number, correct: boolean, confidence: "hard" | "good" | "easy") {

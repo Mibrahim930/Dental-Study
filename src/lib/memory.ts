@@ -8,10 +8,10 @@ export function mastery(c: Pick<ConceptRow, "attempts" | "correct">): number | n
   return c.attempts === 0 ? null : (c.correct + 1) / (c.attempts + 2);
 }
 
-export function upsertConcept(name: string): number {
+export function upsertConcept(userId: number, name: string): number {
   const clean = name.trim();
-  db.prepare("INSERT OR IGNORE INTO concepts (name) VALUES (?)").run(clean);
-  return (db.prepare("SELECT id FROM concepts WHERE name = ?").get(clean) as { id: number }).id;
+  db.prepare("INSERT OR IGNORE INTO concepts (user_id, name) VALUES (?, ?)").run(userId, clean);
+  return (db.prepare("SELECT id FROM concepts WHERE user_id = ? AND name = ?").get(userId, clean) as { id: number }).id;
 }
 
 export function recordConceptResult(conceptId: number | null, correct: boolean) {
@@ -41,16 +41,16 @@ export function topicConcepts(topicId: number, examId: number): TopicConcept[] {
   }));
 }
 
-export function weakConcepts(limit = 10, excludeExamId?: number): (ConceptRow & { mastery: number })[] {
+export function weakConcepts(userId: number, limit = 10, excludeExamId?: number): (ConceptRow & { mastery: number })[] {
   const rows = db
     .prepare(
-      `SELECT c.* FROM concepts c WHERE c.attempts > 0 ${
+      `SELECT c.* FROM concepts c WHERE c.user_id = ? AND c.attempts > 0 ${
         excludeExamId
           ? "AND c.id NOT IN (SELECT tc.concept_id FROM topic_concepts tc JOIN topics t ON t.id = tc.topic_id WHERE t.exam_id = ?)"
           : ""
       }`,
     )
-    .all(...(excludeExamId ? [excludeExamId] : [])) as ConceptRow[];
+    .all(userId, ...(excludeExamId ? [excludeExamId] : [])) as ConceptRow[];
   return rows
     .map((c) => ({ ...c, mastery: mastery(c)! }))
     .filter((c) => c.mastery < 0.7)
@@ -60,8 +60,8 @@ export function weakConcepts(limit = 10, excludeExamId?: number): (ConceptRow & 
 
 export type LibraryHit = { page_id: number; title: string; filename: string; page_number: number; exam_name: string; snippet: string };
 
-/** Search every slide the student ever uploaded (any exam). */
-export function searchLibrary(query: string, limit = 6, excludeExamId?: number): LibraryHit[] {
+/** Search every slide this user ever uploaded (any exam). */
+export function searchLibrary(userId: number, query: string, limit = 6, excludeExamId?: number): LibraryHit[] {
   const terms = query
     .toLowerCase()
     .match(/[a-z0-9]{3,}/g)
@@ -73,24 +73,24 @@ export function searchLibrary(query: string, limit = 6, excludeExamId?: number):
       `SELECT f.page_id, f.title, d.filename, p.page_number, e.name AS exam_name,
               snippet(pages_fts, 2, '', '', '…', 40) AS snippet
        FROM pages_fts f JOIN pages p ON p.id = f.page_id JOIN documents d ON d.id = p.document_id JOIN exams e ON e.id = d.exam_id
-       WHERE pages_fts MATCH ? ${excludeExamId ? "AND e.id != ?" : ""}
+       WHERE pages_fts MATCH ? AND e.user_id = ? ${excludeExamId ? "AND e.id != ?" : ""}
        ORDER BY rank LIMIT ?`,
     )
-    .all(match, ...(excludeExamId ? [excludeExamId] : []), limit) as LibraryHit[];
+    .all(match, userId, ...(excludeExamId ? [excludeExamId] : []), limit) as LibraryHit[];
 }
 
 /** Most recent study-session summaries across all exams (newest first). */
-export function recentSummaries(limit = 4): { exam_name: string; summary: string; ended_at: string }[] {
+export function recentSummaries(userId: number, limit = 4): { exam_name: string; summary: string; ended_at: string }[] {
   return db
     .prepare(
       `SELECT e.name AS exam_name, s.summary, s.ended_at FROM study_sessions s JOIN exams e ON e.id = s.exam_id
-       WHERE s.summary IS NOT NULL ORDER BY s.ended_at DESC LIMIT ?`,
+       WHERE s.summary IS NOT NULL AND e.user_id = ? ORDER BY s.ended_at DESC LIMIT ?`,
     )
-    .all(limit) as { exam_name: string; summary: string; ended_at: string }[];
+    .all(userId, limit) as { exam_name: string; summary: string; ended_at: string }[];
 }
 
-export function glossaryText(): string {
-  const rows = db.prepare("SELECT abbr, meaning FROM glossary ORDER BY abbr").all() as { abbr: string; meaning: string }[];
+export function glossaryText(userId: number): string {
+  const rows = db.prepare("SELECT abbr, meaning FROM glossary WHERE user_id = ? ORDER BY abbr").all(userId) as { abbr: string; meaning: string }[];
   return rows.map((r) => `${r.abbr} = ${r.meaning}`).join("; ");
 }
 

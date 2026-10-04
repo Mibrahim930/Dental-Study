@@ -4,24 +4,27 @@ import { countDue } from "@/lib/practice";
 import { weakConcepts } from "@/lib/memory";
 import { daysUntil, formatDate, pct } from "@/lib/format";
 import { createExam } from "./actions";
+import { requireUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 type ExamWithCounts = Exam & { docs: number; pages: number; done_pages: number };
 
-export default function Home() {
+export default async function Home() {
+  const user = await requireUser();
   const exams = db
     .prepare(
       `SELECT e.*, COUNT(DISTINCT d.id) docs, COUNT(p.id) pages, SUM(p.status = 'done') done_pages
        FROM exams e LEFT JOIN documents d ON d.exam_id = e.id LEFT JOIN pages p ON p.document_id = d.id
+       WHERE e.user_id = ?
        GROUP BY e.id ORDER BY COALESCE(e.exam_date, '9999') ASC, e.id DESC`,
     )
-    .all() as ExamWithCounts[];
+    .all(user.id) as ExamWithCounts[];
   const isPast = (e: Exam) => e.status === "archived" || (daysUntil(e.exam_date) ?? 0) < 0;
   const upcoming = exams.filter((e) => !isPast(e));
   const past = exams.filter(isPast);
-  const due = countDue();
-  const weak = weakConcepts(6);
+  const due = countDue(user.id);
+  const weak = weakConcepts(user.id, 6);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">

@@ -1,30 +1,33 @@
 # Dental Study
 
-A study tool for dental students, built around their own lecture PDFs.
+A study tool for dental students, built around their own lecture PDFs. Many students can use one site: each has their own account, data and AI key.
 
-- **Exam workspaces:** one per exam. Upload the lectures, and every slide (including images, radiographs and the student's handwritten notes) is read by Claude and turned into notes.
-- **Topic map:** slides are grouped into an ordered list of topics. Each concept shows the student's mastery and whether an earlier exam already covered it.
-- **Study sessions:** a guided walkthrough of each topic (explanation, the key slides, key points, quick checks), with a tutor chat beside it. When a session ends, a short summary is saved so the next session picks up where it left off.
-- **Practice exams:** recall, INBDE-style case, and image questions built from the slides. Tutor or timed mode. Every question cites its source slide, and the student can report errors.
-- **Shared memory across exams:** concept mastery, every uploaded slide (searchable) and session summaries carry over from one exam to the next. Missed questions go into a spaced-repetition daily review.
+- **Access:** a site passcode, then email + password accounts. Each user adds their own **Claude or ChatGPT API key** (stored encrypted) and pays for their own usage. There's a step-by-step guide at `/help/api-keys`.
+- **Exam workspaces:** upload lecture PDFs. Every slide (images, radiographs, handwritten notes) is read once by AI. Claude users go through the Batch API at half price.
+- **Topic map, study sessions with tutor chat, practice exams (recall / INBDE-style case / image), daily spaced review, progress.**
+- **Memory across exams:** each user's concept mastery, slide library and session summaries carry over from one exam to the next.
+- **Spending tracker:** Settings shows each user's estimated AI spend.
 
 ## Run it locally
 
-1. Install [Node.js](https://nodejs.org) 20 or newer.
-2. `npm install`
-3. Copy `.env.example` to `.env.local` and fill in:
-   - `ANTHROPIC_API_KEY`: your key from console.anthropic.com
-   - `APP_PASSCODE`: the passcode the student will type (leave empty to skip the login screen locally)
-4. `npm run dev` and open http://localhost:3000
+1. `npm install`
+2. Copy `.env.example` to `.env.local` and set `APP_PASSCODE` and `SECRET_KEY` (`openssl rand -base64 32`).
+3. `npm run dev`, then open http://localhost:3000, enter the passcode, create an account, and add an API key.
 
-All data lives in `./data`: the SQLite database, the uploaded PDFs and the rendered slide images. Back up that folder to keep the student's progress.
+Data goes to `./data` (SQLite + PDFs + slide images) unless `DATA_DIR` is set.
 
-## Costs
+## Models and costs
 
-Every Claude call uses `claude-opus-5-5` by default (set `AI_MODEL` to change it).
+| | Claude (`claude-sonnet-5-5`) | ChatGPT (`gpt-6.1-sol`) |
+|---|---|---|
+| Reading a 500-slide exam (once) | ~$3 (batched, 50% off) | ~$6 |
+| One topic lesson (generated once, cached) | ~2.5¢ | ~2.5¢ |
+| Tutor message | ~1¢ (lecture context is prompt-cached) | ~1¢ |
+| 10-question practice exam | ~10¢ | ~10¢ |
 
-- **Uploading:** each slide is read once with vision, at a few cents per slide. A 500-slide exam costs roughly $5–10, paid once.
-- **Studying:** each topic's lesson is generated once and cached. Tutor chat and practice exams cost a few cents per message or question batch.
+Measured on the Claude path with a real 53-slide lecture. The ChatGPT figures are estimates. Questions from abandoned or skipped practice exams are reused instead of being regenerated.
+
+`CLAUDE_MODEL` and `OPENAI_MODEL` override the defaults.
 
 ## Deploy
 
@@ -32,6 +35,6 @@ Live at https://dental-study-production.up.railway.app (Railway project "truthfu
 
 - Every push to `main` on GitHub deploys automatically.
 - All data (database, PDFs, slide images) lives on the Railway volume mounted at `/data` (`DATA_DIR=/data`). Nothing is stored in Git.
-- Service variables: `ANTHROPIC_API_KEY`, `APP_PASSCODE`, `DATA_DIR`.
+- Service variables: `APP_PASSCODE`, `SECRET_KEY` (never change it once users exist, or saved API keys can't be decrypted), `DATA_DIR`.
 
 To host somewhere else, use a server with a persistent disk (Render and Fly.io also work). Point `DATA_DIR` at the disk, run `npm run build`, then `npm start`.

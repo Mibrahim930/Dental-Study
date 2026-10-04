@@ -1,7 +1,7 @@
 import { z } from "zod";
-import type Anthropic from "@anthropic-ai/sdk";
-import { db, getExam, type PageRow, type Topic } from "./db";
-import { anthropic, generate, MODEL } from "./ai";
+import { db, examOwner, type Exam, type PageRow, type Topic } from "./db";
+import { chatStream, generate, type ChatTurn } from "./ai";
+import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, weakConcepts, glossaryText } from "./memory";
 
@@ -77,9 +77,12 @@ export function getLesson(topic: Topic): Promise<Lesson> {
 async function generateLesson(topic: Topic): Promise<Lesson> {
   const pages = topicPages(topic);
   const concepts = topicConcepts(topic.id, topic.exam_id);
-  const earlier = searchLibrary(`${topic.title} ${concepts.map((c) => c.name).join(" ")}`, 5, topic.exam_id);
+  const userId = examOwner(topic.exam_id);
+  const earlier = searchLibrary(userId, `${topic.title} ${concepts.map((c) => c.name).join(" ")}`, 5, topic.exam_id);
 
   const lesson = await generate({
+    creds: credentials(userId),
+    purpose: "lesson",
     schema: Lesson,
     effort: "medium",
     maxTokens: 16000,
@@ -108,13 +111,13 @@ Refer to slides as "Lecture name, slide N". Check questions should test understa
 
 /** Build the tutor's system prompt: what the AI "remembers" about this student and exam. */
 function tutorSystem(examId: number, topic: Topic | undefined): string {
-  const exam = getExam(examId)!;
+  const exam = db.prepare("SELECT * FROM exams WHERE id = ?").get(examId) as Exam;
   const topics = db.prepare("SELECT position, title FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as {
     position: number;
     title: string;
   }[];
-  const weak = weakConcepts(8);
-  const summaries = recentSummaries(4);
+  const weak = weakConcepts(exam.user_id, 8);
+  const summaries = recentSummaries(exam.user_id, 4);
   return [
     `You are a friendly, precise dental school tutor helping a student prepare for "${exam.name}"${
       exam.exam_date ? ` on ${exam.exam_date}` : ""
@@ -129,33 +132,28 @@ Keep answers focused and short unless asked to go deeper. Use markdown. When use
     summaries.length
       ? `Notes from recent study sessions:\n${summaries.map((s) => `- [${s.exam_name}] ${s.summary}`).join("\n")}`
       : "",
-    `Abbreviations seen in the student's lectures: ${glossaryText()}`,
+    `Abbreviations seen in the student's lectures: ${glossaryText(exam.user_id)}`,
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
 export function tutorStream(sessionId: number, examId: number, topic: Topic | undefined, question: string) {
+  const userId = examOwner(examId);
   const history = db
     .prepare("SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id")
     .all(sessionId) as { role: "user" | "assistant"; content: string }[];
-  const hits = searchLibrary(question, 6);
+  const hits = searchLibrary(userId, question, 6);
   const retrieved = hits.length
     ? `\n\n<library_search>\n${hits
         .map((h) => `${h.exam_name} / ${h.filename} slide ${h.page_number}: ${h.title} — ${h.snippet}`)
         .join("\n")}\n</library_search>`
     : "";
-  const messages: Anthropic.MessageParam[] = [
+  const messages: ChatTurn[] = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: question + retrieved },
   ];
-  return anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 8000,
-    system: tutorSystem(examId, topic),
-    messages,
-    output_config: { effort: "low" },
-  });
+  return chatStream({ creds: credentials(userId), purpose: "tutor chat", system: tutorSystem(examId, topic), messages });
 }
 
 const SessionSummary = z.object({
@@ -182,6 +180,8 @@ export async function summarizeSession(sessionId: number) {
   let summary = "Session ended with no activity.";
   if (checks.length || questions.length) {
     const out = await generate({
+      creds: credentials(examOwner(session.exam_id)),
+      purpose: "session summary",
       schema: SessionSummary,
       effort: "low",
       maxTokens: 4000,

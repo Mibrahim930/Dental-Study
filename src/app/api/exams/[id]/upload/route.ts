@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { getExam } from "@/lib/db";
 import { addDocument } from "@/lib/processing";
+import { apiUser, unauthorized } from "@/lib/user";
 
 export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/upload">) {
+  const user = await apiUser();
+  if (!user) return unauthorized();
   const examId = Number((await ctx.params).id);
-  if (!getExam(examId)) return NextResponse.json({ error: "Exam not found" }, { status: 404 });
+  if (!getExam(examId, user.id)) return NextResponse.json({ error: "Exam not found" }, { status: 404 });
   const form = await request.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "No file" }, { status: 400 });

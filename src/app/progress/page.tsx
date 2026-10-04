@@ -2,21 +2,23 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { mastery, type ConceptRow } from "@/lib/memory";
 import { masteryColor, pct } from "@/lib/format";
+import { requireUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
-export default function ProgressPage() {
-  const concepts = (db.prepare("SELECT * FROM concepts WHERE attempts > 0").all() as ConceptRow[])
+export default async function ProgressPage() {
+  const user = await requireUser();
+  const concepts = (db.prepare("SELECT * FROM concepts WHERE user_id = ? AND attempts > 0").all(user.id) as ConceptRow[])
     .map((c) => ({ ...c, mastery: mastery(c)! }))
     .sort((a, b) => a.mastery - b.mastery);
-  const untested = (db.prepare("SELECT COUNT(*) n FROM concepts WHERE attempts = 0").get() as { n: number }).n;
+  const untested = (db.prepare("SELECT COUNT(*) n FROM concepts WHERE user_id = ? AND attempts = 0").get(user.id) as { n: number }).n;
   const attempts = db
     .prepare(
       `SELECT a.id, a.score, a.finished_at, a.mode, e.name exam_name, COUNT(aq.question_id) n
        FROM attempts a JOIN exams e ON e.id = a.exam_id LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
-       WHERE a.status = 'finished' GROUP BY a.id ORDER BY a.finished_at DESC LIMIT 20`,
+       WHERE a.status = 'finished' AND e.user_id = ? GROUP BY a.id ORDER BY a.finished_at DESC LIMIT 20`,
     )
-    .all() as { id: number; score: number; finished_at: string; mode: string; exam_name: string; n: number }[];
+    .all(user.id) as { id: number; score: number; finished_at: string; mode: string; exam_name: string; n: number }[];
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">

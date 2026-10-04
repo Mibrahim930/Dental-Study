@@ -1,10 +1,15 @@
 import { db, type Topic } from "@/lib/db";
 import { tutorStream } from "@/lib/study";
+import { apiUser, notFound, unauthorized } from "@/lib/user";
+import { ownsSession } from "@/lib/owner";
 
 export const maxDuration = 300;
 
 // Streams the tutor's reply as plain text, then saves both turns to the session.
 export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[id]/chat">) {
+  const user = await apiUser();
+  if (!user) return unauthorized();
+  if (!ownsSession(user.id, Number((await ctx.params).id))) return notFound();
   const sessionId = Number((await ctx.params).id);
   const { message, position } = (await request.json()) as { message: string; position: number };
   const session = db.prepare("SELECT exam_id FROM study_sessions WHERE id = ?").get(sessionId) as { exam_id: number } | undefined;
@@ -17,15 +22,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
   const body = new ReadableStream({
     async start(controller) {
       try {
-        stream.on("text", (delta) => {
+        for await (const delta of stream) {
           full += delta;
           controller.enqueue(encoder.encode(delta));
-        });
-        const final = await stream.finalMessage();
-        if (final.stop_reason === "refusal") {
-          const note = "\n\n_(The tutor couldn't answer that one. Try rephrasing.)_";
-          full += note;
-          controller.enqueue(encoder.encode(note));
         }
         const insert = db.prepare("INSERT INTO chat_messages (session_id, role, content, topic_position) VALUES (?, ?, ?, ?)");
         insert.run(sessionId, "user", message.trim(), position);
