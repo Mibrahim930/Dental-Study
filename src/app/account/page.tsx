@@ -21,7 +21,7 @@ export default function AccountPage() {
     setBusy(false);
     if (!res.ok) return setError(json.error ?? "Something went wrong.");
      
-    window.location.assign(mode === "signup" || !json.hasKey ? "/setup" : "/");
+    window.location.assign(json.mustChangePassword ? "/account/password" : mode === "signup" || !json.hasKey ? "/setup" : "/");
   }
 
   return (

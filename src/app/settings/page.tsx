@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/user";
 import { MODELS } from "@/lib/ai";
@@ -70,7 +71,10 @@ export default async function SettingsPage() {
           <h2 className="font-semibold">Account</h2>
           <p className="text-sm text-slate-600">{user.email}</p>
         </div>
-        <SignOutButton />
+        <div className="flex gap-2">
+          <Link href="/account/password" className="btn-secondary">Change password</Link>
+          <SignOutButton />
+        </div>
       </section>
     </div>
   );

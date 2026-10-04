@@ -13,7 +13,14 @@ CREATE TABLE IF NOT EXISTS users (
   provider TEXT,                                   -- anthropic | openai
   api_key_enc TEXT,                                -- AES-GCM encrypted with SECRET_KEY
   api_key_last4 TEXT,
+  is_admin INTEGER NOT NULL DEFAULT 0,             -- the site owner (first account)
+  must_change_password INTEGER NOT NULL DEFAULT 0, -- set after an admin password reset
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS exams (
@@ -36,6 +43,7 @@ CREATE TABLE IF NOT EXISTS documents (
   status TEXT NOT NULL DEFAULT 'pending',          -- pending | processing | done | error
   error TEXT,
   batch_id TEXT,                                   -- Anthropic Message Batch reading this lecture's slides
+  backed_up INTEGER NOT NULL DEFAULT 0,            -- original PDF copied to the backup bucket
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -193,6 +201,12 @@ function columns(db: Database.Database, table: string): string[] {
 function migrate(db: Database.Database) {
   if (!columns(db, "exams").includes("user_id")) db.exec("ALTER TABLE exams ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
   if (!columns(db, "documents").includes("batch_id")) db.exec("ALTER TABLE documents ADD COLUMN batch_id TEXT");
+  if (!columns(db, "documents").includes("backed_up")) db.exec("ALTER TABLE documents ADD COLUMN backed_up INTEGER NOT NULL DEFAULT 0");
+  if (!columns(db, "users").includes("is_admin")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)");
+  }
   if (!columns(db, "concepts").includes("user_id")) {
     db.pragma("foreign_keys = OFF");
     db.exec(`
@@ -243,7 +257,18 @@ export type User = {
   provider: "anthropic" | "openai" | null;
   api_key_enc: string | null;
   api_key_last4: string | null;
+  is_admin: number;
+  must_change_password: number;
+  created_at: string;
 };
+
+export function getMeta(key: string): string | null {
+  return (db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)?.value ?? null;
+}
+
+export function setMeta(key: string, value: string) {
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
 
 export type Exam = {
   id: number;

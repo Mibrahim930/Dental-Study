@@ -12,7 +12,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "An account with that email already exists. Sign in instead." }, { status: 409 });
   }
   const isFirst = !db.prepare("SELECT 1 FROM users LIMIT 1").get();
-  const id = Number(db.prepare("INSERT INTO users (email, password_hash) VALUES (?, ?)").run(cleanEmail, hashPassword(password)).lastInsertRowid);
+  // The first account is the site owner (admin) and inherits any data from before accounts existed.
+  const id = Number(
+    db.prepare("INSERT INTO users (email, password_hash, is_admin) VALUES (?, ?, ?)").run(cleanEmail, hashPassword(password), isFirst ? 1 : 0)
+      .lastInsertRowid,
+  );
   if (isFirst) claimLegacyData(id);
   const res = NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, sessionToken(id), cookieOptions());

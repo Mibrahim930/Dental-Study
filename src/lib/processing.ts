@@ -1,15 +1,13 @@
 import fs from "fs";
 import path from "path";
-import * as mupdf from "mupdf";
 import { db, FILES_DIR, type PageRow } from "./db";
 import { batchResults, createBatch, generate, mapLimit } from "./ai";
 import { credentials, type Credentials } from "./credentials";
 import { buildTopicMap } from "./topics";
 import { NOTES_SYSTEM, SlideNotes } from "./notes";
+import { openPdf, renderPage } from "./pdf";
 
 export type { SlideNotes };
-
-const IMAGE_WIDTH = 1400;
 
 /** Save an uploaded PDF, render every page to an image, then process slides in the background. */
 export async function addDocument(examId: number, filename: string, bytes: Buffer): Promise<number> {
@@ -22,20 +20,16 @@ export async function addDocument(examId: number, filename: string, bytes: Buffe
   fs.writeFileSync(path.join(dir, "original.pdf"), bytes);
 
   try {
-    const doc = mupdf.Document.openDocument(bytes, "application/pdf");
+    const doc = openPdf(bytes);
     const count = doc.countPages();
     const insert = db.prepare(
       "INSERT INTO pages (document_id, page_number, text, image_path, aspect) VALUES (?, ?, ?, ?, ?)",
     );
     for (let i = 0; i < count; i++) {
-      const page = doc.loadPage(i);
-      const [x0, y0, x1, y1] = page.getBounds();
-      const scale = IMAGE_WIDTH / (x1 - x0);
-      const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
+      const { jpeg, text, aspect } = renderPage(doc, i);
       const rel = path.join(`doc-${docId}`, `p${i + 1}.jpg`);
-      fs.writeFileSync(path.join(FILES_DIR, rel), pix.asJPEG(80));
-      const text = page.toStructuredText("preserve-whitespace").asText().trim();
-      insert.run(docId, i + 1, text, rel, (x1 - x0) / (y1 - y0));
+      fs.writeFileSync(path.join(FILES_DIR, rel), jpeg);
+      insert.run(docId, i + 1, text, rel, aspect);
     }
     db.prepare("UPDATE documents SET page_count = ? WHERE id = ?").run(count, docId);
   } catch (err) {

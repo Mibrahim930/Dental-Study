@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   if (!user || !password || !verifyPassword(password, user.password_hash)) {
     return NextResponse.json({ error: "Wrong email or password." }, { status: 401 });
   }
-  const res = NextResponse.json({ ok: true, hasKey: !!user.api_key_enc });
+  const res = NextResponse.json({ ok: true, hasKey: !!user.api_key_enc, mustChangePassword: !!user.must_change_password });
   res.cookies.set(SESSION_COOKIE, sessionToken(user.id), cookieOptions());
   return res;
 }

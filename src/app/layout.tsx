@@ -26,7 +26,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="text-slate-600 hover:text-slate-900">Exams</Link>
             <Link href="/review" className="text-slate-600 hover:text-slate-900">Daily review</Link>
             <Link href="/progress" className="text-slate-600 hover:text-slate-900">Progress</Link>
-            <Link href="/settings" className="ml-auto text-slate-600 hover:text-slate-900">Settings</Link>
+            {user.is_admin ? (
+              <Link href="/admin" className="ml-auto text-slate-600 hover:text-slate-900">Admin</Link>
+            ) : null}
+            <Link href="/settings" className={`${user.is_admin ? "" : "ml-auto "}text-slate-600 hover:text-slate-900`}>Settings</Link>
           </nav>
         </header>
         )}
