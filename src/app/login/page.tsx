@@ -1,9 +1,7 @@
 "use client";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [passcode, setPasscode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,10 +16,9 @@ export default function LoginPage() {
       body: JSON.stringify({ passcode }),
     });
     setBusy(false);
-    if (res.ok) {
-      router.push("/");
-      router.refresh();
-    }
+    // Full page load: client-side navigation could reuse a cached "redirect to /login" from before sign-in.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    if (res.ok) window.location.assign("/");
     else setError("That passcode didn't work.");
   }
 
