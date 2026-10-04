@@ -64,6 +64,13 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               <input name="name" defaultValue={exam.name} className="input" required />
               <input name="course" defaultValue={exam.course ?? ""} placeholder="Course" className="input" />
               <input name="exam_date" type="date" defaultValue={exam.exam_date ?? ""} className="input" />
+              <select name="kind" defaultValue={exam.kind} className="input">
+                <option value="block">Block exam</option>
+                <option value="quiz">Quiz</option>
+                <option value="practical">Practical</option>
+                <option value="board">Board exam (e.g. INBDE)</option>
+                <option value="other">Other</option>
+              </select>
               <button className="btn-primary w-full">Save</button>
             </form>
             <form action={setArchived.bind(null, id, exam.status !== "archived")}>
@@ -73,7 +80,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
         </details>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-6">
           {/* Study */}
           <section className="card">

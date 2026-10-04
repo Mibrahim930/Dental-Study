@@ -19,11 +19,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col font-sans">
         {user?.api_key_enc && (
         <header className="border-b border-slate-200 bg-white">
-          <nav className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3 text-sm">
-            <Link href="/" className="text-base font-semibold text-teal-800">
+          <nav className="mx-auto flex max-w-6xl items-center gap-4 overflow-x-auto whitespace-nowrap px-4 py-3 text-sm sm:gap-6">
+            <Link href="/" className="shrink-0 text-base font-semibold text-teal-800">
               🦷 Dental Study
             </Link>
             <Link href="/" className="text-slate-600 hover:text-slate-900">Exams</Link>
+            <Link href="/calendar" className="text-slate-600 hover:text-slate-900">Calendar</Link>
             <Link href="/review" className="text-slate-600 hover:text-slate-900">Daily review</Link>
             <Link href="/progress" className="text-slate-600 hover:text-slate-900">Progress</Link>
             {user.is_admin ? (
@@ -33,7 +34,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           </nav>
         </header>
         )}
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">{children}</main>
+        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 px-4 py-6">{children}</main>
       </body>
     </html>
   );

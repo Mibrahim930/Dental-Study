@@ -5,6 +5,8 @@ import { weakConcepts } from "@/lib/memory";
 import { daysUntil, formatDate, pct } from "@/lib/format";
 import { createExam } from "./actions";
 import { requireUser } from "@/lib/user";
+import { addDays, ensurePlanFresh, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
+import { TaskList } from "@/components/TaskList";
 
 export const dynamic = "force-dynamic";
 
@@ -23,12 +25,40 @@ export default async function Home() {
   const isPast = (e: Exam) => e.status === "archived" || (daysUntil(e.exam_date) ?? 0) < 0;
   const upcoming = exams.filter((e) => !isPast(e));
   const past = exams.filter(isPast);
+  ensurePlanFresh(user.id);
+  const settings = plannerSettings(user.id);
+  const today = todayIn(settings.timezone);
+  const todayTasks = tasksOn(user.id, today, today);
+  const week = tasksOn(user.id, addDays(today, 1), addDays(today, 6));
+  const warnings = JSON.parse(settings.warnings) as PlanWarning[];
   const due = countDue(user.id);
   const weak = weakConcepts(user.id, 6);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
       <section className="space-y-4">
+        {upcoming.length > 0 && (
+          <div className="card space-y-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <h1 className="text-xl font-semibold">Today&apos;s plan</h1>
+              <span className="text-sm text-slate-500">
+                {todayTasks.filter((t) => t.status === "done").length}/{todayTasks.length} done ·{" "}
+                {todayTasks.reduce((s, t) => s + t.minutes, 0)} min
+              </span>
+            </div>
+            <TaskList tasks={todayTasks} empty="Nothing planned today. Enjoy the break, or get ahead from the calendar." />
+            {warnings.map((w) => (
+              <p key={w.examId} className="text-sm text-amber-700">
+                ⚠ Not enough study time before {w.examName} (about {Math.ceil(w.minutesShort / 60)}h short).{" "}
+                <Link href="/calendar" className="underline">Adjust your plan</Link>
+              </p>
+            ))}
+            <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-sm text-slate-600">
+              <span>Next 6 days: {Math.round(week.reduce((s, t) => s + t.minutes, 0) / 6) / 10} hours planned</span>
+              <Link href="/calendar" className="text-teal-700 hover:underline">Open calendar →</Link>
+            </div>
+          </div>
+        )}
         <h1 className="text-2xl font-semibold">Your exams</h1>
         {upcoming.length === 0 && (
           <div className="card text-slate-600">No upcoming exams yet. Create one to start uploading lectures.</div>
@@ -64,6 +94,17 @@ export default async function Home() {
             <label className="label" htmlFor="exam_date">Exam date</label>
             <input id="exam_date" name="exam_date" type="date" className="input" />
           </div>
+          <div>
+            <label className="label" htmlFor="kind">Type</label>
+            <select id="kind" name="kind" className="input" defaultValue="block">
+              <option value="block">Block exam</option>
+              <option value="quiz">Quiz</option>
+              <option value="practical">Practical</option>
+              <option value="board">Board exam (e.g. INBDE)</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
           <button className="btn-primary w-full">Create exam</button>
         </form>
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
 import { getLesson } from "@/lib/study";
+import { markTopicStudied } from "@/lib/planner";
 import { topicConcepts } from "@/lib/memory";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
@@ -19,7 +20,10 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
   if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
   const topic = db.prepare("SELECT * FROM topics WHERE exam_id = ? AND position = ?").get(session.exam_id, position) as Topic | undefined;
   if (!topic) return NextResponse.json({ error: "Topic not found" }, { status: 404 });
-  if (!prefetch) db.prepare("UPDATE study_sessions SET current_position = ? WHERE id = ?").run(position, sessionId);
+  if (!prefetch) {
+    db.prepare("UPDATE study_sessions SET current_position = ? WHERE id = ?").run(position, sessionId);
+    markTopicStudied(user.id, topic.id);
+  }
 
   try {
     const lesson = await getLesson(topic);

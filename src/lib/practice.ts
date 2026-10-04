@@ -53,11 +53,11 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 type Allocation = { topic: Topic; count: number };
 
 /** Create an attempt and generate its questions in the background. Returns the attempt id. */
-export function startAttempt(examId: number, opts: { size: number; mode: Mode; style: Style; topicIds?: number[] }) {
+export function startAttempt(examId: number, opts: { size: number; mode: Mode; style: Style; topicIds?: number[]; taskId?: number }) {
   const attemptId = Number(
     db
-      .prepare("INSERT INTO attempts (exam_id, mode, time_limit_sec) VALUES (?, ?, ?)")
-      .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null).lastInsertRowid,
+      .prepare("INSERT INTO attempts (exam_id, mode, time_limit_sec, task_id) VALUES (?, ?, ?, ?)")
+      .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null, opts.taskId ?? null).lastInsertRowid,
   );
   void generateAttempt(attemptId, examId, opts).catch((err) => {
     db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
@@ -232,6 +232,10 @@ export function finishAttempt(attemptId: number) {
     stats.total ? (stats.n_right ?? 0) / stats.total : 0,
     attemptId,
   );
+  // Started from the study plan: tick that task off.
+  db.prepare(
+    "UPDATE plan_tasks SET status = 'done', completed_at = datetime('now') WHERE id = (SELECT task_id FROM attempts WHERE id = ?) AND status = 'todo'",
+  ).run(attemptId);
 }
 
 // ---- Spaced repetition (student-level, survives across exams) ----

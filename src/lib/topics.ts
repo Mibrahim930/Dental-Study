@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { db, examOwner, type PageRow } from "./db";
 import { credentials } from "./credentials";
+import { rebuildPlan } from "./planner";
 import { generate } from "./ai";
 import { parseNotes } from "./processing";
 import { upsertConcept } from "./memory";
@@ -101,6 +102,7 @@ async function runTopicMap(examId: number) {
       db.prepare("UPDATE exams SET topic_status = 'ready' WHERE id = ?").run(examId);
     });
     tx();
+    rebuildPlan(userId); // new topics → new study tasks
   } catch (err) {
     db.prepare("UPDATE exams SET topic_status = 'error', topic_error = ? WHERE id = ?").run(String(err), examId);
   }

@@ -21,7 +21,7 @@ export default async function ProgressPage() {
     .all(user.id) as { id: number; score: number; finished_at: string; mode: string; exam_name: string; n: number }[];
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
       <section className="card">
         <h1 className="text-xl font-semibold">Concept mastery</h1>
         <p className="mb-3 text-sm text-slate-600">

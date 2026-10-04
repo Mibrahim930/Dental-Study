@@ -17,5 +17,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/login|_next/static|_next/image|favicon.ico).*)"],
+  // api/ics is the calendar feed: Google/Apple fetch it with a secret token instead of cookies.
+  matcher: ["/((?!login|api/login|api/ics|_next/static|_next/image|favicon.ico).*)"],
 };
