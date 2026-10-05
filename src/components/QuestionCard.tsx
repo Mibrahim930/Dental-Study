@@ -60,19 +60,19 @@ export function QuestionCard({
     <div className="card space-y-4">
       {header}
       {q.caseInfo && (
-        <div className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-950">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-700">
+        <div className="rounded-lg bg-info-soft px-3 py-2 text-sm text-info">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-info">
             Case {q.caseInfo.number} · Question {q.caseInfo.index} of {q.caseInfo.size}
           </div>
           {q.caseInfo.scenario}
         </div>
       )}
       {q.patient_box && (
-        <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm sm:grid-cols-[150px_1fr]">
+        <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-info/30 bg-info-soft p-3 text-sm sm:grid-cols-[150px_1fr]">
           {Object.entries(q.patient_box).map(([k, v]) => (
             <div key={k} className="contents">
-              <dt className="font-medium text-sky-900">{BOX_LABELS[k] ?? k}</dt>
-              <dd className="text-slate-800">{v}</dd>
+              <dt className="font-medium text-info">{BOX_LABELS[k] ?? k}</dt>
+              <dd className="text-foreground">{v}</dd>
             </div>
           ))}
         </dl>
@@ -88,12 +88,12 @@ export function QuestionCard({
       <p className="text-[15px] font-medium leading-relaxed">{q.stem}</p>
       <div className="grid gap-2">
         {q.options.map((o, i) => {
-          let style = "border-slate-300 hover:bg-slate-50";
+          let style = "border-input hover:bg-muted";
           if (revealed) {
-            if (i === q.correct_index) style = "border-emerald-500 bg-emerald-50";
-            else if (i === selected) style = "border-rose-400 bg-rose-50";
-            else style = "border-slate-200 text-slate-500";
-          } else if (i === selected) style = "border-teal-600 bg-teal-50";
+            if (i === q.correct_index) style = "border-success bg-success-soft";
+            else if (i === selected) style = "border-danger bg-danger-soft";
+            else style = "border-border text-muted-foreground";
+          } else if (i === selected) style = "border-primary bg-primary-soft";
           return (
             <button
               key={i}
@@ -108,19 +108,19 @@ export function QuestionCard({
         })}
       </div>
       {revealed && (
-        <div className="space-y-2 rounded-lg bg-slate-50 p-3 text-sm">
+        <div className="space-y-2 rounded-lg bg-muted p-3 text-sm">
           <p className="font-semibold">{selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : "✗ Incorrect"}</p>
           <div className="prose-study text-sm">
             <ReactMarkdown>{q.explanation ?? ""}</ReactMarkdown>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             {q.concept && <span>Concept: {q.concept}</span>}
             {q.source && (
-              <button className="text-teal-700 underline" onClick={() => setShowSource((s) => !s)}>
+              <button className="text-primary underline" onClick={() => setShowSource((s) => !s)}>
                 Source: {q.source.filename}, slide {q.source.page_number}
               </button>
             )}
-            <button className="ml-auto text-slate-500 underline" onClick={flag} disabled={flagged}>
+            <button className="ml-auto text-muted-foreground underline" onClick={flag} disabled={flagged}>
               {flagged ? "Reported. Thanks!" : "Report a problem"}
             </button>
           </div>

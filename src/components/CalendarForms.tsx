@@ -39,7 +39,7 @@ export function CalendarForms({ date }: { date: string }) {
       {open === "exam" && (
         <form
           key={`exam-${date}`}
-          className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3"
+          className="space-y-2 rounded-lg border border-border bg-muted p-3"
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
@@ -56,14 +56,14 @@ export function CalendarForms({ date }: { date: string }) {
             </select>
           </div>
           <input name="course" className="input" placeholder="Course (optional)" />
-          <p className="text-xs text-slate-500">This also creates the exam&apos;s workspace, where you upload its lectures.</p>
+          <p className="text-xs text-muted-foreground">This also creates the exam&apos;s workspace, where you upload its lectures.</p>
           <button className="btn-primary w-full" disabled={busy}>Add exam</button>
         </form>
       )}
       {open === "busy" && (
         <form
           key={`busy-${date}`}
-          className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3"
+          className="space-y-2 rounded-lg border border-border bg-muted p-3"
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
@@ -72,14 +72,14 @@ export function CalendarForms({ date }: { date: string }) {
         >
           <input name="label" className="input" placeholder="What's happening? e.g. Clinic, Spring break" />
           <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-slate-600">From<input name="start" type="date" className="input mt-1" defaultValue={date} required /></label>
-            <label className="text-xs text-slate-600">To<input name="end" type="date" className="input mt-1" defaultValue={date} /></label>
+            <label className="text-xs text-muted-foreground">From<input name="start" type="date" className="input mt-1" defaultValue={date} required /></label>
+            <label className="text-xs text-muted-foreground">To<input name="end" type="date" className="input mt-1" defaultValue={date} /></label>
           </div>
-          <p className="text-xs text-slate-500">The planner won&apos;t schedule studying on these days.</p>
+          <p className="text-xs text-muted-foreground">The planner won&apos;t schedule studying on these days.</p>
           <button className="btn-primary w-full" disabled={busy}>Save busy days</button>
         </form>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </div>
   );
 }
@@ -88,7 +88,7 @@ export function DeleteBusyButton({ id }: { id: number }) {
   const router = useRouter();
   return (
     <button
-      className="text-xs text-slate-500 underline hover:text-rose-700"
+      className="text-xs text-muted-foreground underline hover:text-danger"
       onClick={async () => {
         await fetch(`/api/calendar/busy/${id}/delete`, { method: "POST" });
         router.refresh();

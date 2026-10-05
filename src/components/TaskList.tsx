@@ -37,14 +37,14 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
     router.push(url);
   }
 
-  if (tasks.length === 0) return <p className="text-sm text-slate-500">{empty}</p>;
+  if (tasks.length === 0) return <p className="text-sm text-muted-foreground">{empty}</p>;
   return (
     <ul className="space-y-2">
       {tasks.map((t) => (
-        <li key={t.id} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${t.status === "done" ? "border-slate-100 bg-slate-50" : "border-slate-200 bg-white"}`}>
+        <li key={t.id} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${t.status === "done" ? "border-border bg-muted" : "border-border bg-card"}`}>
           <input
             type="checkbox"
-            className="h-4 w-4 accent-teal-700"
+            className="h-4 w-4 accent-primary"
             checked={t.status === "done"}
             disabled={busy === t.id || t.status === "missed"}
             onChange={() => toggle(t)}
@@ -52,10 +52,10 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
           />
           <span aria-hidden>{ICON[t.kind] ?? "•"}</span>
           <div className="min-w-0 flex-1">
-            <div className={`truncate text-sm ${t.status === "done" ? "text-slate-400 line-through" : "text-slate-800"}`}>{t.title}</div>
-            <div className="text-xs text-slate-500">
+            <div className={`truncate text-sm ${t.status === "done" ? "text-subtle line-through" : "text-foreground"}`}>{t.title}</div>
+            <div className="text-xs text-muted-foreground">
               {t.minutes} min{t.exam_name && t.exam_id ? <> · <Link href={`/exams/${t.exam_id}`} className="hover:underline">{t.exam_name}</Link></> : null}
-              {t.status === "missed" && <span className="ml-1 text-amber-700">· missed (rescheduled)</span>}
+              {t.status === "missed" && <span className="ml-1 text-warning">· missed (rescheduled)</span>}
             </div>
           </div>
           {t.status === "todo" && (

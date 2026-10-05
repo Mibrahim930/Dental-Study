@@ -58,14 +58,14 @@ export default function ReviewPage() {
   if (!cards) {
     return (
       <div className="mx-auto max-w-xl space-y-4">
-        <h1 className="text-2xl font-semibold">Daily review</h1>
+        <h1 className="page-title">Daily review</h1>
         <div className="card space-y-3">
-          <p className="text-slate-700">
+          <p className="text-foreground">
             {due == null ? "Loading…" : due === 0 ? "Nothing due right now. Missed practice questions show up here on a spaced schedule." : `${due} question${due === 1 ? "" : "s"} due.`}
           </p>
           {!!due && (
             <>
-              <p className="text-sm text-slate-600">How much time do you have?</p>
+              <p className="text-sm text-muted-foreground">How much time do you have?</p>
               <div className="flex gap-2">
                 {BUDGETS.map(([m, label]) => (
                   <button key={m} className="btn-primary" onClick={() => start(m)}>{label}</button>
@@ -82,7 +82,7 @@ export default function ReviewPage() {
     return (
       <div className="card mx-auto max-w-xl space-y-3 text-center">
         <h1 className="text-xl font-semibold">Done for now 🎉</h1>
-        <p className="text-slate-600">You reviewed {done} question{done === 1 ? "" : "s"}. They&apos;ll come back right before you&apos;d forget them.</p>
+        <p className="text-muted-foreground">You reviewed {done} question{done === 1 ? "" : "s"}. They&apos;ll come back right before you&apos;d forget them.</p>
         <button className="btn-secondary" onClick={() => { setCards(null); setDue(null); fetch("/api/review?limit=0").then((r) => r.json()).then((j) => setDue(j.due)); }}>
           Back
         </button>
@@ -108,13 +108,13 @@ export default function ReviewPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <div className="text-sm text-slate-500">Card {index + 1} of {cards.length}</div>
+      <div className="text-sm text-muted-foreground">Card {index + 1} of {cards.length}</div>
       <QuestionCard key={c.card_id} q={q} onChoose={chosen == null ? setChosen : undefined} />
       {chosen != null && (
         <div className="card flex flex-wrap items-center gap-2">
           {correct ? (
             <>
-              <span className="mr-2 text-sm text-slate-600">How did that feel?</span>
+              <span className="mr-2 text-sm text-muted-foreground">How did that feel?</span>
               <button className="btn-secondary" onClick={() => rate(true, "hard")}>Hard</button>
               <button className="btn-primary" onClick={() => rate(true, "good")}>Good</button>
               <button className="btn-secondary" onClick={() => rate(true, "easy")}>Easy</button>

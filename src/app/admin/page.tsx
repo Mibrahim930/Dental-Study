@@ -26,13 +26,13 @@ export default async function AdminPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Admin</h1>
+      <h1 className="page-title">Admin</h1>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold">Users ({users.length})</h2>
+        <h2 className="font-semibold tracking-tight">Users ({users.length})</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-slate-500">
+            <thead className="text-left text-muted-foreground">
               <tr>
                 <th className="py-2 pr-3 font-medium">Email</th>
                 <th className="py-2 pr-3 font-medium">AI</th>
@@ -43,14 +43,14 @@ export default async function AdminPage() {
                 <th className="py-2 font-medium" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {users.map((u) => (
                 <tr key={u.id}>
                   <td className="py-2 pr-3">
                     {u.email}
-                    {u.is_admin ? <span className="badge ml-2 bg-teal-100 text-teal-800">admin</span> : null}
-                    {u.must_change_password ? <span className="badge ml-2 bg-amber-100 text-amber-800">temp password</span> : null}
-                    <div className="text-xs text-slate-400">joined {u.created_at.slice(0, 10)}</div>
+                    {u.is_admin ? <span className="badge ml-2 bg-primary-soft text-primary">admin</span> : null}
+                    {u.must_change_password ? <span className="badge ml-2 bg-warning-soft text-warning">temp password</span> : null}
+                    <div className="text-xs text-subtle">joined {u.created_at.slice(0, 10)}</div>
                   </td>
                   <td className="py-2 pr-3">{u.provider === "openai" ? "ChatGPT" : u.provider === "anthropic" ? "Claude" : "—"}</td>
                   <td className="py-2 pr-3">{u.exams}</td>
@@ -65,22 +65,22 @@ export default async function AdminPage() {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-slate-500">Spending is billed to each user&apos;s own API key, not to you.</p>
+        <p className="text-xs text-muted-foreground">Spending is billed to each user&apos;s own API key, not to you.</p>
       </section>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold">Backups</h2>
+        <h2 className="font-semibold tracking-tight">Backups</h2>
         {!backupConfigured() ? (
-          <p className="text-sm text-amber-700">Backups aren&apos;t configured on this server.</p>
+          <p className="text-sm text-warning">Backups aren&apos;t configured on this server.</p>
         ) : (
           <>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted-foreground">
               Every day the database and any new lecture PDFs are copied to a separate storage bucket. The last 14 days are kept.
             </p>
             <p className="text-sm">
               Last backup:{" "}
               {backup ? (
-                <span className={backup.ok ? "text-emerald-700" : "text-rose-700"}>
+                <span className={backup.ok ? "text-success" : "text-danger"}>
                   {new Date(backup.at).toLocaleString()} · {backup.ok ? "OK" : "failed"}. {backup.message}
                 </span>
               ) : (

@@ -51,12 +51,12 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Link href={prev} className="btn-ghost px-2" aria-label="Previous">←</Link>
-            <h1 className="text-2xl font-semibold">{month != null ? `${MONTHS[month]} ${year}` : year}</h1>
+            <h1 className="page-title">{month != null ? `${MONTHS[month]} ${year}` : year}</h1>
             <Link href={next} className="btn-ghost px-2" aria-label="Next">→</Link>
           </div>
-          <div className="flex rounded-lg bg-slate-100 p-1 text-sm">
-            <Link href={`?year=${year}`} className={`rounded-md px-3 py-1 ${month == null ? "bg-white font-medium shadow-sm" : "text-slate-600"}`}>Year</Link>
-            <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-white font-medium shadow-sm" : "text-slate-600"}`}>Month</Link>
+          <div className="flex rounded-lg bg-muted p-1 text-sm">
+            <Link href={`?year=${year}`} className={`rounded-md px-3 py-1 ${month == null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Year</Link>
+            <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Month</Link>
           </div>
         </div>
 
@@ -65,7 +65,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             {MONTHS.map((name, m) => (
               <div key={name} className="card p-2 sm:p-3">
                 <Link href={`?month=${year}-${String(m + 1).padStart(2, "0")}`} className="mb-2 block text-sm font-semibold hover:underline">{name}</Link>
-                <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] text-slate-400">
+                <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] text-subtle">
                   {WEEKDAYS.map((w) => <div key={w}>{w[0]}</div>)}
                 </div>
                 {monthWeeks(year, m).map((week, i) => (
@@ -81,8 +81,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                           href={dayHref(d)}
                           title={[...examsOn(d).map((e) => e.name), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
                           className={`flex aspect-square items-center justify-center rounded text-[11px] ${
-                            ex ? KIND_STYLE[ex.kind] : isBusy ? "bg-slate-200 text-slate-400 line-through" : study ? "bg-teal-50 text-teal-900" : "text-slate-600 hover:bg-slate-100"
-                          } ${d === today ? "ring-2 ring-teal-600" : ""}`}
+                            ex ? KIND_STYLE[ex.kind] : isBusy ? "bg-muted-strong text-subtle line-through" : study ? "bg-primary-soft text-primary" : "text-muted-foreground hover:bg-muted"
+                          } ${d === today ? "ring-2 ring-primary" : ""}`}
                         >
                           {Number(d.slice(8))}
                         </Link>
@@ -95,31 +95,31 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           </div>
         ) : (
           <div className="card overflow-hidden p-0">
-            <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center text-xs font-medium text-slate-500">
+            <div className="grid grid-cols-7 border-b border-border bg-muted text-center text-xs font-medium text-muted-foreground">
               {WEEKDAYS.map((w) => <div key={w} className="py-2">{w}</div>)}
             </div>
             {monthWeeks(year, month).map((week, i) => (
-              <div key={i} className="grid grid-cols-7 border-b border-slate-100 last:border-0">
+              <div key={i} className="grid grid-cols-7 border-b border-border last:border-0">
                 {week.map((d, j) => {
-                  if (!d) return <div key={j} className="min-h-16 bg-slate-50/50 sm:min-h-24" />;
+                  if (!d) return <div key={j} className="min-h-16 bg-muted/50 sm:min-h-24" />;
                   const study = minutesOn(d);
                   const isBusy = busyOn(d);
                   return (
                     <Link
                       key={j}
                       href={dayHref(d)}
-                      className={`min-h-16 space-y-1 overflow-hidden border-l sm:min-h-24 border-slate-100 p-1.5 text-left first:border-0 hover:bg-slate-50 ${d === selected ? "bg-teal-50/60" : ""} ${isBusy.length ? "bg-slate-100" : ""}`}
+                      className={`min-h-16 space-y-1 overflow-hidden border-l sm:min-h-24 border-border p-1.5 text-left first:border-0 hover:bg-muted ${d === selected ? "bg-primary-soft/60" : ""} ${isBusy.length ? "bg-muted" : ""}`}
                     >
-                      <div className={`text-xs ${d === today ? "inline-flex h-5 w-5 items-center justify-center rounded-full bg-teal-700 font-semibold text-white" : "text-slate-500"}`}>
+                      <div className={`text-xs ${d === today ? "inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground" : "text-muted-foreground"}`}>
                         {Number(d.slice(8))}
                       </div>
                       {examsOn(d).map((e) => (
                         <div key={e.id} className={`truncate rounded px-1 text-[11px] font-medium ${KIND_STYLE[e.kind]}`}>{e.name}</div>
                       ))}
                       {isBusy.map((b) => (
-                        <div key={b.id} className="truncate text-[11px] text-slate-500">⛔ {b.label}</div>
+                        <div key={b.id} className="truncate text-[11px] text-muted-foreground">⛔ {b.label}</div>
                       ))}
-                      {study > 0 && <div className="text-[11px] text-teal-800">📚 {Math.round(study / 6) / 10}h</div>}
+                      {study > 0 && <div className="text-[11px] text-primary">📚 {Math.round(study / 6) / 10}h</div>}
                     </Link>
                   );
                 })}
@@ -128,25 +128,25 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
           {(Object.keys(KIND_LABEL) as (keyof typeof KIND_LABEL)[]).map((k) => (
             <span key={k} className="flex items-center gap-1"><span className={`h-3 w-3 rounded ${KIND_STYLE[k]}`} />{KIND_LABEL[k]}</span>
           ))}
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-slate-200" />Busy</span>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-teal-50 ring-1 ring-teal-200" />Study planned</span>
+          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-muted-strong" />Busy</span>
+          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-primary-soft ring-1 ring-primary/30" />Study planned</span>
         </div>
       </section>
 
       <aside className="space-y-4">
         <section className="card space-y-3">
-          <h2 className="font-semibold">{formatDay(selected)}</h2>
+          <h2 className="font-semibold tracking-tight">{formatDay(selected)}</h2>
           {examsOn(selected).map((e) => (
             <Link key={e.id} href={`/exams/${e.id}`} className={`block rounded-lg px-3 py-2 text-sm font-medium ${KIND_STYLE[e.kind]}`}>
               {KIND_LABEL[e.kind]}: {e.name} →
             </Link>
           ))}
           {busyOn(selected).map((b) => (
-            <div key={b.id} className="flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-sm">
+            <div key={b.id} className="flex items-center justify-between rounded-lg bg-muted px-3 py-2 text-sm">
               <span>⛔ {b.label}{b.start_date !== b.end_date ? ` (${b.start_date.slice(5)} to ${b.end_date.slice(5)})` : ""}</span>
               <DeleteBusyButton id={b.id} />
             </div>
@@ -156,8 +156,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         </section>
 
         {warnings.length > 0 && (
-          <section className="card border-amber-300 bg-amber-50 text-sm text-amber-900">
-            <h2 className="mb-1 font-semibold">Not enough study time</h2>
+          <section className="card border-warning/40 bg-warning-soft text-sm text-warning">
+            <h2 className="mb-1 font-semibold tracking-tight">Not enough study time</h2>
             {warnings.map((w) => (
               <p key={w.examId}>
                 {w.examName}: about {Math.ceil(w.minutesShort / 60)} more hour{w.minutesShort > 60 ? "s" : ""} needed. Add study time below or remove busy days.
@@ -167,8 +167,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         )}
 
         <section className="card space-y-3">
-          <h2 className="font-semibold">Study planner</h2>
-          <p className="text-sm text-slate-600">
+          <h2 className="font-semibold tracking-tight">Study planner</h2>
+          <p className="text-sm text-muted-foreground">
             Your plan spreads each exam&apos;s topics, practice quizzes and review across the days before it, works around busy days, and
             updates automatically when things change.
           </p>
@@ -176,8 +176,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         </section>
 
         <section className="card space-y-2">
-          <h2 className="font-semibold">Sync to your phone&apos;s calendar</h2>
-          <p className="text-sm text-slate-600">
+          <h2 className="font-semibold tracking-tight">Sync to your phone&apos;s calendar</h2>
+          <p className="text-sm text-muted-foreground">
             Add this link as a subscribed calendar. In Google Calendar: Other calendars → + → From URL. On iPhone: Settings → Calendar →
             Accounts → Add Subscribed Calendar. Your exams and daily study plan will show up and stay updated.
           </p>

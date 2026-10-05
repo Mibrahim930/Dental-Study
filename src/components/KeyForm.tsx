@@ -39,11 +39,11 @@ export function KeyForm({ initialProvider, done }: { initialProvider?: Provider 
           ).map(([value, name, hint]) => (
             <label
               key={value}
-              className={`cursor-pointer rounded-lg border p-3 ${provider === value ? "border-teal-600 bg-teal-50" : "border-slate-300 bg-white"}`}
+              className={`cursor-pointer rounded-lg border p-3 ${provider === value ? "border-primary bg-primary-soft" : "border-input bg-card"}`}
             >
               <input type="radio" name="provider" className="sr-only" checked={provider === value} onChange={() => setProvider(value)} />
               <div className="font-medium">{name}</div>
-              <div className="text-xs text-slate-500">{hint}</div>
+              <div className="text-xs text-muted-foreground">{hint}</div>
             </label>
           ))}
         </div>
@@ -59,16 +59,16 @@ export function KeyForm({ initialProvider, done }: { initialProvider?: Provider 
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
         />
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-muted-foreground">
           Your key is encrypted and only used for your own studying. AI usage is billed to your account with {provider === "anthropic" ? "Anthropic" : "OpenAI"}.
         </p>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
       <button className="btn-primary w-full" disabled={busy || !apiKey.trim()}>
         {busy ? "Checking key…" : "Save and continue"}
       </button>
       <p className="text-center text-sm">
-        <Link href="/help/api-keys" className="text-teal-700 underline" target="_blank">
+        <Link href="/help/api-keys" className="text-primary underline" target="_blank">
           How do I get an API key? (step-by-step for Claude and ChatGPT)
         </Link>
       </p>

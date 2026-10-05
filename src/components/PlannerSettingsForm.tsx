@@ -33,7 +33,7 @@ export function PlannerSettingsForm({ weekdayMinutes, reviewMinutes }: { weekday
       <div className="label">Hours you can study each day</div>
       <div className="grid grid-cols-7 gap-1">
         {DAYS.map((d, i) => (
-          <label key={d} className="text-center text-xs text-slate-600">
+          <label key={d} className="text-center text-xs text-muted-foreground">
             {d}
             <input
               type="number"
@@ -50,7 +50,7 @@ export function PlannerSettingsForm({ weekdayMinutes, reviewMinutes }: { weekday
           </label>
         ))}
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-700">
+      <label className="flex items-center gap-2 text-sm text-foreground">
         Daily review
         <input
           type="number"
@@ -68,7 +68,7 @@ export function PlannerSettingsForm({ weekdayMinutes, reviewMinutes }: { weekday
       </label>
       <div className="flex items-center gap-3">
         <button className="btn-primary" disabled={busy}>{busy ? "Re-planning…" : "Save and re-plan"}</button>
-        {saved && <span className="text-sm text-emerald-700">Plan updated.</span>}
+        {saved && <span className="text-sm text-success">Plan updated.</span>}
       </div>
     </form>
   );
@@ -94,7 +94,7 @@ export function CalendarSyncLink({ url }: { url: string }) {
       </div>
       <button
         type="button"
-        className="text-xs text-slate-500 underline"
+        className="text-xs text-muted-foreground underline"
         onClick={async () => {
           if (!window.confirm("Make a new link? The old one will stop updating in any calendar that uses it.")) return;
           await fetch("/api/planner/ics-token", { method: "POST" });

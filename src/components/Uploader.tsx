@@ -44,17 +44,17 @@ export function Uploader({ examId }: { examId: number }) {
         void upload(e.dataTransfer.files);
       }}
       className={`rounded-xl border-2 border-dashed p-6 text-center transition ${
-        dragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-white"
+        dragging ? "border-primary bg-primary-soft" : "border-input bg-card"
       }`}
     >
-      <p className="text-sm text-slate-600">Drag lecture PDFs here, or</p>
+      <p className="text-sm text-muted-foreground">Drag lecture PDFs here, or</p>
       <button type="button" className="btn-secondary mt-2" disabled={!!status} onClick={() => input.current?.click()}>
         Choose files
       </button>
       <input ref={input} type="file" accept="application/pdf" multiple hidden onChange={(e) => e.target.files && upload(e.target.files)} />
-      {status && <p className="mt-3 text-sm text-teal-800">{status}</p>}
+      {status && <p className="mt-3 text-sm text-primary">{status}</p>}
       {errors.map((e) => (
-        <p key={e} className="mt-2 text-sm text-red-600">{e}</p>
+        <p key={e} className="mt-2 text-sm text-danger">{e}</p>
       ))}
     </div>
   );

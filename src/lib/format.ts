@@ -16,8 +16,8 @@ export function pct(x: number | null | undefined): string {
 }
 
 export function masteryColor(m: number | null): string {
-  if (m == null) return "bg-slate-100 text-slate-600";
-  if (m >= 0.8) return "bg-emerald-100 text-emerald-800";
-  if (m >= 0.6) return "bg-amber-100 text-amber-800";
-  return "bg-rose-100 text-rose-800";
+  if (m == null) return "bg-muted text-muted-foreground";
+  if (m >= 0.8) return "bg-success-soft text-success";
+  if (m >= 0.6) return "bg-warning-soft text-warning";
+  return "bg-danger-soft text-danger";
 }

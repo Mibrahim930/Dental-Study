@@ -33,7 +33,7 @@ export function ClassForms() {
           e.currentTarget.reset();
         }}
       >
-        <h2 className="font-semibold">Join a class</h2>
+        <h2 className="font-semibold tracking-tight">Join a class</h2>
         <input name="code" className="input font-mono uppercase" placeholder="Invite code, e.g. K7M2QX9P" required />
         <button className="btn-primary w-full" disabled={busy}>Join</button>
       </form>
@@ -46,11 +46,11 @@ export function ClassForms() {
           e.currentTarget.reset();
         }}
       >
-        <h2 className="font-semibold">Start a class</h2>
+        <h2 className="font-semibold tracking-tight">Start a class</h2>
         <input name="name" className="input" placeholder="e.g. Class of 2028" required />
         <button className="btn-secondary w-full" disabled={busy}>Create and get an invite code</button>
       </form>
-      {error && <p className="text-sm text-red-600 sm:col-span-2">{error}</p>}
+      {error && <p className="text-sm text-danger sm:col-span-2">{error}</p>}
     </div>
   );
 }
@@ -60,7 +60,7 @@ export function InviteCode({ code }: { code: string }) {
   return (
     <button
       type="button"
-      className="rounded-md bg-slate-100 px-2 py-1 font-mono text-sm tracking-wider hover:bg-slate-200"
+      className="rounded-md bg-muted px-2 py-1 font-mono text-sm tracking-wider hover:bg-muted-strong"
       title="Copy invite code"
       onClick={async () => {
         await navigator.clipboard.writeText(code);
@@ -75,7 +75,7 @@ export function InviteCode({ code }: { code: string }) {
 export function ShareExamForm({ classId, exams }: { classId: number; exams: { id: number; name: string }[] }) {
   const router = useRouter();
   const [error, setError] = useState("");
-  if (exams.length === 0) return <p className="text-xs text-slate-500">Exams appear here to share once their topic map is ready.</p>;
+  if (exams.length === 0) return <p className="text-xs text-muted-foreground">Exams appear here to share once their topic map is ready.</p>;
   return (
     <form
       className="flex flex-wrap gap-2"
@@ -93,7 +93,7 @@ export function ShareExamForm({ classId, exams }: { classId: number; exams: { id
         ))}
       </select>
       <button className="btn-secondary">Share with class</button>
-      {error && <p className="w-full text-sm text-red-600">{error}</p>}
+      {error && <p className="w-full text-sm text-danger">{error}</p>}
     </form>
   );
 }
@@ -104,7 +104,7 @@ export function SharedExamAction({ sharedId, addedExamId, mine }: { sharedId: nu
   if (mine)
     return (
       <button
-        className="text-xs text-slate-500 underline hover:text-rose-700"
+        className="text-xs text-muted-foreground underline hover:text-danger"
         onClick={async () => {
           await post(`/api/shared/${sharedId}/unshare`);
           router.refresh();
@@ -113,7 +113,7 @@ export function SharedExamAction({ sharedId, addedExamId, mine }: { sharedId: nu
         Stop sharing
       </button>
     );
-  if (addedExamId) return <Link href={`/exams/${addedExamId}`} className="text-sm text-emerald-700 hover:underline">Added ✓ Open</Link>;
+  if (addedExamId) return <Link href={`/exams/${addedExamId}`} className="text-sm text-success hover:underline">Added ✓ Open</Link>;
   return (
     <button
       className="btn-primary px-3 py-1"
@@ -137,7 +137,7 @@ export function LeaveClassButton({ classId, isOwner }: { classId: number; isOwne
   const router = useRouter();
   return (
     <button
-      className="text-xs text-slate-500 underline hover:text-rose-700"
+      className="text-xs text-muted-foreground underline hover:text-danger"
       onClick={async () => {
         const msg = isOwner
           ? "Delete this class for everyone? Exams people already added stay in their accounts."

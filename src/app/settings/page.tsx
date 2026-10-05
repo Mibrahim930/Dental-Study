@@ -23,43 +23,43 @@ export default async function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+      <h1 className="page-title">Settings</h1>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold">Spending</h2>
+        <h2 className="font-semibold tracking-tight">Spending</h2>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <div className="text-sm text-slate-500">This month</div>
+            <div className="text-sm text-muted-foreground">This month</div>
             <div className="text-2xl font-semibold">{usd(month)}</div>
           </div>
           <div>
-            <div className="text-sm text-slate-500">All time</div>
+            <div className="text-sm text-muted-foreground">All time</div>
             <div className="text-2xl font-semibold">{usd(allTime)}</div>
           </div>
         </div>
         {byPurpose.length > 0 && (
-          <ul className="divide-y divide-slate-100 text-sm">
+          <ul className="divide-y divide-border text-sm">
             {byPurpose.map((p) => (
               <li key={p.purpose} className="flex justify-between py-1.5">
-                <span className="capitalize">{p.purpose} <span className="text-slate-400">· {p.calls} call{p.calls === 1 ? "" : "s"}</span></span>
+                <span className="capitalize">{p.purpose} <span className="text-subtle">· {p.calls} call{p.calls === 1 ? "" : "s"}</span></span>
                 <span>{usd(p.cost)}</span>
               </li>
             ))}
           </ul>
         )}
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-muted-foreground">
           Estimated from token counts. Your {user.provider === "openai" ? "OpenAI" : "Anthropic"} billing page has the exact amount.
         </p>
       </section>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold">AI provider and key</h2>
-        <p className="text-sm text-slate-600">
+        <h2 className="font-semibold tracking-tight">AI provider and key</h2>
+        <p className="text-sm text-muted-foreground">
           Using <strong>{user.provider === "openai" ? "ChatGPT" : "Claude"}</strong> ({MODELS[user.provider ?? "anthropic"]}) with the key ending in{" "}
-          <code className="rounded bg-slate-100 px-1">…{user.api_key_last4}</code>.
+          <code className="rounded bg-muted px-1">…{user.api_key_last4}</code>.
         </p>
         <details>
-          <summary className="cursor-pointer text-sm font-medium text-teal-700">Replace key or switch provider</summary>
+          <summary className="cursor-pointer text-sm font-medium text-primary">Replace key or switch provider</summary>
           <div className="mt-3">
             <KeyForm initialProvider={user.provider} done="/settings" />
           </div>
@@ -68,8 +68,8 @@ export default async function SettingsPage() {
 
       <section className="card flex items-center justify-between">
         <div>
-          <h2 className="font-semibold">Account</h2>
-          <p className="text-sm text-slate-600">{user.email}</p>
+          <h2 className="font-semibold tracking-tight">Account</h2>
+          <p className="text-sm text-muted-foreground">{user.email}</p>
         </div>
         <div className="flex gap-2">
           <Link href="/account/password" className="btn-secondary">Change password</Link>

@@ -5,14 +5,14 @@ export const metadata = { title: "How to get an API key · Dental Study" };
 function Step({ n, children }: { n: number; children: React.ReactNode }) {
   return (
     <li className="flex gap-3">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white">{n}</span>
-      <div className="text-sm leading-relaxed text-slate-700">{children}</div>
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">{n}</span>
+      <div className="text-sm leading-relaxed text-foreground">{children}</div>
     </li>
   );
 }
 
 const A = ({ href, children }: { href: string; children: React.ReactNode }) => (
-  <a href={href} target="_blank" rel="noreferrer" className="font-medium text-teal-700 underline">
+  <a href={href} target="_blank" rel="noreferrer" className="font-medium text-primary underline">
     {children}
   </a>
 );
@@ -21,22 +21,22 @@ export default function ApiKeyHelpPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <Link href="/setup" className="text-sm text-slate-500 hover:underline">← Back to setup</Link>
-        <h1 className="mt-1 text-2xl font-semibold">How to get an API key</h1>
-        <p className="mt-1 text-slate-600">
+        <Link href="/setup" className="text-sm text-muted-foreground hover:underline">← Back to setup</Link>
+        <h1 className="mt-1 page-title">How to get an API key</h1>
+        <p className="mt-1 text-muted-foreground">
           An API key lets Dental Study use Claude or ChatGPT on your behalf. You only need one, from either company. Setup takes about 5
           minutes.
         </p>
       </div>
 
-      <div className="card border-amber-200 bg-amber-50 text-sm text-amber-900">
+      <div className="card border-warning/40 bg-warning-soft text-sm text-warning">
         <strong>Heads up:</strong> a Claude Pro or ChatGPT Plus subscription does <em>not</em> include API access. The API is a separate,
         pay-as-you-go account. It&apos;s cheap for studying: reading a typical exam&apos;s lectures (around 500 slides) costs roughly $3 with
         Claude or $5 with ChatGPT, once. Each practice exam or tutor question costs a few cents.
       </div>
 
       <section className="card space-y-4">
-        <h2 className="text-lg font-semibold">Claude (Anthropic) <span className="text-sm font-normal text-slate-500">· recommended, cheapest for reading lectures</span></h2>
+        <h2 className="section-title">Claude (Anthropic) <span className="text-sm font-normal text-muted-foreground">· recommended, cheapest for reading lectures</span></h2>
         <ol className="space-y-3">
           <Step n={1}>
             Go to <A href="https://platform.claude.com">platform.claude.com</A> and sign up (or log in). This is the Claude Console, which is
@@ -51,7 +51,7 @@ export default function ApiKeyHelpPage() {
             &quot;Dental Study&quot;.
           </Step>
           <Step n={4}>
-            Copy the key right away. It starts with <code className="rounded bg-slate-100 px-1">sk-ant-</code> and is only shown once.
+            Copy the key right away. It starts with <code className="rounded bg-muted px-1">sk-ant-</code> and is only shown once.
           </Step>
           <Step n={5}>
             Back in Dental Study, choose <strong>Claude</strong>, paste the key, and click <strong>Save and continue</strong>.
@@ -60,7 +60,7 @@ export default function ApiKeyHelpPage() {
       </section>
 
       <section className="card space-y-4">
-        <h2 className="text-lg font-semibold">ChatGPT (OpenAI)</h2>
+        <h2 className="section-title">ChatGPT (OpenAI)</h2>
         <ol className="space-y-3">
           <Step n={1}>
             Go to <A href="https://platform.openai.com">platform.openai.com</A> and sign up (or log in). This is the OpenAI developer platform,
@@ -75,7 +75,7 @@ export default function ApiKeyHelpPage() {
             &quot;Dental Study&quot;.
           </Step>
           <Step n={4}>
-            Copy the key right away. It starts with <code className="rounded bg-slate-100 px-1">sk-</code> and is only shown once.
+            Copy the key right away. It starts with <code className="rounded bg-muted px-1">sk-</code> and is only shown once.
           </Step>
           <Step n={5}>
             Back in Dental Study, choose <strong>ChatGPT</strong>, paste the key, and click <strong>Save and continue</strong>.
@@ -83,8 +83,8 @@ export default function ApiKeyHelpPage() {
         </ol>
       </section>
 
-      <section className="card space-y-2 text-sm text-slate-700">
-        <h2 className="text-lg font-semibold text-slate-900">Keeping your key safe</h2>
+      <section className="card space-y-2 text-sm text-foreground">
+        <h2 className="section-title">Keeping your key safe</h2>
         <ul className="list-disc space-y-1 pl-5">
           <li>Treat it like a password. Don&apos;t share it or post it anywhere.</li>
           <li>Dental Study stores it encrypted and uses it only for your own studying. You can see what you&apos;ve spent under Settings.</li>

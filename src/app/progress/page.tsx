@@ -24,11 +24,11 @@ export default async function ProgressPage() {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
       <section className="card">
         <h1 className="text-xl font-semibold">Concept mastery</h1>
-        <p className="mb-3 text-sm text-slate-600">
+        <p className="mb-3 text-sm text-muted-foreground">
           Across every exam. Built from practice exams and daily review. {untested > 0 && `${untested} concepts not tested yet.`}
         </p>
         {concepts.length === 0 ? (
-          <p className="text-sm text-slate-500">Take a practice exam to start tracking mastery.</p>
+          <p className="text-sm text-muted-foreground">Take a practice exam to start tracking mastery.</p>
         ) : (
           <ul className="space-y-1 text-sm">
             {concepts.map((c) => (
@@ -43,8 +43,8 @@ export default async function ProgressPage() {
         )}
       </section>
       <section className="card">
-        <h2 className="mb-2 font-semibold">Practice exam history</h2>
-        <ul className="divide-y divide-slate-100 text-sm">
+        <h2 className="mb-2 font-semibold tracking-tight">Practice exam history</h2>
+        <ul className="divide-y divide-border text-sm">
           {attempts.map((a) => (
             <li key={a.id} className="flex justify-between py-2">
               <Link href={`/attempts/${a.id}`} className="hover:underline">
@@ -53,7 +53,7 @@ export default async function ProgressPage() {
               <span>{pct(a.score)}</span>
             </li>
           ))}
-          {attempts.length === 0 && <li className="py-2 text-slate-500">None yet.</li>}
+          {attempts.length === 0 && <li className="py-2 text-muted-foreground">None yet.</li>}
         </ul>
       </section>
     </div>

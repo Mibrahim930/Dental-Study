@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Brand } from "@/components/Brand";
 
 export default function AccountPage() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -25,15 +26,16 @@ export default function AccountPage() {
   }
 
   return (
-    <div className="mx-auto mt-16 max-w-sm">
+    <div className="mx-auto mt-8 sm:mt-14 max-w-sm">
+      <Brand />
       <form onSubmit={submit} className="card space-y-4">
-        <div className="flex rounded-lg bg-slate-100 p-1 text-sm">
+        <div className="flex rounded-lg bg-muted p-1 text-sm">
           {(["signin", "signup"] as const).map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => { setMode(m); setError(""); }}
-              className={`flex-1 rounded-md py-1.5 ${mode === m ? "bg-white font-medium shadow-sm" : "text-slate-600"}`}
+              className={`flex-1 rounded-md py-1.5 ${mode === m ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
             >
               {m === "signin" ? "Sign in" : "Create account"}
             </button>
@@ -55,9 +57,9 @@ export default function AccountPage() {
             minLength={mode === "signup" ? 8 : undefined}
             required
           />
-          {mode === "signup" && <p className="mt-1 text-xs text-slate-500">At least 8 characters.</p>}
+          {mode === "signup" && <p className="mt-1 text-xs text-muted-foreground">At least 8 characters.</p>}
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
         <button className="btn-primary w-full" disabled={busy}>
           {mode === "signin" ? "Sign in" : "Create account"}
         </button>

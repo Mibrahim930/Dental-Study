@@ -23,7 +23,7 @@ export function BackupNowButton() {
       >
         {busy ? "Backing up…" : "Back up now"}
       </button>
-      {msg && <span className="text-sm text-slate-600">{msg}</span>}
+      {msg && <span className="text-sm text-muted-foreground">{msg}</span>}
     </div>
   );
 }

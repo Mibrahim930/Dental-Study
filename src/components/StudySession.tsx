@@ -88,7 +88,7 @@ export function StudySession(props: {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <Link href={`/exams/${examId}`} className="text-sm text-slate-500 hover:underline">← {props.examName}</Link>
+          <Link href={`/exams/${examId}`} className="text-sm text-muted-foreground hover:underline">← {props.examName}</Link>
           <h1 className="text-xl font-semibold">
             Topic {position + 1} of {topics.length}: {topic.title}
           </h1>
@@ -101,9 +101,9 @@ export function StudySession(props: {
       {endSummary !== undefined && (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4">
           <div className="card max-w-md space-y-3">
-            <h2 className="text-lg font-semibold">Session saved</h2>
-            {endSummary && <p className="text-sm text-slate-700">{endSummary}</p>}
-            <p className="text-sm text-slate-600">
+            <h2 className="section-title">Session saved</h2>
+            {endSummary && <p className="text-sm text-foreground">{endSummary}</p>}
+            <p className="text-sm text-muted-foreground">
               Want to lock it in? Take a short practice exam on the {visited.size} topic{visited.size === 1 ? "" : "s"} you covered.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -127,7 +127,7 @@ export function StudySession(props: {
                 <button
                   onClick={() => go(t.position)}
                   className={`w-full rounded-md px-2 py-1 text-left ${
-                    t.position === position ? "bg-teal-700 text-white" : visited.has(t.position) ? "text-slate-800 hover:bg-slate-100" : "text-slate-500 hover:bg-slate-100"
+                    t.position === position ? "bg-primary text-primary-foreground" : visited.has(t.position) ? "text-foreground hover:bg-muted" : "text-muted-foreground hover:bg-muted"
                   }`}
                 >
                   {t.position + 1}. {t.title} {t.emphasized && "★"}
@@ -139,10 +139,10 @@ export function StudySession(props: {
 
         <article className="min-w-0 space-y-4">
           {!data && !error && (
-            <div className="card animate-pulse text-sm text-slate-500">Preparing this topic from your slides… (first time takes ~30s)</div>
+            <div className="card animate-pulse text-sm text-muted-foreground">Preparing this topic from your slides… (first time takes ~30s)</div>
           )}
           {error && (
-            <div className="card text-sm text-red-600">
+            <div className="card text-sm text-danger">
               {error} <button className="btn-ghost" onClick={() => { setResult(null); setAttempt((a) => a + 1); }}>Try again</button>
             </div>
           )}
@@ -171,7 +171,7 @@ function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
     <>
       <section className="card space-y-3">
         <div className="flex flex-wrap gap-1">
-          {topic.emphasized && <span className="badge bg-amber-100 text-amber-800">★ Emphasized in lecture</span>}
+          {topic.emphasized && <span className="badge bg-warning-soft text-warning">★ Emphasized in lecture</span>}
           {concepts.map((c) => (
             <span key={c.id} className={`badge ${masteryColor(c.mastery)}`} title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : ""}>
               {c.name}
@@ -192,7 +192,7 @@ function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
               <button onClick={() => setZoom(s.page_id)} className="block w-full">
                 <SlideImage pageId={s.page_id} alt={s.caption} />
               </button>
-              <figcaption className="text-sm text-slate-600">{s.caption}</figcaption>
+              <figcaption className="text-sm text-muted-foreground">{s.caption}</figcaption>
             </figure>
           ))}
         </section>
@@ -205,9 +205,9 @@ function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
         </div>
       )}
 
-      <section className="card border-teal-200 bg-teal-50/50">
-        <h3 className="mb-2 font-semibold text-teal-900">Key points</h3>
-        <ul className="list-disc space-y-1 pl-5 text-sm text-slate-800">
+      <section className="card border-primary/30 bg-primary-soft/50">
+        <h3 className="mb-2 font-semibold text-primary">Key points</h3>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-foreground">
           {lesson.key_points.map((k) => (
             <li key={k}>{k}</li>
           ))}
@@ -215,9 +215,9 @@ function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
       </section>
 
       {lesson.connections && (
-        <section className="card border-indigo-200 bg-indigo-50/50 text-sm">
-          <h3 className="mb-1 font-semibold text-indigo-900">↺ Connects to earlier exams</h3>
-          <p className="text-slate-800">{lesson.connections}</p>
+        <section className="card border-info/30 bg-info-soft/50 text-sm">
+          <h3 className="mb-1 font-semibold text-info">↺ Connects to earlier exams</h3>
+          <p className="text-foreground">{lesson.connections}</p>
         </section>
       )}
 
@@ -252,7 +252,7 @@ function QuickCheck({
   }
   return (
     <section className="card space-y-2">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Quick check {index + 1}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quick check {index + 1}</div>
       <p className="font-medium">{check.question}</p>
       <div className="grid gap-2">
         {check.options.map((o, i) => (
@@ -261,12 +261,12 @@ function QuickCheck({
             onClick={() => choose(i)}
             className={`rounded-lg border px-3 py-2 text-left text-sm ${
               !answered
-                ? "border-slate-300 hover:bg-slate-50"
+                ? "border-input hover:bg-muted"
                 : i === check.correct_index
-                  ? "border-emerald-500 bg-emerald-50"
+                  ? "border-success bg-success-soft"
                   : i === chosen
-                    ? "border-rose-400 bg-rose-50"
-                    : "border-slate-200 text-slate-500"
+                    ? "border-danger bg-danger-soft"
+                    : "border-border text-muted-foreground"
             }`}
           >
             {String.fromCharCode(65 + i)}. {o}
@@ -274,7 +274,7 @@ function QuickCheck({
         ))}
       </div>
       {answered && (
-        <p className="text-sm text-slate-700">
+        <p className="text-sm text-foreground">
           <strong>{chosen === check.correct_index ? "Correct. " : "Not quite. "}</strong>
           {check.explanation}
         </p>
@@ -319,20 +319,20 @@ function TutorChat({ sessionId, position, initial }: { sessionId: number; positi
 
   return (
     <aside className="card flex h-[80vh] flex-col p-0 lg:sticky lg:top-4">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <h2 className="font-semibold">Ask the tutor</h2>
-        <p className="text-xs text-slate-500">Answers come from your lectures and remember your past sessions.</p>
+      <div className="border-b border-border px-4 py-3">
+        <h2 className="font-semibold tracking-tight">Ask the tutor</h2>
+        <p className="text-xs text-muted-foreground">Answers come from your lectures and remember your past sessions.</p>
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {messages.length === 0 && (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-muted-foreground">
             Try: &quot;What&apos;s the difference between SIP and SAP?&quot; or &quot;Quiz me on this topic.&quot;
           </p>
         )}
         {messages.map((m, i) => (
           <div
             key={i}
-            className={`rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-6 bg-teal-700 text-white" : "mr-2 bg-slate-100 text-slate-800"}`}
+            className={`rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-6 bg-primary text-primary-foreground" : "mr-2 bg-muted text-foreground"}`}
           >
             {m.role === "assistant" ? (
               <div className="prose-study text-sm">
@@ -345,7 +345,7 @@ function TutorChat({ sessionId, position, initial }: { sessionId: number; positi
         ))}
         <div ref={bottom} />
       </div>
-      <form onSubmit={send} className="flex gap-2 border-t border-slate-200 p-3">
+      <form onSubmit={send} className="flex gap-2 border-t border-border p-3">
         <input className="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything…" />
         <button className="btn-primary" disabled={busy || !input.trim()}>Send</button>
       </form>

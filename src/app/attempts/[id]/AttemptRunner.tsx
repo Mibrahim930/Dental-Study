@@ -37,15 +37,15 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     return (
       <div className="card mx-auto mt-10 max-w-md space-y-2 text-center">
         <div className="text-lg font-semibold">Writing your practice exam…</div>
-        <p className="text-sm text-slate-600">Questions are built from your slides, weighted toward weak and emphasized topics. This usually takes 30–90 seconds.</p>
-        <div className="mx-auto h-1 w-40 animate-pulse rounded bg-teal-600" />
+        <p className="text-sm text-muted-foreground">Questions are built from your slides, weighted toward weak and emphasized topics. This usually takes 30–90 seconds.</p>
+        <div className="mx-auto h-1 w-40 animate-pulse rounded bg-primary" />
       </div>
     );
   }
   if (attempt.status === "error") {
     return (
       <div className="card mx-auto mt-10 max-w-md space-y-3">
-        <p className="text-red-600">Couldn&apos;t create this exam: {attempt.error}</p>
+        <p className="text-danger">Couldn&apos;t create this exam: {attempt.error}</p>
         <Link href={`/exams/${attempt.exam_id}`} className="btn-secondary">Back to exam</Link>
       </div>
     );
@@ -72,7 +72,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <Link href={`/exams/${attempt.exam_id}`} className="text-sm text-slate-500 hover:underline">← {attempt.exam_name}</Link>
+          <Link href={`/exams/${attempt.exam_id}`} className="text-sm text-muted-foreground hover:underline">← {attempt.exam_name}</Link>
           <h1 className="text-xl font-semibold">Practice exam · {attempt.mode === "timed" ? "Timed" : "Tutor mode"}</h1>
         </div>
         <div className="flex items-center gap-3">
@@ -90,14 +90,14 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
             onClick={() => setIndex(i)}
             className={`h-8 w-8 rounded text-xs font-medium ${
               i === index
-                ? "bg-teal-700 text-white"
+                ? "bg-primary text-primary-foreground"
                 : x.chosen_index == null
-                  ? "bg-white text-slate-600 ring-1 ring-slate-300"
+                  ? "bg-card text-muted-foreground ring-1 ring-input"
                   : attempt.mode === "tutor"
                     ? x.correct
-                      ? "bg-emerald-100 text-emerald-800"
-                      : "bg-rose-100 text-rose-800"
-                    : "bg-slate-200 text-slate-700"
+                      ? "bg-success-soft text-success"
+                      : "bg-danger-soft text-danger"
+                    : "bg-muted-strong text-foreground"
             }`}
           >
             {i + 1}
@@ -111,9 +111,9 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         pending={pending[q.id]}
         onChoose={q.chosen_index == null ? choose : undefined}
         header={
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-muted-foreground">
             Question {index + 1} of {questions.length}
-            {q.type !== "recall" && !q.caseInfo && <span className="ml-2 badge bg-sky-100 text-sky-800">{q.type === "case" ? "Case" : "Image"}</span>}
+            {q.type !== "recall" && !q.caseInfo && <span className="ml-2 badge bg-info-soft text-info">{q.type === "case" ? "Case" : "Image"}</span>}
           </div>
         }
       />
@@ -146,7 +146,7 @@ function Timer({ startedAt, limit, onExpire }: { startedAt: string; limit: numbe
   }, [end, onExpire]);
   const s = Math.floor(left / 1000);
   return (
-    <span className={`font-mono text-sm ${s < 120 ? "text-rose-700" : "text-slate-700"}`}>
+    <span className={`font-mono text-sm ${s < 120 ? "text-danger" : "text-foreground"}`}>
       ⏱ {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
     </span>
   );
@@ -165,12 +165,12 @@ function Results({ view }: { view: AttemptView }) {
   const missed = questions.filter((q) => !q.correct).length;
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <Link href={`/exams/${attempt.exam_id}`} className="text-sm text-slate-500 hover:underline">← {attempt.exam_name}</Link>
+      <Link href={`/exams/${attempt.exam_id}`} className="text-sm text-muted-foreground hover:underline">← {attempt.exam_name}</Link>
       <div className="card flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-sm text-slate-500">Score</div>
+          <div className="text-sm text-muted-foreground">Score</div>
           <div className="text-4xl font-semibold">{pct(attempt.score)}</div>
-          <div className="text-sm text-slate-600">
+          <div className="text-sm text-muted-foreground">
             {questions.length - missed} of {questions.length} correct
             {missed > 0 && ` · ${missed} missed question${missed === 1 ? "" : "s"} added to your daily review`}
           </div>
@@ -182,7 +182,7 @@ function Results({ view }: { view: AttemptView }) {
       </div>
 
       <div className="card">
-        <h2 className="mb-2 font-semibold">By topic</h2>
+        <h2 className="mb-2 font-semibold tracking-tight">By topic</h2>
         <ul className="space-y-2 text-sm">
           {[...byTopic.entries()]
             .sort((a, b) => a[1].right / a[1].total - b[1].right / b[1].total)
@@ -192,9 +192,9 @@ function Results({ view }: { view: AttemptView }) {
                   <span>{title}</span>
                   <span>{t.right}/{t.total}</span>
                 </div>
-                <div className="mt-1 h-2 rounded bg-slate-100">
+                <div className="mt-1 h-2 rounded bg-muted">
                   <div
-                    className={`h-2 rounded ${t.right / t.total >= 0.8 ? "bg-emerald-500" : t.right / t.total >= 0.6 ? "bg-amber-500" : "bg-rose-500"}`}
+                    className={`h-2 rounded ${t.right / t.total >= 0.8 ? "bg-success" : t.right / t.total >= 0.6 ? "bg-warning" : "bg-danger"}`}
                     style={{ width: `${(t.right / t.total) * 100}%` }}
                   />
                 </div>
@@ -203,12 +203,12 @@ function Results({ view }: { view: AttemptView }) {
         </ul>
       </div>
 
-      <h2 className="pt-2 font-semibold">Review every question</h2>
+      <h2 className="pt-2 font-semibold tracking-tight">Review every question</h2>
       {questions.map((q, i) => (
         <QuestionCard
           key={q.id}
           q={q as QuestionData}
-          header={<div className="text-xs text-slate-500">Question {i + 1}{q.topic && ` · ${q.topic}`}</div>}
+          header={<div className="text-xs text-muted-foreground">Question {i + 1}{q.topic && ` · ${q.topic}`}</div>}
         />
       ))}
     </div>

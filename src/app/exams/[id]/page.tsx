@@ -48,9 +48,9 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
       <AutoRefresh active={processing} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link href="/" className="text-sm text-slate-500 hover:underline">← All exams</Link>
-          <h1 className="text-2xl font-semibold">{exam.name}</h1>
-          <p className="text-slate-600">
+          <Link href="/" className="text-sm text-muted-foreground hover:underline">← All exams</Link>
+          <h1 className="page-title">{exam.name}</h1>
+          <p className="text-muted-foreground">
             {exam.course ? `${exam.course} · ` : ""}
             {formatDate(exam.exam_date)}
             {days != null && days >= 0 && ` · ${days} day${days === 1 ? "" : "s"} left`}
@@ -84,14 +84,14 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
         <div className="space-y-6">
           {/* Study */}
           <section className="card">
-            <h2 className="text-lg font-semibold">Study</h2>
+            <h2 className="section-title">Study</h2>
             {topics.length === 0 ? (
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-muted-foreground">
                 Upload this exam&apos;s lectures. Once they&apos;re processed, a topic map is built and you can start studying.
               </p>
             ) : (
               <>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-muted-foreground">
                   Guided walkthrough of {topics.length} topics, with slide images, quick checks and a tutor you can ask anything.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -104,12 +104,12 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                 </div>
                 {sessions.some((s) => s.summary) && (
                   <div className="mt-4 space-y-2">
-                    <h3 className="text-sm font-medium text-slate-700">Session notes</h3>
+                    <h3 className="text-sm font-medium text-foreground">Session notes</h3>
                     {sessions
                       .filter((s) => s.summary)
                       .map((s) => (
-                        <p key={s.id} className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-                          <span className="text-slate-500">{s.ended_at?.slice(0, 10)}: </span>
+                        <p key={s.id} className="rounded-lg bg-muted p-3 text-sm text-foreground">
+                          <span className="text-muted-foreground">{s.ended_at?.slice(0, 10)}: </span>
                           {s.summary}
                         </p>
                       ))}
@@ -122,30 +122,30 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
           {/* Topic map */}
           <section className="card">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">Topic map</h2>
+              <h2 className="section-title">Topic map</h2>
               {exam.topic_status !== "building" && docs.length > 0 && !processing && (
                 <ActionButton url={`/api/exams/${id}/topics`} label={topics.length ? "Rebuild" : "Build topic map"} className="btn-ghost" />
               )}
             </div>
             {exam.topic_status === "building" && (
-              <p className="mt-2 text-sm text-amber-700">Organizing your slides into topics… this takes a minute or two.</p>
+              <p className="mt-2 text-sm text-warning">Organizing your slides into topics… this takes a minute or two.</p>
             )}
-            {exam.topic_status === "error" && <p className="mt-2 text-sm text-red-600">Topic map failed: {exam.topic_error}</p>}
+            {exam.topic_status === "error" && <p className="mt-2 text-sm text-danger">Topic map failed: {exam.topic_error}</p>}
             <ol className="mt-3 space-y-3">
               {topics.map((t) => {
                 const concepts = topicConcepts(t.id, id);
                 return (
-                  <li key={t.id} className="rounded-lg border border-slate-200 p-3">
+                  <li key={t.id} className="rounded-lg border border-border p-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                       <Link href={`/exams/${id}/study?topic=${t.position}`} className="font-medium hover:underline">
                         {t.position + 1}. {t.title}
                       </Link>
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-muted-foreground">
                         {JSON.parse(t.page_ids).length} slides
-                        {t.emphasized ? <span className="ml-2 text-amber-700">★ emphasized</span> : null}
+                        {t.emphasized ? <span className="ml-2 text-warning">★ emphasized</span> : null}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-slate-600">{t.summary}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{t.summary}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {concepts.map((c) => (
                         <span
@@ -164,7 +164,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               })}
             </ol>
             {topics.length > 0 && (
-              <p className="mt-3 text-xs text-slate-500">
+              <p className="mt-3 text-xs text-muted-foreground">
                 Concept colors show mastery (green ≥80%, amber ≥60%, red below, grey untested). ↺ = covered in an earlier exam.
               </p>
             )}
@@ -174,19 +174,19 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
         <div className="space-y-6">
           {/* Materials */}
           <section className="card space-y-3">
-            <h2 className="text-lg font-semibold">Lectures</h2>
+            <h2 className="section-title">Lectures</h2>
             <Uploader examId={id} />
             {docs.length > 0 && (
-              <ul className="divide-y divide-slate-100 text-sm">
+              <ul className="divide-y divide-border text-sm">
                 {docs.map((d) => (
                   <li key={d.id} className="py-2">
                     <div className="font-medium">{d.filename}</div>
-                    <div className="text-slate-500">
+                    <div className="text-muted-foreground">
                       {d.status === "done" && `${d.page_count} slides ✓`}
                       {d.status === "processing" && `Reading slides ${d.done ?? 0}/${d.page_count}…`}
                       {d.status === "pending" && "Waiting…"}
                       {d.status === "error" && (
-                        <span className="text-red-600">
+                        <span className="text-danger">
                           {d.error} <ActionButton url={`/api/documents/${d.id}/retry`} label="Retry" className="btn-ghost px-2 py-0" />
                         </span>
                       )}
@@ -195,25 +195,25 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                 ))}
               </ul>
             )}
-            {totalPages > 0 && <p className="text-xs text-slate-500">{totalPages} slides total</p>}
+            {totalPages > 0 && <p className="text-xs text-muted-foreground">{totalPages} slides total</p>}
           </section>
 
           {/* Practice */}
           <section className="card space-y-3">
-            <h2 className="text-lg font-semibold">Practice exam</h2>
+            <h2 className="section-title">Practice exam</h2>
             {topics.length === 0 ? (
-              <p className="text-sm text-slate-600">Available once the topic map is ready.</p>
+              <p className="text-sm text-muted-foreground">Available once the topic map is ready.</p>
             ) : (
               <PracticeForm examId={id} topics={topics.map((t) => ({ id: t.id, title: `${t.position + 1}. ${t.title}` }))} />
             )}
             {attempts.length > 0 && (
-              <ul className="divide-y divide-slate-100 border-t border-slate-100 pt-2 text-sm">
+              <ul className="divide-y divide-border border-t border-border pt-2 text-sm">
                 {attempts.map((a) => (
                   <li key={a.id} className="flex items-center justify-between py-2">
                     <Link href={`/attempts/${a.id}`} className="hover:underline">
                       {a.started_at.slice(0, 10)} · {a.n} Qs · {a.mode}
                     </Link>
-                    <span className="text-slate-600">
+                    <span className="text-muted-foreground">
                       {a.status === "finished" ? pct(a.score) : a.status === "error" ? "failed" : "in progress"}
                     </span>
                   </li>

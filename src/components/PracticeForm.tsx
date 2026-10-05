@@ -39,7 +39,7 @@ export function PracticeForm({ examId, topics }: { examId: number; topics: { id:
         options={[["mixed", "Mixed"], ["recall", "Recall only"], ["case", "Case & image"], ["caseset", "Case sets (INBDE)"]]}
       />
       <details className="text-sm">
-        <summary className="cursor-pointer text-slate-600">
+        <summary className="cursor-pointer text-muted-foreground">
           Topics: {selected.length === 0 ? "all (weighted toward weak and emphasized topics)" : `${selected.length} selected`}
         </summary>
         <div className="mt-2 grid gap-1">
@@ -78,7 +78,7 @@ function Choice<T extends string | number>({
             key={String(v)}
             type="button"
             onClick={() => onChange(v)}
-            className={`btn ${value === v ? "bg-teal-700 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}
+            className={`btn ${value === v ? "bg-primary text-primary-foreground" : "border border-input bg-card text-foreground hover:bg-muted"}`}
           >
             {text}
           </button>

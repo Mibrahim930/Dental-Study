@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Brand } from "@/components/Brand";
 
 export default function LoginPage() {
   const [passcode, setPasscode] = useState("");
@@ -23,14 +24,15 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="mx-auto mt-20 max-w-sm">
+    <div className="mx-auto mt-8 sm:mt-14 max-w-sm">
+      <Brand />
       <form onSubmit={submit} className="card space-y-4">
         <h1 className="text-lg font-semibold">Sign in</h1>
         <div>
           <label className="label" htmlFor="passcode">Passcode</label>
           <input id="passcode" type="password" className="input" value={passcode} onChange={(e) => setPasscode(e.target.value)} autoFocus />
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
         <button className="btn-primary w-full" disabled={busy || !passcode}>Continue</button>
       </form>
     </div>

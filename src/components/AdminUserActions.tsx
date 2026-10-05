@@ -30,12 +30,12 @@ export function AdminUserActions({ userId, email, isSelf }: { userId: number; em
       <div className="flex gap-2">
         <button className="btn-secondary px-3 py-1" onClick={reset} disabled={busy}>Reset password</button>
         {!isSelf && (
-          <button className="btn px-3 py-1 text-rose-700 hover:bg-rose-50" onClick={remove} disabled={busy}>Remove</button>
+          <button className="btn px-3 py-1 text-danger hover:bg-danger-soft" onClick={remove} disabled={busy}>Remove</button>
         )}
       </div>
       {temp && (
-        <p className="text-xs text-slate-700">
-          Temporary password: <code className="rounded bg-amber-100 px-1 font-mono text-sm">{temp}</code>. Give it to them privately. It&apos;s shown only once.
+        <p className="text-xs text-foreground">
+          Temporary password: <code className="rounded bg-warning-soft px-1 font-mono text-sm">{temp}</code>. Give it to them privately. It&apos;s shown only once.
         </p>
       )}
     </div>
