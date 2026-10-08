@@ -8,7 +8,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Dental Study",
+  title: "Lolo's Study Buddy",
   description: "Study your own dental lectures with guided sessions and practice exams",
 };
 

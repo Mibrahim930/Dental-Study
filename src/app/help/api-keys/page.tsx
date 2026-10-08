@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export const metadata = { title: "How to get an API key · Dental Study" };
+export const metadata = { title: "How to get an API key · Lolo's Study Buddy" };
 
 function Step({ n, children }: { n: number; children: React.ReactNode }) {
   return (
@@ -24,7 +24,7 @@ export default function ApiKeyHelpPage() {
         <Link href="/setup" className="text-sm text-muted-foreground hover:underline">← Back to setup</Link>
         <h1 className="mt-1 page-title">How to get an API key</h1>
         <p className="mt-1 text-muted-foreground">
-          An API key lets Dental Study use Claude or ChatGPT on your behalf. You only need one, from either company. Setup takes about 5
+          An API key lets Lolo&apos;s Study Buddy use Claude or ChatGPT on your behalf. You only need one, from either company. Setup takes about 5
           minutes.
         </p>
       </div>
@@ -48,13 +48,13 @@ export default function ApiKeyHelpPage() {
           </Step>
           <Step n={3}>
             Open <A href="https://platform.claude.com/settings/keys">Settings → API keys</A> and click <strong>Create key</strong>. Name it
-            &quot;Dental Study&quot;.
+            &quot;Lolo&apos;s Study Buddy&quot;.
           </Step>
           <Step n={4}>
             Copy the key right away. It starts with <code className="rounded bg-muted px-1">sk-ant-</code> and is only shown once.
           </Step>
           <Step n={5}>
-            Back in Dental Study, choose <strong>Claude</strong>, paste the key, and click <strong>Save and continue</strong>.
+            Back in Lolo&apos;s Study Buddy, choose <strong>Claude</strong>, paste the key, and click <strong>Save and continue</strong>.
           </Step>
         </ol>
       </section>
@@ -72,13 +72,13 @@ export default function ApiKeyHelpPage() {
           </Step>
           <Step n={3}>
             Open <A href="https://platform.openai.com/api-keys">API keys</A> and click <strong>Create new secret key</strong>. Name it
-            &quot;Dental Study&quot;.
+            &quot;Lolo&apos;s Study Buddy&quot;.
           </Step>
           <Step n={4}>
             Copy the key right away. It starts with <code className="rounded bg-muted px-1">sk-</code> and is only shown once.
           </Step>
           <Step n={5}>
-            Back in Dental Study, choose <strong>ChatGPT</strong>, paste the key, and click <strong>Save and continue</strong>.
+            Back in Lolo&apos;s Study Buddy, choose <strong>ChatGPT</strong>, paste the key, and click <strong>Save and continue</strong>.
           </Step>
         </ol>
       </section>
@@ -87,9 +87,9 @@ export default function ApiKeyHelpPage() {
         <h2 className="section-title">Keeping your key safe</h2>
         <ul className="list-disc space-y-1 pl-5">
           <li>Treat it like a password. Don&apos;t share it or post it anywhere.</li>
-          <li>Dental Study stores it encrypted and uses it only for your own studying. You can see what you&apos;ve spent under Settings.</li>
+          <li>Lolo&apos;s Study Buddy stores it encrypted and uses it only for your own studying. You can see what you&apos;ve spent under Settings.</li>
           <li>Set a monthly spending limit on the Billing page of your Claude or OpenAI account so you&apos;re never surprised.</li>
-          <li>If you think your key leaked, delete it on that same API keys page and create a new one. Then update it in Dental Study → Settings.</li>
+          <li>If you think your key leaked, delete it on that same API keys page and create a new one. Then update it in Lolo&apos;s Study Buddy → Settings.</li>
         </ul>
       </section>
     </div>

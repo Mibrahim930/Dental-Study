@@ -16,7 +16,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
   const compact = (d: string) => d.replaceAll("-", "");
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Dental Study//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Dental Study", "METHOD:PUBLISH"];
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lolos Study Buddy//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Lolo's Study Buddy", "METHOD:PUBLISH"];
   const allDay = (uid: string, start: string, endInclusive: string, summary: string, description = "") => {
     lines.push(
       "BEGIN:VEVENT",

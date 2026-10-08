@@ -5,7 +5,7 @@ export function Brand() {
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-soft text-2xl" aria-hidden>
         🦷
       </span>
-      <div className="mt-3 text-xl font-semibold tracking-tight">Dental Study</div>
+      <div className="mt-3 text-xl font-semibold tracking-tight">Lolo&apos;s Study Buddy</div>
       <p className="mt-1 text-sm text-muted-foreground">Learn your own lectures, one slide at a time.</p>
     </div>
   );

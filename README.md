@@ -1,4 +1,4 @@
-# Dental Study
+# Lolo's Study Buddy (Dental Study)
 
 A study tool for dental students, built around their own lecture PDFs. Many students can use one site: each has their own account, data and AI key.
 

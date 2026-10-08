@@ -211,7 +211,7 @@ function Welcome() {
   ];
   return (
     <div className="card border-primary/30 bg-primary-soft">
-      <h2 className="section-title">Welcome to Dental Study</h2>
+      <h2 className="section-title">Welcome to Lolo&apos;s Study Buddy</h2>
       <p className="mt-1 text-sm text-muted-foreground">Three steps to get going:</p>
       <ol className="mt-4 grid gap-4 sm:grid-cols-3">
         {steps.map(([title, text], i) => (

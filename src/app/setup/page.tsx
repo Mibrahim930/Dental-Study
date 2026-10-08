@@ -15,7 +15,7 @@ export default async function SetupPage() {
         <div>
           <h1 className="text-xl font-semibold">Connect your AI</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Dental Study uses AI to read your lecture slides, teach topics, and write practice exams. Add your own Claude or ChatGPT API
+            Lolo&apos;s Study Buddy uses AI to read your lecture slides, teach topics, and write practice exams. Add your own Claude or ChatGPT API
             key to get started. You only pay for what you use, usually a few dollars per exam.
           </p>
         </div>

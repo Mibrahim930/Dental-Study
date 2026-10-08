@@ -68,7 +68,7 @@ export function NavBar({ isAdmin }: { isAdmin: boolean }) {
         <nav className="mx-auto flex h-14 max-w-6xl items-center gap-1 px-4 text-sm">
           <Link href="/" className="mr-4 flex shrink-0 items-center gap-2 text-base font-semibold tracking-tight">
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-soft text-sm" aria-hidden>🦷</span>
-            Dental Study
+            Lolo&apos;s Study Buddy
           </Link>
           <div className="hidden items-center gap-1 sm:flex">
             {MAIN.map((item) => (
