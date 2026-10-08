@@ -9,6 +9,7 @@ import { PracticeForm } from "@/components/PracticeForm";
 import { ActionButton } from "@/components/ActionButton";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
+import { pendingCounts } from "@/lib/practicePlan";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,20 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
        WHERE a.exam_id = ? GROUP BY a.id ORDER BY a.id DESC LIMIT 8`,
     )
     .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; n: number }[];
+
+  // For the practice form: which lecture(s) each topic comes from, and what would come back in the next exam.
+  const pageDoc = new Map(
+    (db.prepare("SELECT p.id, p.document_id FROM pages p JOIN documents d ON d.id = p.document_id WHERE d.exam_id = ?").all(id) as {
+      id: number;
+      document_id: number;
+    }[]).map((p) => [p.id, p.document_id]),
+  );
+  const practiceTopics = topics.map((t) => ({
+    id: t.id,
+    title: `${t.position + 1}. ${t.title}`,
+    lectureIds: [...new Set((JSON.parse(t.page_ids) as number[]).map((p) => pageDoc.get(p)).filter((d): d is number => d != null))],
+    ...pendingCounts(id, [t.id]),
+  }));
 
   const processing = docs.some((d) => d.status === "processing") || exam.topic_status === "building";
   const openSession = sessions.find((s) => !s.ended_at);
@@ -204,7 +219,12 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             {topics.length === 0 ? (
               <p className="text-sm text-muted-foreground">Available once the topic map is ready.</p>
             ) : (
-              <PracticeForm examId={id} topics={topics.map((t) => ({ id: t.id, title: `${t.position + 1}. ${t.title}` }))} />
+              <PracticeForm
+                examId={id}
+                topics={practiceTopics}
+                lectures={docs.map((d) => ({ id: d.id, name: d.filename.replace(/\.pdf$/i, "") }))}
+                focusWeak={!!user.focus_weak}
+              />
             )}
             {attempts.length > 0 && (
               <ul className="divide-y divide-border border-t border-border pt-2 text-sm">

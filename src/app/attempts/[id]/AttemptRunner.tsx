@@ -4,6 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { AttemptView } from "@/lib/attemptView";
 import { QuestionCard, type QuestionData } from "@/components/QuestionCard";
 import { pct } from "@/lib/format";
+import type { Confidence } from "@/lib/practicePlan";
+
+const CONFIDENCE_CHOICES: [Confidence, string][] = [
+  ["guess", "Guessed"],
+  ["unsure", "Unsure"],
+  ["sure", "Confident"],
+];
 
 export function AttemptRunner({ attemptId, initial }: { attemptId: number; initial: AttemptView }) {
   const [view, setView] = useState(initial);
@@ -12,6 +19,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     return firstOpen === -1 ? 0 : firstOpen;
   });
   const [pending, setPending] = useState<Record<number, number>>({});
+  const [saving, setSaving] = useState(false);
   const { attempt, questions } = view;
   const finished = attempt.status === "finished";
 
@@ -37,7 +45,10 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     return (
       <div className="card mx-auto mt-10 max-w-md space-y-2 text-center">
         <div className="text-lg font-semibold">Writing your practice exam…</div>
-        <p className="text-sm text-muted-foreground">Questions are built from your slides, weighted toward weak and emphasized topics. This usually takes 30–90 seconds.</p>
+        <p className="text-sm text-muted-foreground">
+          New questions are written from your slides{attempt.adaptive ? ", with extra focus on what you missed or weren't sure about" : ", spread evenly over the material"}.
+          This usually takes 30–90 seconds.
+        </p>
         <div className="mx-auto h-1 w-40 animate-pulse rounded bg-primary" />
       </div>
     );
@@ -53,20 +64,42 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
 
   if (finished) return <Results view={view} />;
 
-  const q = questions[index] as QuestionData;
+  const current = questions[index];
+  const q = current as QuestionData;
   const answeredCount = questions.filter((x) => x.chosen_index != null).length;
 
-  async function choose(i: number) {
-    if (q.chosen_index != null) return;
-    // Answers lock in on click; show the selection immediately while it saves.
+  // Picking an option only selects it; it locks in once the student says how sure they are (before seeing the answer).
+  function choose(i: number) {
+    if (q.chosen_index != null || saving) return;
     setPending((p) => ({ ...p, [q.id]: i }));
+  }
+
+  async function lockIn(confidence: Confidence) {
+    const chosen = pending[q.id];
+    if (chosen == null || q.chosen_index != null) return;
+    setSaving(true);
     const res = await fetch(`/api/attempts/${attemptId}/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ questionId: q.id, chosen: i }),
+      body: JSON.stringify({ questionId: q.id, chosen, confidence }),
     });
     setView(await res.json());
+    setSaving(false);
   }
+
+  const confidencePrompt =
+    q.chosen_index == null && pending[q.id] != null ? (
+      <div className="rounded-lg border border-primary/30 bg-primary-soft p-3">
+        <div className="mb-2 text-sm font-medium">How sure are you?</div>
+        <div className="grid grid-cols-3 gap-2">
+          {CONFIDENCE_CHOICES.map(([value, label]) => (
+            <button key={value} type="button" className="btn-secondary px-2" disabled={saving} onClick={() => lockIn(value)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -110,10 +143,12 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         q={q}
         pending={pending[q.id]}
         onChoose={q.chosen_index == null ? choose : undefined}
+        belowOptions={confidencePrompt}
         header={
           <div className="text-xs text-muted-foreground">
             Question {index + 1} of {questions.length}
             {q.type !== "recall" && !q.caseInfo && <span className="ml-2 badge bg-info-soft text-info">{q.type === "case" ? "Case" : "Image"}</span>}
+            {current.retry && <span className="ml-2 badge bg-warning-soft text-warning">↺ Missed last time</span>}
           </div>
         }
       />
@@ -163,6 +198,7 @@ function Results({ view }: { view: AttemptView }) {
     byTopic.set(k, t);
   }
   const missed = questions.filter((q) => !q.correct).length;
+  const unsureRight = questions.filter((q) => q.correct && (q.confidence === "guess" || q.confidence === "unsure")).length;
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <Link href={`/exams/${attempt.exam_id}`} className="text-sm text-muted-foreground hover:underline">← {attempt.exam_name}</Link>
@@ -172,8 +208,14 @@ function Results({ view }: { view: AttemptView }) {
           <div className="text-4xl font-semibold">{pct(attempt.score)}</div>
           <div className="text-sm text-muted-foreground">
             {questions.length - missed} of {questions.length} correct
-            {missed > 0 && ` · ${missed} missed question${missed === 1 ? "" : "s"} added to your daily review`}
+            {unsureRight > 0 && ` · ${unsureRight} right but not sure`}
           </div>
+          {(missed > 0 || (attempt.adaptive && unsureRight > 0)) && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {missed > 0 && `The ${missed} you missed will come back in your next practice exam and in daily review. `}
+              {attempt.adaptive && unsureRight > 0 ? "Ideas you weren't sure about will be tested again with new questions." : ""}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Link href="/review" className="btn-secondary">Daily review</Link>

@@ -11,6 +11,7 @@ export type QuestionData = {
   options: string[];
   image: { page_id: number; aspect: number; crop: unknown } | null;
   chosen_index: number | null;
+  confidence?: "guess" | "unsure" | "sure" | null;
   flagged: boolean;
   topic: string | null;
   concept: string | null;
@@ -35,11 +36,13 @@ export function QuestionCard({
   onChoose,
   pending,
   header,
+  belowOptions,
 }: {
   q: QuestionData;
   onChoose?: (i: number) => void;
   pending?: number | null;
   header?: React.ReactNode;
+  belowOptions?: React.ReactNode;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
@@ -107,9 +110,17 @@ export function QuestionCard({
           );
         })}
       </div>
+      {belowOptions}
       {revealed && (
         <div className="space-y-2 rounded-lg bg-muted p-3 text-sm">
-          <p className="font-semibold">{selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : "✗ Incorrect"}</p>
+          <p className="font-semibold">
+            {selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : "✗ Incorrect"}
+            {q.confidence && (
+              <span className="ml-2 font-normal text-muted-foreground">
+                · you said {q.confidence === "guess" ? "you guessed" : q.confidence === "unsure" ? "you were unsure" : "you were confident"}
+              </span>
+            )}
+          </p>
           <div className="prose-study text-sm">
             <ReactMarkdown>{q.explanation ?? ""}</ReactMarkdown>
           </div>

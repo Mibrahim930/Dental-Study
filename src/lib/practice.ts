@@ -4,7 +4,19 @@ import { db, type Question, type Topic } from "./db";
 import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { slideNotesText, topicPages } from "./study";
-import { mastery, recordConceptResult, upsertConcept, weakConcepts, type ConceptRow } from "./memory";
+import { recordConceptResult, upsertConcept, weakConcepts } from "./memory";
+import {
+  allocate,
+  askedStems,
+  focusPoints,
+  retryCases,
+  retryQuestions,
+  RETRY_SHARE,
+  shuffledOrder,
+  slideCoverage,
+  type Confidence,
+  type FocusPoint,
+} from "./practicePlan";
 import { credentials } from "./credentials";
 import { examOwner } from "./db";
 
@@ -50,50 +62,53 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 - Prioritize slides marked ★IMPORTANT or with annotations. Do not test trivia like citations or years.
 - Every fact in the question and explanation must be supported by the slides.`;
 
-type Allocation = { topic: Topic; count: number };
+type AttemptOptions = { size: number; mode: Mode; style: Style; topicIds?: number[]; taskId?: number; adaptive?: boolean };
 
 /** Create an attempt and generate its questions in the background. Returns the attempt id. */
-export function startAttempt(examId: number, opts: { size: number; mode: Mode; style: Style; topicIds?: number[]; taskId?: number }) {
+export function startAttempt(examId: number, opts: AttemptOptions) {
+  // "Focus on my weak spots" defaults to the student's saved preference.
+  const adaptive =
+    opts.adaptive ??
+    !!(db.prepare("SELECT u.focus_weak FROM users u JOIN exams e ON e.user_id = u.id WHERE e.id = ?").get(examId) as { focus_weak: number } | undefined)?.focus_weak;
   const attemptId = Number(
     db
-      .prepare("INSERT INTO attempts (exam_id, mode, time_limit_sec, task_id) VALUES (?, ?, ?, ?)")
-      .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null, opts.taskId ?? null).lastInsertRowid,
+      .prepare("INSERT INTO attempts (exam_id, mode, time_limit_sec, task_id, adaptive) VALUES (?, ?, ?, ?, ?)")
+      .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null, opts.taskId ?? null, adaptive ? 1 : 0).lastInsertRowid,
   );
-  void generateAttempt(attemptId, examId, opts).catch((err) => {
+  void generateAttempt(attemptId, examId, { ...opts, adaptive }).catch((err) => {
     db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
   });
   return attemptId;
 }
 
-function topicWeight(topic: Topic): number {
-  const concepts = db
-    .prepare("SELECT c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?")
-    .all(topic.id) as ConceptRow[];
-  const ms = concepts.map(mastery).filter((m): m is number => m != null);
-  const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 0.5;
-  return (topic.emphasized ? 1.5 : 1) * (1.5 - avg) * Math.sqrt(JSON.parse(topic.page_ids).length);
-}
-
-function allocate(topics: Topic[], total: number): Allocation[] {
-  if (topics.length === 0 || total === 0) return [];
-  const weights = topics.map(topicWeight);
-  const sum = weights.reduce((a, b) => a + b, 0);
-  const alloc = topics.map((topic, i) => ({ topic, count: Math.floor((weights[i] / sum) * total), rem: (weights[i] / sum) * total }));
-  let left = total - alloc.reduce((a, b) => a + b.count, 0);
-  for (const a of [...alloc].sort((x, y) => (y.rem % 1) - (x.rem % 1))) {
-    if (left-- <= 0) break;
-    a.count++;
-  }
-  return alloc.filter((a) => a.count > 0).map(({ topic, count }) => ({ topic, count }));
-}
-
-async function generateAttempt(attemptId: number, examId: number, opts: { size: number; style: Style; topicIds?: number[] }) {
+/**
+ * What goes into a practice exam:
+ * - Questions missed last time come back (never within the same exam), up to RETRY_SHARE of it, with shuffled options.
+ * - Everything else is new: questions answered before never repeat, and the AI is shown what was already asked.
+ * - Focus on: weak topics get more of the new questions, aimed at what was missed or answered unsure.
+ *   Focus off: new questions are spread evenly over the chosen material.
+ */
+async function generateAttempt(attemptId: number, examId: number, opts: AttemptOptions & { adaptive: boolean }) {
   let topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
-  if (opts.topicIds?.length) topics = topics.filter((t) => opts.topicIds!.includes(t.id));
+  const scoped = !!opts.topicIds?.length;
+  if (scoped) topics = topics.filter((t) => opts.topicIds!.includes(t.id));
   if (topics.length === 0) throw new Error("This exam has no topics yet. Upload lectures and wait for the topic map.");
+  const topicIds = topics.map((t) => t.id);
+  const focus = opts.adaptive ? focusPoints(examId, topicIds) : null;
 
-  // ~12% of questions revisit weak concepts from earlier exams (shared memory).
-  const weak = weakConcepts(examOwner(examId), 5, examId);
+  if (opts.style === "caseset") {
+    const caseCount = Math.max(1, Math.round(opts.size / 4));
+    const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)));
+    const fresh = await buildCaseSets(topics, caseCount - retried.length, focus);
+    // Shuffle the order of cases, but keep each case's questions together and in order.
+    const groups = [...retried, ...fresh].sort(() => Math.random() - 0.5);
+    return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
+  }
+
+  const retried = retryQuestions(examId, topicIds, Math.floor(opts.size * RETRY_SHARE));
+
+  // With focus on and the whole exam chosen, ~12% of new questions revisit weak concepts from earlier exams (shared memory).
+  const weak = opts.adaptive && !scoped ? weakConcepts(examOwner(examId), 5, examId) : [];
   const pastTopics = weak.length
     ? (db
         .prepare(
@@ -102,32 +117,30 @@ async function generateAttempt(attemptId: number, examId: number, opts: { size: 
         )
         .all(...weak.map((c) => c.id), examId) as Topic[])
     : [];
-  if (opts.style === "caseset") return finishGeneration(attemptId, await buildCaseSets(topics, opts.size));
-
-  const pastCount = pastTopics.length ? Math.max(1, Math.round(opts.size * 0.12)) : 0;
-  const plan = [...allocate(topics, opts.size - pastCount), ...allocate(pastTopics, pastCount)];
+  const fresh = opts.size - retried.length;
+  const pastCount = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
+  const plan = [...allocate(topics, fresh - pastCount, focus), ...allocate(pastTopics, pastCount, null)];
 
   const created: number[] = [];
   await mapLimit(plan, 4, async ({ topic, count }) => {
     // Reuse questions written earlier that were never answered (abandoned or skipped exams); only write new ones for the rest.
     const reused = unusedQuestions(topic.id, opts.style, count);
     created.push(...reused);
-    if (count - reused.length > 0) created.push(...(await generateForTopic(topic, count - reused.length, opts.style)));
+    if (count - reused.length > 0) created.push(...(await generateForTopic(topic, count - reused.length, opts.style, focus?.get(topic.id) ?? [])));
   });
-  if (created.length === 0) throw new Error("No questions could be generated.");
+  if (created.length + retried.length === 0) throw new Error("No questions could be generated.");
 
   // Interleave topics so the exam doesn't run topic by topic.
-  finishGeneration(attemptId, created.sort(() => Math.random() - 0.5));
+  finishGeneration(attemptId, [...retried, ...created].sort(() => Math.random() - 0.5), new Set(retried));
 }
 
-function finishGeneration(attemptId: number, questionIds: number[]) {
+function finishGeneration(attemptId: number, questionIds: number[], retried: Set<number>) {
   if (questionIds.length === 0) throw new Error("No questions could be generated.");
-  const shuffled = questionIds;
-  const insert = db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, ?)");
+  const insert = db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position, option_order) VALUES (?, ?, ?, ?)");
   db.transaction(() => {
-    shuffled.forEach((qid, i) => insert.run(attemptId, qid, i));
+    questionIds.forEach((qid, i) => insert.run(attemptId, qid, i, retried.has(qid) ? JSON.stringify(shuffledOrder(qid)) : null));
     db.prepare("UPDATE attempts SET status = 'ready', started_at = datetime('now'), time_limit_sec = CASE WHEN mode = 'timed' THEN ? ELSE NULL END WHERE id = ?").run(
-      shuffled.length * SECONDS_PER_QUESTION,
+      questionIds.length * SECONDS_PER_QUESTION,
       attemptId,
     );
   })();
@@ -189,17 +202,15 @@ diagnosis → what test or finding confirms it → emergency/definitive treatmen
 - If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image.
 - Prioritize slides marked ★IMPORTANT or with annotations. Every fact must be supported by the slides.`;
 
-/** Case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
-async function buildCaseSets(topics: Topic[], size: number): Promise<number[]> {
-  const caseCount = Math.max(1, Math.round(size / 4));
+/** New case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
+async function buildCaseSets(topics: Topic[], caseCount: number, focus: Map<number, FocusPoint[]> | null): Promise<number[][]> {
   const groups: number[][] = [];
-  await mapLimit(allocate(topics, caseCount), 3, async ({ topic, count }) => {
+  await mapLimit(allocate(topics, caseCount, focus), 3, async ({ topic, count }) => {
     const reused = unusedCases(topic.id, count);
     groups.push(...reused);
-    if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length)));
+    if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [])));
   });
-  // Shuffle the order of cases, but keep each case's questions together and in order.
-  return groups.sort(() => Math.random() - 0.5).flat();
+  return groups;
 }
 
 function unusedCases(topicId: number, limit: number): number[][] {
@@ -216,14 +227,19 @@ function unusedCases(topicId: number, limit: number): number[][] {
   return caseIds.map((id) => (db.prepare("SELECT id FROM questions WHERE case_id = ? ORDER BY id").all(id) as { id: number }[]).map((r) => r.id));
 }
 
-async function generateCases(topic: Topic, count: number): Promise<number[][]> {
+async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): Promise<number[][]> {
   const userId = examOwner(topic.exam_id);
   const pages = topicPages(topic);
   const imageIds = new Set(pages.filter((p) => parseNotes(p)?.case_image_box).map((p) => p.id));
   const concepts = (
     db.prepare("SELECT c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(topic.id) as { name: string }[]
   ).map((c) => c.name);
-  const notes = slideNotesText(pages).replace(/\[P(\d+)\]/g, (m, id) => (imageIds.has(Number(id)) ? `${m} [IMAGE-CASE]` : m));
+  const notes = markCoverage(slideNotesText(pages), topic.id).replace(/\[P(\d+)\]/g, (m, id) => (imageIds.has(Number(id)) ? `${m} [IMAGE-CASE]` : m));
+  const usedPatients = (
+    db.prepare("SELECT scenario FROM cases WHERE id IN (SELECT case_id FROM questions WHERE topic_id = ?) ORDER BY id DESC LIMIT 30").all(topic.id) as {
+      scenario: string;
+    }[]
+  ).map((c) => `- ${c.scenario.slice(0, 200)}`);
 
   const out = await generate({
     creds: credentials(userId),
@@ -232,7 +248,11 @@ async function generateCases(topic: Topic, count: number): Promise<number[][]> {
     system: CASE_SYSTEM,
     effort: "medium",
     maxTokens: 32000,
-    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} case set${count === 1 ? "" : "s"}.\n\nSlides:\n${notes}`,
+    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} case set${count === 1 ? "" : "s"}.${
+      usedPatients.length
+        ? `\n\nCases already used for this topic. Write different patients and, where the slides allow, a different diagnosis or problem:\n${usedPatients.join("\n")}`
+        : ""
+    }${focusText(focus)}\n\nSlides:\n${notes}`,
   });
 
   const valid = new Set(pages.map((p) => p.id));
@@ -272,7 +292,7 @@ async function generateCases(topic: Topic, count: number): Promise<number[][]> {
   return groups;
 }
 
-async function generateForTopic(topic: Topic, count: number, style: Style): Promise<number[]> {
+async function generateForTopic(topic: Topic, count: number, style: Style, focus: FocusPoint[]): Promise<number[]> {
   const userId = examOwner(topic.exam_id);
   const pages = topicPages(topic);
   const imageCases = pages.filter((p) => parseNotes(p)?.case_image_box);
@@ -289,9 +309,10 @@ async function generateForTopic(topic: Topic, count: number, style: Style): Prom
         ? `mostly type=case${imageCases.length ? ", plus type=image where an [IMAGE-CASE] slide fits" : ""}, at most 1 recall`
         : `a mix: about 60% recall, 25% case${imageCases.length ? ", 15% image" : ""}`;
 
-  const notes = slideNotesText(pages).replace(/\[P(\d+)\]/g, (m, id) =>
+  const notes = markCoverage(slideNotesText(pages), topic.id).replace(/\[P(\d+)\]/g, (m, id) =>
     imageCases.some((p) => p.id === Number(id)) ? `${m} [IMAGE-CASE]` : m,
   );
+  const asked = askedStems(topic.id);
 
   const out = await generate({
     creds: credentials(userId),
@@ -300,7 +321,11 @@ async function generateForTopic(topic: Topic, count: number, style: Style): Prom
     system: SYSTEM,
     effort: "medium",
     maxTokens: 32000,
-    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} questions: ${mix}.\n\nSlides:\n${notes}`,
+    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} questions: ${mix}.${
+      asked.length
+        ? `\n\nQuestions the student has already had on this topic. Do not repeat them or write close variants; test other facts and slides:\n${asked.map((a) => `- ${a}`).join("\n")}`
+        : ""
+    }${focusText(focus)}\n\nSlides:\n${notes}`,
   });
 
   const valid = new Set(pages.map((p) => p.id));
@@ -339,17 +364,44 @@ async function generateForTopic(topic: Topic, count: number, style: Style): Prom
   return ids;
 }
 
-/** Record one answer. Updates concept mastery and queues missed questions for review. */
-export function answerQuestion(attemptId: number, questionId: number, chosen: number) {
+/** Tag slides that already have questions, e.g. "[P12] (asked 3x)", so the AI favours untested slides. */
+function markCoverage(notes: string, topicId: number): string {
+  const coverage = slideCoverage(topicId);
+  if (coverage.size === 0) return notes;
+  const marked = notes.replace(/\[P(\d+)\]/g, (m, id) => (coverage.has(Number(id)) ? `${m} (asked ${coverage.get(Number(id))}x)` : m));
+  return `Slides marked (asked Nx) already have questions; favour slides without that mark.\n\n${marked}`;
+}
+
+/** Prompt section asking for new questions on what the student missed or wasn't sure about. */
+function focusText(focus: FocusPoint[]): string {
+  if (focus.length === 0) return "";
+  const lines = focus
+    .slice(0, 12)
+    .map(
+      (f) =>
+        `- ${f.why === "missed" ? "Missed" : "Unsure"}: ${f.concept ?? "concept"}${f.source_page_id ? ` (slide P${f.source_page_id})` : ""}. Earlier question: "${f.stem.slice(0, 160)}"`,
+    );
+  return `\n\nThe student missed or wasn't sure about these. Aim about half of the new questions at these same ideas from a different angle (new stem, scenario or options; not a reworded copy), and spread the rest over the topic:\n${lines.join("\n")}`;
+}
+
+/**
+ * Record one answer. `chosen` is the option as displayed (retried questions show their options shuffled).
+ * Updates concept mastery and queues missed questions for review.
+ */
+export function answerQuestion(attemptId: number, questionId: number, chosen: number, confidence: Confidence | null = null) {
   const q = db.prepare("SELECT * FROM questions WHERE id = ?").get(questionId) as Question;
   const row = db
-    .prepare("SELECT chosen_index FROM attempt_questions WHERE attempt_id = ? AND question_id = ?")
-    .get(attemptId, questionId) as { chosen_index: number | null } | undefined;
+    .prepare("SELECT chosen_index, option_order FROM attempt_questions WHERE attempt_id = ? AND question_id = ?")
+    .get(attemptId, questionId) as { chosen_index: number | null; option_order: string | null } | undefined;
   if (!row || row.chosen_index != null) return; // already answered
-  const correct = chosen === q.correct_index;
-  db.prepare("UPDATE attempt_questions SET chosen_index = ?, correct = ? WHERE attempt_id = ? AND question_id = ?").run(
-    chosen,
+  const order = row.option_order ? (JSON.parse(row.option_order) as number[]) : null;
+  const original = order ? order[chosen] : chosen;
+  if (original == null) return;
+  const correct = original === q.correct_index;
+  db.prepare("UPDATE attempt_questions SET chosen_index = ?, correct = ?, confidence = ? WHERE attempt_id = ? AND question_id = ?").run(
+    original,
     correct ? 1 : 0,
+    confidence,
     attemptId,
     questionId,
   );

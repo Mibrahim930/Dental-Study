@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   api_key_last4 TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,             -- the site owner (first account)
   must_change_password INTEGER NOT NULL DEFAULT 0, -- set after an admin password reset
+  focus_weak INTEGER NOT NULL DEFAULT 1,           -- practice exams lean toward missed / unsure material
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -168,6 +169,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
   mode TEXT NOT NULL,                              -- tutor | timed
   task_id INTEGER,                                 -- plan task this attempt was started from
+  adaptive INTEGER NOT NULL DEFAULT 1,             -- built with "focus on weak spots" on
   status TEXT NOT NULL DEFAULT 'generating',       -- generating | ready | finished | error
   error TEXT,
   time_limit_sec INTEGER,
@@ -180,8 +182,10 @@ CREATE TABLE IF NOT EXISTS attempt_questions (
   attempt_id INTEGER NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
   question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
-  chosen_index INTEGER,
+  chosen_index INTEGER,                            -- index into questions.options (not the shuffled display order)
   correct INTEGER,
+  confidence TEXT,                                 -- guess | unsure | sure, given before the answer is revealed
+  option_order TEXT,                               -- JSON display order of options, for questions retried from an earlier exam
   PRIMARY KEY (attempt_id, question_id)
 );
 
@@ -312,6 +316,12 @@ function migrate(db: Database.Database) {
       ALTER TABLE concepts_new RENAME TO concepts;`);
     db.pragma("foreign_keys = ON");
   }
+  if (!columns(db, "users").includes("focus_weak")) db.exec("ALTER TABLE users ADD COLUMN focus_weak INTEGER NOT NULL DEFAULT 1");
+  if (!columns(db, "attempts").includes("adaptive")) db.exec("ALTER TABLE attempts ADD COLUMN adaptive INTEGER NOT NULL DEFAULT 1");
+  if (!columns(db, "attempt_questions").includes("confidence")) {
+    db.exec("ALTER TABLE attempt_questions ADD COLUMN confidence TEXT");
+    db.exec("ALTER TABLE attempt_questions ADD COLUMN option_order TEXT");
+  }
   if (!columns(db, "glossary").includes("user_id")) {
     db.exec(`
       CREATE TABLE glossary_new (user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, abbr TEXT NOT NULL COLLATE NOCASE, meaning TEXT NOT NULL, UNIQUE(user_id, abbr));
@@ -352,6 +362,7 @@ export type User = {
   api_key_last4: string | null;
   is_admin: number;
   must_change_password: number;
+  focus_weak: number;
   created_at: string;
 };
 

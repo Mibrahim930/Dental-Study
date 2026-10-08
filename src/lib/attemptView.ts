@@ -1,11 +1,14 @@
 import { db } from "./db";
 import { parseNotes } from "./processing";
+import type { Confidence } from "./practicePlan";
 
 type Row = {
   question_id: number;
   position: number;
   chosen_index: number | null;
   correct: number | null;
+  confidence: Confidence | null;
+  option_order: string | null;
   type: "recall" | "case" | "image";
   patient_box: string | null;
   stem: string;
@@ -35,6 +38,7 @@ export function attemptView(attemptId: number) {
         error: string | null;
         time_limit_sec: number | null;
         score: number | null;
+        adaptive: number;
         started_at: string;
       }
     | undefined;
@@ -42,7 +46,7 @@ export function attemptView(attemptId: number) {
   const finished = attempt.status === "finished";
   const rows = db
     .prepare(
-      `SELECT aq.question_id, aq.position, aq.chosen_index, aq.correct, q.*, t.title AS topic_title, c.name AS concept_name,
+      `SELECT aq.question_id, aq.position, aq.chosen_index, aq.correct, aq.confidence, aq.option_order, q.*, t.title AS topic_title, c.name AS concept_name,
               d.filename AS source_filename, sp.page_number AS source_page_number
        , cs.scenario
        FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id
@@ -78,6 +82,10 @@ export function attemptView(attemptId: number) {
             return { number: caseNumber.get(r.case_id)!, index: n, size: caseSize.get(r.case_id)!, scenario: r.scenario ?? "" };
           })()
         : null;
+    // Questions retried from an earlier exam show their options in a new order; indexes are stored in the original order.
+    const options = JSON.parse(r.options) as string[];
+    const order = r.option_order ? (JSON.parse(r.option_order) as number[]) : options.map((_, i) => i);
+    const shown = (i: number | null) => (i == null ? null : order.indexOf(i));
     return {
       id: r.question_id,
       position: r.position,
@@ -85,15 +93,17 @@ export function attemptView(attemptId: number) {
       type: r.type,
       patient_box: r.patient_box ? (JSON.parse(r.patient_box) as Record<string, string>) : null,
       stem: r.stem,
-      options: JSON.parse(r.options) as string[],
+      options: order.map((i) => options[i]),
       image,
-      chosen_index: r.chosen_index,
+      chosen_index: shown(r.chosen_index),
+      confidence: r.confidence,
+      retry: r.option_order != null,
       flagged: !!r.flagged,
       topic: r.topic_title,
       concept: r.concept_name,
       ...(reveal
         ? {
-            correct_index: r.correct_index,
+            correct_index: shown(r.correct_index)!,
             correct: r.correct === 1,
             explanation: r.explanation,
             source: r.source_page_id
