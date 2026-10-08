@@ -15,11 +15,11 @@ type LessonData = {
     explanation: string;
     key_points: string[];
     slides: { page_id: number; caption: string }[];
-    checks: { question: string; options: string[]; correct_index: number; explanation: string }[];
     connections: string | null;
   };
   aspects: Record<number, number>;
 };
+type QuizQ = { question: string; options: string[]; correct_index: number; explanation: string; concept: string };
 
 export function StudySession(props: {
   examId: number;
@@ -146,7 +146,16 @@ export function StudySession(props: {
               {error} <button className="btn-ghost" onClick={() => { setResult(null); setAttempt((a) => a + 1); }}>Try again</button>
             </div>
           )}
-          {data && <Lesson key={data.topic.id} data={data} sessionId={sessionId} />}
+          {data && <Lesson key={data.topic.id} data={data} />}
+          {data && (
+            <SectionQuiz
+              key={`quiz-${data.topic.id}`}
+              sessionId={sessionId}
+              position={position}
+              isLast={position + 1 >= topics.length}
+              onNext={() => (position + 1 < topics.length ? go(position + 1) : endSession())}
+            />
+          )}
 
           <div className="flex justify-between">
             <button className="btn-secondary" disabled={position === 0} onClick={() => go(position - 1)}>← Previous</button>
@@ -164,7 +173,7 @@ export function StudySession(props: {
   );
 }
 
-function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
+function Lesson({ data }: { data: LessonData }) {
   const { lesson, concepts, topic } = data;
   const [zoom, setZoom] = useState<number | null>(null);
   return (
@@ -221,64 +230,178 @@ function Lesson({ data, sessionId }: { data: LessonData; sessionId: number }) {
         </section>
       )}
 
-      {lesson.checks.map((c, i) => (
-        <QuickCheck key={i} check={c} index={i} sessionId={sessionId} topicId={topic.id} />
-      ))}
     </>
   );
 }
 
-function QuickCheck({
-  check,
-  index,
-  sessionId,
-  topicId,
-}: {
-  check: LessonData["lesson"]["checks"][number];
-  index: number;
-  sessionId: number;
-  topicId: number;
-}) {
-  const [chosen, setChosen] = useState<number | null>(null);
-  const answered = chosen != null;
+/** End-of-section quiz: one question at a time, with a way to skip ahead at any point. */
+function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: number; position: number; isLast: boolean; onNext: () => void }) {
+  const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[] } | null>(null);
+  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [index, setIndex] = useState(0);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/sessions/${sessionId}/quiz?position=${position}`)
+      .then(async (res) => {
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok) return setError(json.error ?? "Couldn't load the quiz.");
+        const answered = Object.fromEntries(Object.entries(json.answered as Record<string, number>).map(([k, v]) => [Number(k), v]));
+        setQuiz({ topicId: json.topicId, questions: json.questions });
+        setAnswers(answered);
+        // Pick up where the student left off.
+        const firstOpen = (json.questions as QuizQ[]).findIndex((_, i) => answered[i] == null);
+        setIndex(firstOpen === -1 ? json.questions.length : firstOpen);
+      })
+      .catch((err) => !cancelled && setError(String(err)));
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, position, attempt]);
+
+  const nextLabel = isLast ? "Finish session" : "Next section →";
+  const skip = (
+    <button className="btn-ghost" onClick={onNext}>
+      {isLast ? "Skip & finish session" : "Skip to next section →"}
+    </button>
+  );
+
+  if (error) {
+    return (
+      <section className="card flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span>
+          <span className="block text-danger">Couldn&apos;t write the quiz for this section right now.</span>
+          <span className="block text-xs text-muted-foreground">{error}</span>
+        </span>
+        <span className="flex gap-2">
+          <button className="btn-secondary" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>Try again</button>
+          {skip}
+        </span>
+      </section>
+    );
+  }
+  if (!quiz) {
+    return (
+      <section className="card flex flex-wrap items-center justify-between gap-2">
+        <span className="animate-pulse text-sm text-muted-foreground">Writing a 10-question quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
+        {skip}
+      </section>
+    );
+  }
+
+  const total = quiz.questions.length;
+  const right = quiz.questions.filter((q, i) => answers[i] === q.correct_index).length;
+  const done = Object.keys(answers).length;
+
   function choose(i: number) {
-    if (answered) return;
-    setChosen(i);
+    if (answers[index] != null) return;
+    setAnswers((a) => ({ ...a, [index]: i }));
     void fetch(`/api/sessions/${sessionId}/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId, question: check.question, correct: i === check.correct_index }),
+      body: JSON.stringify({ topicId: quiz!.topicId, index, chosen: i }),
     });
   }
+
+  const dots = (
+    <div className="flex flex-wrap gap-1" aria-hidden>
+      {quiz.questions.map((q, i) => (
+        <button
+          key={i}
+          onClick={() => setIndex(i)}
+          className={`h-2 w-6 rounded-full ${
+            answers[i] == null ? (i === index ? "bg-primary/50" : "bg-muted-strong") : answers[i] === q.correct_index ? "bg-success" : "bg-danger"
+          }`}
+        />
+      ))}
+    </div>
+  );
+
+  // Finished: score and what to look at again.
+  if (index >= total) {
+    const missed = quiz.questions.filter((q, i) => answers[i] != null && answers[i] !== q.correct_index);
+    return (
+      <section className="card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="section-title">Section quiz done</h3>
+          {dots}
+        </div>
+        <p className="text-2xl font-semibold tracking-tight">
+          {right}/{done} correct{done < total && <span className="ml-2 text-sm font-normal text-muted-foreground">({total - done} skipped)</span>}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {done === 0
+            ? "No questions answered."
+            : right / done >= 0.8
+              ? "Nice work. You've got this section."
+              : "Worth another look before moving on. Ask the tutor about anything that's unclear."}
+        </p>
+        {missed.length > 0 && (
+          <div className="text-sm">
+            <div className="mb-1 font-medium">Review:</div>
+            <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
+              {[...new Set(missed.map((q) => q.concept))].map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="flex flex-wrap justify-between gap-2">
+          <button className="btn-secondary" onClick={() => setIndex(0)}>Look back at the questions</button>
+          <button className="btn-primary" onClick={onNext}>{nextLabel}</button>
+        </div>
+      </section>
+    );
+  }
+
+  const q = quiz.questions[index];
+  const chosen = answers[index];
+  const answered = chosen != null;
   return (
-    <section className="card space-y-2">
-      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quick check {index + 1}</div>
-      <p className="font-medium">{check.question}</p>
+    <section className="card space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Section quiz · Question {index + 1} of {total}
+        </div>
+        {dots}
+      </div>
+      <p className="font-medium">{q.question}</p>
       <div className="grid gap-2">
-        {check.options.map((o, i) => (
+        {q.options.map((o, i) => (
           <button
             key={i}
             onClick={() => choose(i)}
-            className={`rounded-lg border px-3 py-2 text-left text-sm ${
+            disabled={answered}
+            className={`rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${
               !answered
                 ? "border-input hover:bg-muted"
-                : i === check.correct_index
+                : i === q.correct_index
                   ? "border-success bg-success-soft"
                   : i === chosen
                     ? "border-danger bg-danger-soft"
                     : "border-border text-muted-foreground"
             }`}
           >
-            {String.fromCharCode(65 + i)}. {o}
+            <span className="mr-2 font-medium">{String.fromCharCode(65 + i)}.</span>
+            {o}
           </button>
         ))}
       </div>
       {answered && (
-        <p className="text-sm text-foreground">
-          <strong>{chosen === check.correct_index ? "Correct. " : "Not quite. "}</strong>
-          {check.explanation}
-        </p>
+        <div className="prose-study rounded-lg bg-muted p-3 text-sm">
+          <strong>{chosen === q.correct_index ? "Correct. " : "Not quite. "}</strong>
+          <ReactMarkdown>{q.explanation}</ReactMarkdown>
+        </div>
       )}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        {skip}
+        <button className="btn-primary" disabled={!answered} onClick={() => setIndex(index + 1)}>
+          {index + 1 < total ? "Next question →" : "See my score"}
+        </button>
+      </div>
     </section>
   );
 }

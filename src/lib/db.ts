@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS topics (
   summary TEXT NOT NULL,
   page_ids TEXT NOT NULL DEFAULT '[]',
   emphasized INTEGER NOT NULL DEFAULT 0,
-  lesson_json TEXT
+  lesson_json TEXT,
+  checks_json TEXT                                 -- 10-question section quiz shown after the lesson
 );
 
 CREATE TABLE IF NOT EXISTS topic_concepts (
@@ -131,6 +132,8 @@ CREATE TABLE IF NOT EXISTS session_checks (
   topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
   correct INTEGER NOT NULL,
+  check_index INTEGER,                             -- position in the topic's section quiz
+  chosen INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -322,6 +325,11 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE attempt_questions ADD COLUMN confidence TEXT");
     db.exec("ALTER TABLE attempt_questions ADD COLUMN option_order TEXT");
   }
+  if (!columns(db, "topics").includes("checks_json")) db.exec("ALTER TABLE topics ADD COLUMN checks_json TEXT");
+  if (!columns(db, "session_checks").includes("check_index")) {
+    db.exec("ALTER TABLE session_checks ADD COLUMN check_index INTEGER");
+    db.exec("ALTER TABLE session_checks ADD COLUMN chosen INTEGER");
+  }
   if (!columns(db, "glossary").includes("user_id")) {
     db.exec(`
       CREATE TABLE glossary_new (user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, abbr TEXT NOT NULL COLLATE NOCASE, meaning TEXT NOT NULL, UNIQUE(user_id, abbr));
@@ -421,6 +429,7 @@ export type Topic = {
   page_ids: string;
   emphasized: number;
   lesson_json: string | null;
+  checks_json: string | null;
 };
 
 export type Question = {

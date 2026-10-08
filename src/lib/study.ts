@@ -13,22 +13,29 @@ export const Lesson = z.object({
   slides: z
     .array(z.object({ page_id: z.number(), caption: z.string() }))
     .describe("Up to 4 of the provided slides whose images are most worth looking at, with a caption saying what to notice"),
-  checks: z
-    .array(
-      z.object({
-        question: z.string(),
-        options: z.array(z.string()).describe("4 answer choices"),
-        correct_index: z.number().describe("0-based index of the correct option"),
-        explanation: z.string(),
-      }),
-    )
-    .describe("2 quick check questions"),
   connections: z
     .string()
     .nullable()
     .describe("How this ties to material from the student's earlier exams (cite them), or null if nothing relevant"),
 });
 export type Lesson = z.infer<typeof Lesson>;
+
+export const QUIZ_SIZE = 10;
+
+const SectionQuiz = z.object({
+  questions: z
+    .array(
+      z.object({
+        question: z.string(),
+        options: z.array(z.string()).describe("4 answer choices, no letter prefixes"),
+        correct_index: z.number().describe("0-based index of the correct option"),
+        explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
+        concept: z.string().describe("The concept tested; use one of the listed concept names when one fits"),
+      }),
+    )
+    .describe(`${QUIZ_SIZE} questions`),
+});
+export type QuizQuestion = z.infer<typeof SectionQuiz>["questions"][number];
 
 export function topicPages(topic: Topic): (PageRow & { filename: string })[] {
   const ids = JSON.parse(topic.page_ids) as number[];
@@ -88,7 +95,7 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     maxTokens: 16000,
     system: `You are a dental school tutor writing one step of a guided study session.
 Teach only from the student's slides provided (plus standard dental knowledge needed to connect them). Slides marked ★IMPORTANT or with annotations were emphasized by the professor: make sure they are covered.
-Refer to slides as "Lecture name, slide N". Check questions should test understanding, not trivia.`,
+Refer to slides as "Lecture name, slide N".`,
     content: [
       `Topic: ${topic.title}\n${topic.summary}`,
       `Concepts and the student's mastery so far: ${
@@ -107,6 +114,53 @@ Refer to slides as "Lecture name, slide N". Check questions should test understa
   lesson.slides = lesson.slides.filter((s) => valid.has(s.page_id)).slice(0, 4);
   db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(lesson), topic.id);
   return lesson;
+}
+
+const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
+
+/** The section quiz after a lesson: written once per topic and cached, like the lesson. */
+export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
+  if (topic.checks_json) return Promise.resolve(JSON.parse(topic.checks_json) as QuizQuestion[]);
+  let p = quizInflight.get(topic.id);
+  if (!p) {
+    p = generateSectionQuiz(topic).finally(() => quizInflight.delete(topic.id));
+    quizInflight.set(topic.id, p);
+  }
+  return p;
+}
+
+async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
+  const userId = examOwner(topic.exam_id);
+  const concepts = topicConcepts(topic.id, topic.exam_id);
+  const out = await generate({
+    creds: credentials(userId),
+    purpose: "section quiz",
+    schema: SectionQuiz,
+    effort: "medium",
+    maxTokens: 16000,
+    system: `You write the end-of-section quiz for a dental student's guided study session, based strictly on their lecture slides.
+Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that together check the student learned this section:
+- Spread them across the slides so the whole section is covered; give slides marked ★IMPORTANT or with annotations extra weight.
+- Mix question kinds: about half straight recall of key facts, the rest applying them (short clinical vignettes, "which finding/next step", comparisons).
+- Each question tests a different fact. Plausible distractors of similar length; no "all/none of the above"; no trivia like citations or years.
+- Order them from more basic to more applied.`,
+    content: [
+      `Topic: ${topic.title}\n${topic.summary}`,
+      `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`,
+      `Slides:\n${slideNotesText(topicPages(topic))}`,
+    ].join("\n\n"),
+  });
+  const questions = out.questions
+    .filter((q) => q.options.length >= 2 && q.correct_index >= 0 && q.correct_index < q.options.length)
+    .slice(0, QUIZ_SIZE)
+    .map((q) => {
+      // Shuffle options so the correct answer isn't biased to one position.
+      const order = q.options.map((_, i) => i).sort(() => Math.random() - 0.5);
+      return { ...q, options: order.map((i) => q.options[i]), correct_index: order.indexOf(q.correct_index) };
+    });
+  if (questions.length === 0) throw new Error("Couldn't write the section quiz. Try again.");
+  db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(questions), topic.id);
+  return questions;
 }
 
 /** Build the tutor's system prompt: what the AI "remembers" about this student and exam. */
