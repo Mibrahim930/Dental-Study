@@ -99,13 +99,17 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
   if (opts.style === "caseset") {
     const caseCount = Math.max(1, Math.round(opts.size / 4));
     const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)));
-    const fresh = await buildCaseSets(topics, caseCount - retried.length, focus);
+    // Always at least one new case, so even a short exam isn't only retries.
+    const fresh = await buildCaseSets(topics, Math.max(1, caseCount - retried.length), focus);
     // Shuffle the order of cases, but keep each case's questions together and in order.
     const groups = [...retried, ...fresh].sort(() => Math.random() - 0.5);
     return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
   }
 
-  const retried = retryQuestions(examId, topicIds, Math.floor(opts.size * RETRY_SHARE));
+  const retried = retryQuestions(examId, topicIds, Math.floor(opts.size * RETRY_SHARE), {
+    types: styleTypes(opts.style),
+    wholeExam: !scoped,
+  });
 
   // With focus on and the whole exam chosen, ~12% of new questions revisit weak concepts from earlier exams (shared memory).
   const weak = opts.adaptive && !scoped ? weakConcepts(examOwner(examId), 5, examId) : [];
@@ -146,13 +150,20 @@ function finishGeneration(attemptId: number, questionIds: number[], retried: Set
   })();
 }
 
+const styleTypes = (style: Style) => (style === "recall" ? ["recall"] : style === "case" ? ["case", "image"] : ["recall", "case", "image"]);
+
+/**
+ * Questions written earlier but never answered, to use before writing new ones. Questions sitting in an exam that is
+ * still open (started in the last day) are left alone, so two exams started together don't share questions.
+ */
 function unusedQuestions(topicId: number, style: Style, limit: number): number[] {
-  const types = style === "recall" ? ["recall"] : style === "case" ? ["case", "image"] : ["recall", "case", "image"];
+  const types = styleTypes(style);
   return (
     db
       .prepare(
         `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.case_id IS NULL AND q.type IN (${types.map(() => "?").join(",")})
-         AND NOT EXISTS (SELECT 1 FROM attempt_questions aq WHERE aq.question_id = q.id AND aq.chosen_index IS NOT NULL)
+         AND NOT EXISTS (SELECT 1 FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id WHERE aq.question_id = q.id
+           AND (aq.chosen_index IS NOT NULL OR (a.status IN ('generating', 'ready') AND a.started_at > datetime('now', '-1 day'))))
          ORDER BY RANDOM() LIMIT ?`,
       )
       .all(topicId, ...types, limit) as { id: number }[]
@@ -334,9 +345,16 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // Drop anything the AI wrote that repeats an existing question on this topic word for word.
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const seen = new Set(
+    (db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL").all(topic.id) as { stem: string }[]).map((r) => norm(r.stem)),
+  );
   const ids: number[] = [];
   for (const q of out.questions.slice(0, count)) {
     if (q.options.length < 2 || q.correct_index < 0 || q.correct_index >= q.options.length) continue;
+    if (seen.has(norm(q.stem))) continue;
+    seen.add(norm(q.stem));
     const imagePage = q.type === "image" && q.image_page_id != null && imageIds.has(q.image_page_id) ? q.image_page_id : null;
     const type = q.type === "image" && !imagePage ? (q.patient_box ? "case" : "recall") : q.type;
     // Shuffle options so the correct answer isn't biased to one position.
@@ -394,6 +412,8 @@ export function answerQuestion(attemptId: number, questionId: number, chosen: nu
     .prepare("SELECT chosen_index, option_order FROM attempt_questions WHERE attempt_id = ? AND question_id = ?")
     .get(attemptId, questionId) as { chosen_index: number | null; option_order: string | null } | undefined;
   if (!row || row.chosen_index != null) return; // already answered
+  const optionCount = (JSON.parse(q.options) as string[]).length;
+  if (!Number.isInteger(chosen) || chosen < 0 || chosen >= optionCount) return;
   const order = row.option_order ? (JSON.parse(row.option_order) as number[]) : null;
   const original = order ? order[chosen] : chosen;
   if (original == null) return;

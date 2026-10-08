@@ -197,7 +197,8 @@ function Results({ view }: { view: AttemptView }) {
     if (q.correct) t.right++;
     byTopic.set(k, t);
   }
-  const missed = questions.filter((q) => !q.correct).length;
+  const skipped = questions.filter((q) => q.chosen_index == null).length;
+  const missed = questions.filter((q) => q.chosen_index != null && !q.correct).length;
   const unsureRight = questions.filter((q) => q.correct && (q.confidence === "guess" || q.confidence === "unsure")).length;
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -207,8 +208,9 @@ function Results({ view }: { view: AttemptView }) {
           <div className="text-sm text-muted-foreground">Score</div>
           <div className="text-4xl font-semibold">{pct(attempt.score)}</div>
           <div className="text-sm text-muted-foreground">
-            {questions.length - missed} of {questions.length} correct
+            {questions.length - missed - skipped} of {questions.length} correct
             {unsureRight > 0 && ` · ${unsureRight} right but not sure`}
+            {skipped > 0 && ` · ${skipped} skipped`}
           </div>
           {(missed > 0 || (attempt.adaptive && unsureRight > 0)) && (
             <p className="mt-2 text-sm text-muted-foreground">

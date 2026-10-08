@@ -40,6 +40,8 @@ type Result = {
   confidence: Confidence | null;
   topic_id: number | null;
   case_id: number | null;
+  type: "recall" | "case" | "image";
+  question_exam_id: number;
   stem: string;
   source_page_id: number | null;
   concept: string | null;
@@ -49,7 +51,8 @@ type Result = {
 function latestResults(examId: number): Result[] {
   const rows = db
     .prepare(
-      `SELECT aq.question_id, aq.attempt_id, aq.correct, aq.confidence, q.topic_id, q.case_id, q.stem, q.source_page_id, c.name AS concept
+      `SELECT aq.question_id, aq.attempt_id, aq.correct, aq.confidence, q.topic_id, q.case_id, q.type, q.exam_id AS question_exam_id,
+              q.stem, q.source_page_id, c.name AS concept
        FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id JOIN questions q ON q.id = aq.question_id
        LEFT JOIN concepts c ON c.id = q.concept_id
        WHERE a.exam_id = ? AND aq.chosen_index IS NOT NULL AND q.flagged = 0
@@ -61,35 +64,49 @@ function latestResults(examId: number): Result[] {
   return [...latest.values()];
 }
 
-const inScope = (topicIds: number[]) => (r: { topic_id: number | null }) => topicIds.length === 0 || (r.topic_id != null && topicIds.includes(r.topic_id));
+/**
+ * Whether an earlier answer belongs to the material being practised. With `wholeExam`, questions from earlier exams
+ * that were mixed in to revisit weak concepts count too, as do questions whose topic was since removed.
+ */
+const inScope = (examId: number, topicIds: number[], wholeExam = false) => (r: { topic_id: number | null; question_exam_id?: number }) =>
+  topicIds.length === 0 ||
+  (r.topic_id != null && topicIds.includes(r.topic_id)) ||
+  (wholeExam && (r.topic_id == null || (r.question_exam_id != null && r.question_exam_id !== examId)));
 
 /**
  * Questions to ask again: answered wrong last time and not answered right since. Most recent misses first.
- * Board-style case questions only come back in case-set exams, as whole cases (see retryCases).
+ * Board-style case questions only come back in case-set exams (see retryCases). `types` limits question types to the exam's style.
  */
-export function retryQuestions(examId: number, topicIds: number[], limit: number): number[] {
+export function retryQuestions(
+  examId: number,
+  topicIds: number[],
+  limit: number,
+  opts: { types?: string[]; wholeExam?: boolean } = {},
+): number[] {
   if (limit <= 0) return [];
   return latestResults(examId)
-    .filter((r) => r.correct === 0 && r.case_id == null)
-    .filter(inScope(topicIds))
+    .filter((r) => r.correct === 0 && r.case_id == null && (!opts.types || opts.types.includes(r.type)))
+    .filter(inScope(examId, topicIds, opts.wholeExam))
     .sort((a, b) => b.attempt_id - a.attempt_id)
     .slice(0, limit)
     .map((r) => r.question_id);
 }
 
-/** Whole cases with a question that was answered wrong last time, as question-id groups in case order. */
+/**
+ * Missed case-set questions, grouped by case in case order. Only the missed questions come back (each still shows
+ * the patient box and scenario); questions of the case answered right don't repeat.
+ */
 export function retryCases(examId: number, topicIds: number[], limit: number): number[][] {
   if (limit <= 0) return [];
-  const caseIds = [
-    ...new Set(
-      latestResults(examId)
-        .filter((r) => r.correct === 0 && r.case_id != null)
-        .filter(inScope(topicIds))
-        .sort((a, b) => b.attempt_id - a.attempt_id)
-        .map((r) => r.case_id!),
-    ),
-  ].slice(0, limit);
-  return caseIds.map((id) => (db.prepare("SELECT id FROM questions WHERE case_id = ? AND flagged = 0 ORDER BY id").all(id) as { id: number }[]).map((r) => r.id));
+  const missed = latestResults(examId)
+    .filter((r) => r.correct === 0 && r.case_id != null)
+    .filter(inScope(examId, topicIds))
+    .sort((a, b) => b.attempt_id - a.attempt_id);
+  const caseIds = [...new Set(missed.map((r) => r.case_id!))].slice(0, limit);
+  const missedIds = new Set(missed.map((r) => r.question_id));
+  return caseIds.map((id) =>
+    (db.prepare("SELECT id FROM questions WHERE case_id = ? AND flagged = 0 ORDER BY id").all(id) as { id: number }[]).map((r) => r.id).filter((q) => missedIds.has(q)),
+  );
 }
 
 export type FocusPoint = { concept: string | null; source_page_id: number | null; stem: string; why: "missed" | "unsure" };
@@ -97,7 +114,7 @@ export type FocusPoint = { concept: string | null; source_page_id: number | null
 /** Weak spots per topic: questions missed, or answered right but marked guessed/unsure, on the latest try. */
 export function focusPoints(examId: number, topicIds: number[]): Map<number, FocusPoint[]> {
   const out = new Map<number, FocusPoint[]>();
-  for (const r of latestResults(examId).filter(inScope(topicIds))) {
+  for (const r of latestResults(examId).filter(inScope(examId, topicIds))) {
     if (r.topic_id == null) continue;
     const why = r.correct === 0 ? "missed" : r.confidence === "guess" || r.confidence === "unsure" ? "unsure" : null;
     if (!why) continue;
@@ -110,7 +127,7 @@ export function focusPoints(examId: number, topicIds: number[]): Map<number, Foc
 
 /** What the student will see come back in the next exam over this scope (for the start form). */
 export function pendingCounts(examId: number, topicIds: number[] = []): { missed: number; unsure: number } {
-  const results = latestResults(examId).filter(inScope(topicIds));
+  const results = latestResults(examId).filter(inScope(examId, topicIds));
   return {
     missed: results.filter((r) => r.correct === 0).length,
     unsure: results.filter((r) => r.correct === 1 && (r.confidence === "guess" || r.confidence === "unsure")).length,
