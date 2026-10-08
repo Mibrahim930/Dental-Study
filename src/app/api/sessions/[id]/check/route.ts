@@ -11,13 +11,17 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
   if (!user) return unauthorized();
   const sessionId = Number((await ctx.params).id);
   if (!ownsSession(user.id, sessionId)) return notFound();
-  const { topicId, index, chosen } = (await request.json()) as { topicId: number; index: number; chosen: number };
+  const body = (await request.json().catch(() => null)) as { topicId?: unknown; index?: unknown; chosen?: unknown } | null;
+  const { topicId, index, chosen } = body ?? {};
+  if (!Number.isInteger(topicId) || !Number.isInteger(index) || (index as number) < 0) {
+    return NextResponse.json({ error: "Unknown question or answer" }, { status: 400 });
+  }
 
   const topic = db
     .prepare("SELECT t.* FROM topics t JOIN study_sessions s ON s.exam_id = t.exam_id WHERE s.id = ? AND t.id = ?")
     .get(sessionId, topicId) as Topic | undefined;
-  const q = topic?.checks_json ? (JSON.parse(topic.checks_json) as QuizQuestion[])[index] : undefined;
-  if (!topic || !q || !Number.isInteger(chosen) || chosen < 0 || chosen >= q.options.length) {
+  const q = topic?.checks_json ? (JSON.parse(topic.checks_json) as QuizQuestion[])[index as number] : undefined;
+  if (!topic || !q || typeof chosen !== "number" || !Number.isInteger(chosen) || chosen < 0 || chosen >= q.options.length) {
     return NextResponse.json({ error: "Unknown question or answer" }, { status: 400 });
   }
   const already = db.prepare("SELECT 1 FROM session_checks WHERE session_id = ? AND topic_id = ? AND check_index = ?").get(sessionId, topicId, index);
@@ -33,6 +37,6 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
     chosen,
   );
   // Section quiz answers count toward concept mastery, like practice exams.
-  if (q.concept) recordConceptResult(upsertConcept(user.id, q.concept), correct);
+  if (q.concept?.trim()) recordConceptResult(upsertConcept(user.id, q.concept), correct);
   return NextResponse.json({ ok: true, correct });
 }

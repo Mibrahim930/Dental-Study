@@ -12,6 +12,7 @@ import {
   retryCases,
   retryQuestions,
   RETRY_SHARE,
+  isValidChoice,
   shuffledOrder,
   slideCoverage,
   type Confidence,
@@ -75,11 +76,21 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
       .prepare("INSERT INTO attempts (exam_id, mode, time_limit_sec, task_id, adaptive) VALUES (?, ?, ?, ?, ?)")
       .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null, opts.taskId ?? null, adaptive ? 1 : 0).lastInsertRowid,
   );
-  void generateAttempt(attemptId, examId, { ...opts, adaptive }).catch((err) => {
-    db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
+  // Exams for the same course are built one after another, so two started together never pick the same questions.
+  const previous = buildQueue.get(examId) ?? Promise.resolve();
+  const build = previous
+    .then(() => generateAttempt(attemptId, examId, { ...opts, adaptive }))
+    .catch((err) => {
+      db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
+    });
+  buildQueue.set(examId, build);
+  void build.finally(() => {
+    if (buildQueue.get(examId) === build) buildQueue.delete(examId);
   });
   return attemptId;
 }
+
+const buildQueue = new Map<number, Promise<void>>();
 
 /**
  * What goes into a practice exam:
@@ -98,7 +109,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
 
   if (opts.style === "caseset") {
     const caseCount = Math.max(1, Math.round(opts.size / 4));
-    const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)));
+    const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)), { wholeExam: !scoped });
     // Always at least one new case, so even a short exam isn't only retries.
     const fresh = await buildCaseSets(topics, Math.max(1, caseCount - retried.length), focus);
     // Shuffle the order of cases, but keep each case's questions together and in order.
@@ -274,7 +285,7 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): 
   );
   const groups: number[][] = [];
   for (const c of out.cases.slice(0, count)) {
-    const qs = c.questions.filter((q) => q.options.length >= 2 && q.correct_index >= 0 && q.correct_index < q.options.length);
+    const qs = c.questions.filter((q) => isValidChoice(q.options, q.correct_index));
     if (qs.length === 0) continue;
     const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
     const box = JSON.stringify(c.patient_box);
@@ -346,13 +357,13 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Drop anything the AI wrote that repeats an existing question on this topic word for word.
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   const seen = new Set(
     (db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL").all(topic.id) as { stem: string }[]).map((r) => norm(r.stem)),
   );
   const ids: number[] = [];
   for (const q of out.questions.slice(0, count)) {
-    if (q.options.length < 2 || q.correct_index < 0 || q.correct_index >= q.options.length) continue;
+    if (!isValidChoice(q.options, q.correct_index)) continue;
     if (seen.has(norm(q.stem))) continue;
     seen.add(norm(q.stem));
     const imagePage = q.type === "image" && q.image_page_id != null && imageIds.has(q.image_page_id) ? q.image_page_id : null;

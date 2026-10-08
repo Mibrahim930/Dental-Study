@@ -84,8 +84,9 @@ export function retryQuestions(
   opts: { types?: string[]; wholeExam?: boolean } = {},
 ): number[] {
   if (limit <= 0) return [];
+  const open = inOpenExams();
   return latestResults(examId)
-    .filter((r) => r.correct === 0 && r.case_id == null && (!opts.types || opts.types.includes(r.type)))
+    .filter((r) => r.correct === 0 && r.case_id == null && (!opts.types || opts.types.includes(r.type)) && !open.has(r.question_id))
     .filter(inScope(examId, topicIds, opts.wholeExam))
     .sort((a, b) => b.attempt_id - a.attempt_id)
     .slice(0, limit)
@@ -96,16 +97,44 @@ export function retryQuestions(
  * Missed case-set questions, grouped by case in case order. Only the missed questions come back (each still shows
  * the patient box and scenario); questions of the case answered right don't repeat.
  */
-export function retryCases(examId: number, topicIds: number[], limit: number): number[][] {
+export function retryCases(examId: number, topicIds: number[], limit: number, opts: { wholeExam?: boolean } = {}): number[][] {
   if (limit <= 0) return [];
+  const open = inOpenExams();
   const missed = latestResults(examId)
-    .filter((r) => r.correct === 0 && r.case_id != null)
-    .filter(inScope(examId, topicIds))
+    .filter((r) => r.correct === 0 && r.case_id != null && !open.has(r.question_id))
+    .filter(inScope(examId, topicIds, opts.wholeExam))
     .sort((a, b) => b.attempt_id - a.attempt_id);
   const caseIds = [...new Set(missed.map((r) => r.case_id!))].slice(0, limit);
   const missedIds = new Set(missed.map((r) => r.question_id));
   return caseIds.map((id) =>
     (db.prepare("SELECT id FROM questions WHERE case_id = ? AND flagged = 0 ORDER BY id").all(id) as { id: number }[]).map((r) => r.id).filter((q) => missedIds.has(q)),
+  );
+}
+
+/** Questions sitting in an exam that's still open (started in the last day), so a second exam doesn't repeat them. */
+function inOpenExams(): Set<number> {
+  return new Set(
+    (
+      db
+        .prepare(
+          `SELECT aq.question_id FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id
+           WHERE aq.chosen_index IS NULL AND a.status IN ('generating', 'ready') AND a.started_at > datetime('now', '-1 day')`,
+        )
+        .all() as { question_id: number }[]
+    ).map((r) => r.question_id),
+  );
+}
+
+/** An AI-written multiple-choice question is usable: a whole-number answer in range, and distinct, non-blank options. */
+export function isValidChoice(options: string[], correctIndex: number): boolean {
+  const clean = options.map((o) => o.trim().toLowerCase());
+  return (
+    options.length >= 2 &&
+    Number.isInteger(correctIndex) &&
+    correctIndex >= 0 &&
+    correctIndex < options.length &&
+    clean.every((o) => o.length > 0) &&
+    new Set(clean).size === clean.length
   );
 }
 

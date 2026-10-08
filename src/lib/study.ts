@@ -4,6 +4,7 @@ import { chatStream, generate, type ChatTurn } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, weakConcepts, glossaryText } from "./memory";
+import { isValidChoice } from "./practicePlan";
 
 export const Lesson = z.object({
   explanation: z
@@ -151,7 +152,7 @@ Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that
     ].join("\n\n"),
   });
   const questions = out.questions
-    .filter((q) => q.options.length >= 2 && q.correct_index >= 0 && q.correct_index < q.options.length)
+    .filter((q) => isValidChoice(q.options, q.correct_index))
     .slice(0, QUIZ_SIZE)
     .map((q) => {
       // Shuffle options so the correct answer isn't biased to one position.

@@ -240,6 +240,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [index, setIndex] = useState(0);
   const [error, setError] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -286,7 +287,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   if (!quiz) {
     return (
       <section className="card flex flex-wrap items-center justify-between gap-2">
-        <span className="animate-pulse text-sm text-muted-foreground">Writing a 10-question quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
+        <span className="animate-pulse text-sm text-muted-foreground">Writing a quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
         {skip}
       </section>
     );
@@ -298,12 +299,26 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
 
   function choose(i: number) {
     if (answers[index] != null) return;
-    setAnswers((a) => ({ ...a, [index]: i }));
-    void fetch(`/api/sessions/${sessionId}/check`, {
+    const at = index;
+    setSaveError("");
+    setAnswers((a) => ({ ...a, [at]: i }));
+    fetch(`/api/sessions/${sessionId}/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId: quiz!.topicId, index, chosen: i }),
-    });
+      body: JSON.stringify({ topicId: quiz!.topicId, index: at, chosen: i }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+      })
+      .catch(() => {
+        // Not saved: let the student answer again rather than showing an answer that won't be remembered.
+        setAnswers((a) => {
+          const next = { ...a };
+          delete next[at];
+          return next;
+        });
+        setSaveError("Your answer didn't save. Check your connection and try again.");
+      });
   }
 
   const dots = (
@@ -390,6 +405,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           </button>
         ))}
       </div>
+      {saveError && <p className="text-sm text-danger">{saveError}</p>}
       {answered && (
         <div className="prose-study rounded-lg bg-muted p-3 text-sm">
           <strong>{chosen === q.correct_index ? "Correct. " : "Not quite. "}</strong>
