@@ -56,6 +56,166 @@
   }
 }
 
+/* Themes picked in Settings (users.theme → <html data-theme>). "classic" is the :root palette above.
+   Evergreen and Slate are two-colour: one ink on one paper, with status colours toned to match. */
+:root[data-theme="evergreen"] {
+  color-scheme: light;
+  --background: #f2efe8;
+  --foreground: #123021;
+  --card: #faf8f3;
+  --muted: #e9e5db;
+  --muted-strong: #dcd7ca;
+  --muted-foreground: #3f5649;
+  --subtle: #778679;
+  --border: #dad5c8;
+  --input: #bdb8a9;
+  --primary: #123021;
+  --primary-hover: #1c4231;
+  --primary-foreground: #f2efe8;
+  --primary-soft: #e2e6da;
+  --danger: #9b2c2c;
+  --danger-soft: #f3e1dc;
+  --success: #1e6b45;
+  --success-soft: #dde9de;
+  --warning: #855600;
+  --warning-soft: #f2e6c8;
+  --info: #2e4a6b;
+  --info-soft: #e1e6ea;
+  --shadow: none;
+}
+
+:root[data-theme="slate"] {
+  color-scheme: light;
+  --background: #f4f4f2;
+  --foreground: #2b2f36;
+  --card: #fbfbfa;
+  --muted: #eaeae7;
+  --muted-strong: #dededa;
+  --muted-foreground: #535659;
+  --subtle: #86888b;
+  --border: #dfdfdb;
+  --input: #c4c5c3;
+  --primary: #2b2f36;
+  --primary-hover: #3a3f48;
+  --primary-foreground: #f4f4f2;
+  --primary-soft: #e6e7e8;
+  --danger: #a3333d;
+  --danger-soft: #f3e2e3;
+  --success: #2f6b4f;
+  --success-soft: #e0ebe4;
+  --warning: #855600;
+  --warning-soft: #f2e8cf;
+  --info: #34507a;
+  --info-soft: #e2e7ef;
+  --shadow: none;
+}
+
+:root[data-theme="blocks"] {
+  color-scheme: light;
+  --background: #efede6;
+  --foreground: #161616;
+  --card: #ffffff;
+  --muted: #f2f0ea;
+  --muted-strong: #e4e1d8;
+  --muted-foreground: #67645b;
+  --subtle: #9a968b;
+  --border: #e4e1d8;
+  --input: #d9d5ca;
+  --primary: #0e5e55;
+  --primary-hover: #0a4a43;
+  --primary-foreground: #ffffff;
+  --primary-soft: #ddf8f1;
+  --danger: #b3243f;
+  --danger-soft: #ffe4dd;
+  --success: #157a4a;
+  --success-soft: #ddf8f1;
+  --warning: #855600;
+  --warning-soft: #fff1c2;
+  --info: #4b2fa3;
+  --info-soft: #ede6ff;
+  --shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="evergreen"] {
+    color-scheme: dark;
+    --background: #0d1710;
+    --foreground: #d2e5d6;
+    --card: #132019;
+    --muted: #1a2a21;
+    --muted-strong: #243629;
+    --muted-foreground: #9db3a3;
+    --subtle: #6e8475;
+    --border: #233328;
+    --input: #34473a;
+    --primary: #d2e5d6;
+    --primary-hover: #e6f1e8;
+    --primary-foreground: #0d1710;
+    --primary-soft: rgb(210 229 214 / 0.1);
+    --danger: #f08a8a;
+    --danger-soft: rgb(240 138 138 / 0.14);
+    --success: #7fd3a0;
+    --success-soft: rgb(127 211 160 / 0.14);
+    --warning: #e8c170;
+    --warning-soft: rgb(232 193 112 / 0.14);
+    --info: #a9c4e8;
+    --info-soft: rgb(169 196 232 / 0.14);
+    --shadow: none;
+  }
+
+  :root[data-theme="slate"] {
+    color-scheme: dark;
+    --background: #14161a;
+    --foreground: #e6e7e9;
+    --card: #1b1e23;
+    --muted: #23272d;
+    --muted-strong: #2e333a;
+    --muted-foreground: #a3a6ab;
+    --subtle: #6f737a;
+    --border: #2a2e35;
+    --input: #3b4049;
+    --primary: #e6e7e9;
+    --primary-hover: #ffffff;
+    --primary-foreground: #14161a;
+    --primary-soft: rgb(230 231 233 / 0.1);
+    --danger: #f28b95;
+    --danger-soft: rgb(242 139 149 / 0.14);
+    --success: #7dcfa3;
+    --success-soft: rgb(125 207 163 / 0.14);
+    --warning: #e8c170;
+    --warning-soft: rgb(232 193 112 / 0.14);
+    --info: #a8bfe6;
+    --info-soft: rgb(168 191 230 / 0.14);
+    --shadow: none;
+  }
+
+  :root[data-theme="blocks"] {
+    color-scheme: dark;
+    --background: #121211;
+    --foreground: #f4f2ec;
+    --card: #1c1c1a;
+    --muted: #272724;
+    --muted-strong: #32322e;
+    --muted-foreground: #a8a59c;
+    --subtle: #77746c;
+    --border: #2e2e2b;
+    --input: #3d3d39;
+    --primary: #b8f5e6;
+    --primary-hover: #d4faf0;
+    --primary-foreground: #06332d;
+    --primary-soft: rgb(184 245 230 / 0.12);
+    --danger: #ff8a73;
+    --danger-soft: rgb(255 138 115 / 0.16);
+    --success: #6fdca0;
+    --success-soft: rgb(111 220 160 / 0.14);
+    --warning: #ffd465;
+    --warning-soft: rgb(255 212 101 / 0.16);
+    --info: #c9b8ff;
+    --info-soft: rgb(201 184 255 / 0.16);
+    --shadow: none;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

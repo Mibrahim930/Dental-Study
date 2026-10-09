@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_admin INTEGER NOT NULL DEFAULT 0,             -- the site owner (first account)
   must_change_password INTEGER NOT NULL DEFAULT 0, -- set after an admin password reset
   focus_weak INTEGER NOT NULL DEFAULT 1,           -- practice exams lean toward missed / unsure material
+  theme TEXT NOT NULL DEFAULT 'classic',           -- colour theme, see lib/themes.ts
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -320,6 +321,7 @@ function migrate(db: Database.Database) {
     db.pragma("foreign_keys = ON");
   }
   if (!columns(db, "users").includes("focus_weak")) db.exec("ALTER TABLE users ADD COLUMN focus_weak INTEGER NOT NULL DEFAULT 1");
+  if (!columns(db, "users").includes("theme")) db.exec("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'classic'");
   if (!columns(db, "attempts").includes("adaptive")) db.exec("ALTER TABLE attempts ADD COLUMN adaptive INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "attempt_questions").includes("confidence")) {
     db.exec("ALTER TABLE attempt_questions ADD COLUMN confidence TEXT");
@@ -371,6 +373,7 @@ export type User = {
   is_admin: number;
   must_change_password: number;
   focus_weak: number;
+  theme: string;
   created_at: string;
 };
 

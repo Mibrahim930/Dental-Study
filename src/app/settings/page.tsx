@@ -4,6 +4,8 @@ import { requireUser } from "@/lib/user";
 import { MODELS } from "@/lib/ai";
 import { KeyForm } from "@/components/KeyForm";
 import { SignOutButton } from "@/components/SignOutButton";
+import { ThemePicker } from "@/components/ThemePicker";
+import { themeOf } from "@/lib/themes";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +52,14 @@ export default async function SettingsPage() {
         <p className="text-xs text-muted-foreground">
           Estimated from token counts. Your {user.provider === "openai" ? "OpenAI" : "Anthropic"} billing page has the exact amount.
         </p>
+      </section>
+
+      <section className="card space-y-3">
+        <div>
+          <h2 className="font-semibold tracking-tight">Appearance</h2>
+          <p className="text-sm text-muted-foreground">Pick a colour theme. Dark mode still follows your device.</p>
+        </div>
+        <ThemePicker current={themeOf(user.theme)} />
       </section>
 
       <section className="card space-y-3">

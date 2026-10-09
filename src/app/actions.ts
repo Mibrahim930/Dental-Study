@@ -5,6 +5,13 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/user";
 import { rebuildPlan } from "@/lib/planner";
 import type { ExamKind } from "@/lib/db";
+import { themeOf } from "@/lib/themes";
+
+export async function setTheme(formData: FormData) {
+  const user = await requireUser();
+  db.prepare("UPDATE users SET theme = ? WHERE id = ?").run(themeOf(String(formData.get("theme") ?? "")), user.id);
+  revalidatePath("/", "layout");
+}
 
 const KINDS: ExamKind[] = ["block", "quiz", "practical", "board", "other"];
 const kindOf = (v: FormDataEntryValue | null): ExamKind => (KINDS.includes(v as ExamKind) ? (v as ExamKind) : "block");
