@@ -92,7 +92,7 @@ export default function ReviewPage() {
             <p className="text-[15px] text-hero-muted">How much time do you have?</p>
             <div className="grid grid-cols-3 gap-2">
               {BUDGETS.map((m) => (
-                <button key={m} className="btn-hero btn-lg" onClick={() => start(m)}>
+                <button key={m} className="btn-hero btn-lg px-2 whitespace-nowrap" onClick={() => start(m)}>
                   {m} min
                 </button>
               ))}

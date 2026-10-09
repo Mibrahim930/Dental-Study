@@ -9,6 +9,7 @@ import { PracticeForm } from "@/components/PracticeForm";
 import { ActionButton } from "@/components/ActionButton";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
+import { plannerSettings } from "@/lib/planner";
 import { pendingCounts } from "@/lib/practicePlan";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress } from "@/lib/readiness";
@@ -61,6 +62,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const days = daysUntil(exam.exam_date);
   const totalPages = docs.reduce((a, d) => a + d.page_count, 0);
   const progress = examProgress(user.id, id);
+  const tz = plannerSettings(user.id).timezone;
   const current = topics[lastPosition];
   const notes = sessions.filter((s) => s.summary);
 
@@ -270,7 +272,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                 {attempts.map((a) => (
                   <Link key={a.id} href={`/attempts/${a.id}`} className="flex items-center justify-between gap-2 rounded-2xl px-2 py-2.5 hover:bg-muted">
                     <span className="text-[15px] font-semibold">
-                      {a.started_at.slice(5, 10).replace("-", "/")} · {a.n} questions · {a.mode === "timed" ? "Timed" : "Tutor"}
+                      {localDay(a.started_at, tz)} · {a.n} questions · {a.mode === "timed" ? "Timed" : "Tutor"}
                     </span>
                     {a.status === "finished" ? (
                       <MasteryChip value={a.score} />
@@ -328,4 +330,14 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
       </div>
     </div>
   );
+}
+
+/** A stored UTC timestamp ("2026-10-09 02:30:00") as the student's local month/day. */
+function localDay(utc: string, timeZone: string): string {
+  const d = new Date(utc.replace(" ", "T") + "Z");
+  try {
+    return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone });
+  } catch {
+    return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
+  }
 }

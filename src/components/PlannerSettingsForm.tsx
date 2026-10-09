@@ -86,9 +86,13 @@ export function CalendarSyncLink({ url }: { url: string }) {
           type="button"
           className="btn-secondary"
           onClick={async () => {
-            await navigator.clipboard.writeText(url);
-            setCopied(true);
-            toast("Calendar link copied");
+            try {
+              await navigator.clipboard.writeText(url);
+              setCopied(true);
+              toast("Calendar link copied");
+            } catch {
+              toast("Couldn't copy. Select the link and copy it by hand.", "error");
+            }
           }}
         >
           {copied ? "Copied" : "Copy"}

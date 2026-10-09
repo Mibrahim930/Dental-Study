@@ -64,9 +64,13 @@ export function InviteCode({ code }: { code: string }) {
       className="rounded-[14px] bg-lilac px-3 py-1.5 font-mono text-[15px] font-bold tracking-wider text-on-lilac hover:brightness-95"
       title="Copy invite code"
       onClick={async () => {
-        await navigator.clipboard.writeText(code);
-        setCopied(true);
-        toast("Invite code copied");
+        try {
+          await navigator.clipboard.writeText(code);
+          setCopied(true);
+          toast("Invite code copied");
+        } catch {
+          toast("Couldn't copy. Select the code and copy it by hand.", "error");
+        }
       }}
     >
       {code} {copied ? "✓" : "⧉"}

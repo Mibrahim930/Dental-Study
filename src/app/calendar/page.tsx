@@ -123,7 +123,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                         {isBusy.map((b) => (
                           <span key={b.id} className="truncate text-[11px] font-semibold">{b.label}</span>
                         ))}
-                        {study > 0 && <span className="text-[11px] font-bold text-primary">{Math.round(study / 6) / 10} h study</span>}
+                        {study > 0 && <span className={`text-[11px] font-bold ${ex ? "opacity-80" : "text-primary"}`}>{Math.round(study / 6) / 10} h study</span>}
                       </span>
                       {study > 0 && !ex && <span className="h-1.5 w-1.5 rounded-full bg-hero sm:hidden" aria-hidden />}
                     </Link>
