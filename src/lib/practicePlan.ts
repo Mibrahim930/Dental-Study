@@ -165,14 +165,17 @@ export function pendingCounts(examId: number, topicIds: number[] = []): { missed
 
 /**
  * When each topic of an exam was last practised: the id of the latest practice exam in which a question
- * from it was actually answered. Topics never practised are absent.
+ * from it was answered, or that is still open with it (so two exams opened together rotate sections too).
+ * Topics never practised are absent; questions skipped in a finished exam don't count.
  */
 export function lastPracticed(examId: number): Map<number, number> {
   const rows = db
     .prepare(
       `SELECT q.topic_id AS topic_id, MAX(aq.attempt_id) AS last FROM attempt_questions aq
        JOIN attempts a ON a.id = aq.attempt_id JOIN questions q ON q.id = aq.question_id
-       WHERE a.exam_id = ? AND aq.chosen_index IS NOT NULL AND q.topic_id IS NOT NULL GROUP BY q.topic_id`,
+       WHERE a.exam_id = ? AND q.topic_id IS NOT NULL
+         AND (aq.chosen_index IS NOT NULL OR (a.status IN ('generating', 'ready') AND a.started_at > datetime('now', '-1 day')))
+       GROUP BY q.topic_id`,
     )
     .all(examId) as { topic_id: number; last: number }[];
   return new Map(rows.map((r) => [r.topic_id, r.last]));

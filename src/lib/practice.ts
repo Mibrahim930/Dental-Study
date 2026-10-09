@@ -120,12 +120,12 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
     return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
   }
 
-  const retried = retryQuestions(examId, topicIds, Math.floor(opts.size * RETRY_SHARE), {
-    types: styleTypes(opts.style),
-    wholeExam: !scoped,
-  });
+  const retried = pickRetries(examId, topics, opts.size, { types: styleTypes(opts.style), wholeExam: !scoped });
+  const covered = topicsOf(retried);
+  const uncovered = topics.filter((t) => !covered.has(t.id)).length;
 
-  // With focus on and the whole exam chosen, ~12% of new questions revisit weak concepts from earlier exams (shared memory).
+  // With focus on and the whole exam chosen, ~12% of new questions revisit weak concepts from earlier exams (shared memory),
+  // but only when that still leaves room for one question per section of this exam.
   const weak = opts.adaptive && !scoped ? weakConcepts(examOwner(examId), 5, examId) : [];
   const pastTopics = weak.length
     ? (db
@@ -136,23 +136,68 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
         .all(...weak.map((c) => c.id), examId) as Topic[])
     : [];
   const fresh = opts.size - retried.length;
-  const pastCount = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
+  const wantedPast = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
+  const pastCount = fresh - wantedPast >= uncovered ? wantedPast : 0;
   // Every section of the chosen material gets a question; missed questions coming back already cover theirs.
-  const coverage = { last: lastPracticed(examId), covered: topicsOf(retried) };
+  const coverage = { last: lastPracticed(examId), covered };
   const plan = [...allocate(topics, fresh - pastCount, focus, coverage), ...allocate(pastTopics, pastCount, null)];
   savePlan(attemptId, { style: opts.style, size: opts.size, retried: retried.length, fresh, topics: topics.length });
 
-  const created: number[] = [];
-  await mapLimit(plan, 4, async ({ topic, count }) => {
-    // Reuse questions written earlier that were never answered (abandoned or skipped exams); only write new ones for the rest.
-    const reused = unusedQuestions(topic.id, opts.style, count);
-    created.push(...reused);
-    if (count - reused.length > 0) created.push(...(await generateForTopic(topic, count - reused.length, opts.style, focus?.get(topic.id) ?? [])));
-  });
-  if (created.length + retried.length === 0) throw new Error("No questions could be generated.");
+  const created = new Set<number>();
+  const failed: unknown[] = [];
+  const worked = new Set<number>();
+  const write = async ({ topic, count }: { topic: Topic; count: number }) => {
+    const before = created.size;
+    try {
+      // Reuse questions written earlier that were never answered (abandoned or skipped exams); only write new ones for the rest.
+      const reused = unusedQuestions(topic.id, opts.style, count).filter((id) => !created.has(id));
+      reused.forEach((id) => created.add(id));
+      if (count - reused.length > 0) {
+        for (const id of await generateForTopic(topic, count - reused.length, opts.style, focus?.get(topic.id) ?? [])) created.add(id);
+      }
+      // Only sections that delivered everything asked of them are used to fill any shortfall.
+      if (created.size - before >= count) worked.add(topic.id);
+    } catch (err) {
+      // One section failing shouldn't sink the exam; it stays unpractised, so it leads the next one.
+      failed.push(err);
+    }
+  };
+  await mapLimit(plan, 4, write);
+
+  // Fill any shortfall (a section failed, or the AI wrote fewer than asked) from the sections that worked.
+  const shortfall = opts.size - retried.length - created.size;
+  const working = plan.filter((p) => worked.has(p.topic.id)).map((p) => p.topic);
+  if (shortfall > 0 && working.length) await mapLimit(allocate(working, shortfall, focus), 4, write);
+
+  if (created.size + retried.length === 0) throw failed[0] instanceof Error ? failed[0] : new Error("No questions could be generated.");
 
   // Interleave topics so the exam doesn't run topic by topic.
   finishGeneration(attemptId, [...retried, ...created].sort(() => Math.random() - 0.5), new Set(retried));
+}
+
+/**
+ * Missed questions to bring back: most recent first, spread over as many sections as possible, capped at
+ * RETRY_SHARE of the exam and never so many that a section of the chosen material would be left without a question.
+ */
+function pickRetries(examId: number, topics: Topic[], size: number, opts: { types: string[]; wholeExam: boolean }): number[] {
+  const candidates = retryQuestions(examId, topics.map((t) => t.id), 1000, opts);
+  if (candidates.length === 0) return [];
+  const topicOf = new Map(
+    (db.prepare(`SELECT id, topic_id FROM questions WHERE id IN (${candidates.map(() => "?").join(",")})`).all(...candidates) as { id: number; topic_id: number | null }[]).map(
+      (r) => [r.id, r.topic_id],
+    ),
+  );
+  const seen = new Set<number | null>();
+  const firstPerTopic = candidates.filter((id) => !seen.has(topicOf.get(id) ?? null) && (seen.add(topicOf.get(id) ?? null), true));
+  const ordered = [...firstPerTopic, ...candidates.filter((id) => !firstPerTopic.includes(id))];
+  const picked = ordered.slice(0, Math.floor(size * RETRY_SHARE));
+  const inScope = new Set(topics.map((t) => t.id));
+  const uncoveredWith = (ids: number[]) => {
+    const cov = new Set(ids.map((id) => topicOf.get(id)).filter((t): t is number => t != null && inScope.has(t)));
+    return topics.length - cov.size;
+  };
+  while (picked.length > 0 && size - picked.length < uncoveredWith(picked)) picked.pop();
+  return picked;
 }
 
 /** What the exam is being built from, so the loading screen can show real steps while the AI writes. */
@@ -254,11 +299,18 @@ async function buildCaseSets(
   coverage: Parameters<typeof allocate>[3],
 ): Promise<number[][]> {
   const groups: number[][] = [];
+  let lastError: unknown = null;
   await mapLimit(allocate(topics, caseCount, focus, coverage), 3, async ({ topic, count }) => {
     const reused = unusedCases(topic.id, count);
     groups.push(...reused);
-    if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [])));
+    try {
+      if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [])));
+    } catch (err) {
+      // One section failing shouldn't sink the exam; it stays unpractised, so it leads the next one.
+      if (groups.length === 0) lastError = err;
+    }
   });
+  if (groups.length === 0 && lastError) throw lastError;
   return groups;
 }
 

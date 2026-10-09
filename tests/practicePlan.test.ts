@@ -166,6 +166,7 @@ describe("practice exam question selection", () => {
     const [answered, skipped] = [question(examId, topicIds[0]), question(examId, topicIds[1])];
     const a = attempt(examId, [answered, skipped]);
     answer(a, answered, true);
+    db.prepare("UPDATE attempts SET status = 'finished' WHERE id = ?").run(a);
     const last = lastPracticed(examId);
     expect(last.get(topicIds[0])).toBe(a);
     expect(last.has(topicIds[1])).toBe(false);
