@@ -56,7 +56,7 @@ export default async function Home() {
             <h1 className="text-[38px] leading-[0.98] font-extrabold tracking-[-0.035em] sm:text-[54px]">
               {hello}
               <br />
-              <span className="text-mint">{heroLine(todayTasks, nextTask)}</span>
+              <span className="text-hero-accent">{heroLine(todayTasks, nextTask)}</span>
             </h1>
             {next && progress && (
               <div className="flex items-center gap-[18px]">
@@ -68,8 +68,8 @@ export default async function Home() {
                 />
                 <RingLegend
                   items={[
-                    { color: "var(--mint)", label: `${next.name} readiness`, value: `${Math.round(progress.readiness * 100)}% ready` },
-                    ...(todayTasks.length ? [{ color: "var(--butter)", label: "Today's plan", value: `${doneToday} of ${todayTasks.length} done` }] : []),
+                    { color: "var(--hero-accent)", label: `${next.name} readiness`, value: `${Math.round(progress.readiness * 100)}% ready` },
+                    ...(todayTasks.length ? [{ color: "var(--hero-accent-2)", label: "Today's plan", value: `${doneToday} of ${todayTasks.length} done` }] : []),
                   ]}
                 />
               </div>
@@ -262,7 +262,7 @@ function Welcome({ hello }: { hello: string }) {
       <h1 className="text-[38px] leading-[0.98] font-extrabold tracking-[-0.035em] sm:text-[54px]">
         {hello}
         <br />
-        <span className="text-mint">welcome to your study buddy.</span>
+        <span className="text-hero-accent">welcome to your study buddy.</span>
       </h1>
       <ol className="grid gap-2.5 sm:grid-cols-3">
         {steps.map(([title, text], i) => (

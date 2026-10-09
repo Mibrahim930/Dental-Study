@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "./Toaster";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -87,6 +88,7 @@ export function CalendarSyncLink({ url }: { url: string }) {
           onClick={async () => {
             await navigator.clipboard.writeText(url);
             setCopied(true);
+            toast("Calendar link copied");
           }}
         >
           {copied ? "Copied" : "Copy"}

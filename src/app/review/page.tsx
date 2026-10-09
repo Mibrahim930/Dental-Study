@@ -114,7 +114,7 @@ export default function ReviewPage() {
           <div className="flex flex-wrap gap-2">
             <Link href="/" className="btn-primary btn-sm">Back to my exams</Link>
             <button
-              className="btn btn-sm underline-offset-4 hover:underline"
+              className="btn-ghost btn-sm text-on-lilac"
               onClick={() => {
                 setCards(null);
                 setDue(null);

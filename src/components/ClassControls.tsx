@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "./Toaster";
 
 async function post(url: string, body?: object) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -60,11 +61,12 @@ export function InviteCode({ code }: { code: string }) {
   return (
     <button
       type="button"
-      className="rounded-md bg-muted px-2 py-1 font-mono text-sm tracking-wider hover:bg-muted-strong"
+      className="rounded-[14px] bg-lilac px-3 py-1.5 font-mono text-[15px] font-bold tracking-wider text-on-lilac hover:brightness-95"
       title="Copy invite code"
       onClick={async () => {
         await navigator.clipboard.writeText(code);
         setCopied(true);
+        toast("Invite code copied");
       }}
     >
       {code} {copied ? "✓" : "⧉"}

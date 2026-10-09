@@ -2,8 +2,8 @@
 
 /** The app mark: a tooth whose crown doubles as an open book. `inverted` flips it for use on teal/dark surfaces. */
 export function Logo({ size = 40, inverted = false, className = "" }: { size?: number; inverted?: boolean; className?: string }) {
-  const tile = inverted ? "var(--mint)" : "var(--hero)";
-  const tooth = inverted ? "var(--hero)" : "var(--mint)";
+  const tile = inverted ? "var(--hero-accent)" : "var(--hero)";
+  const tooth = inverted ? "var(--hero)" : "var(--hero-accent)";
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden>
       <rect width="64" height="64" rx="18" fill={tile} />
@@ -32,8 +32,8 @@ export function DoubleRing({
   inner,
   center,
   size = 124,
-  outerColor = "var(--mint)",
-  innerColor = "var(--butter)",
+  outerColor = "var(--hero-accent)",
+  innerColor = "var(--hero-accent-2)",
   track = "var(--hero-track)",
   textColor = "currentColor",
   label,
@@ -128,7 +128,7 @@ export function optionClasses(state: OptionState): { row: string; key: string } 
     case "wrong":
       return { row: "border-coral bg-danger-soft", key: "bg-coral text-on-coral" };
     case "dim":
-      return { row: "border-transparent bg-muted opacity-55", key: "bg-card" };
+      return { row: "border-transparent bg-muted opacity-75", key: "bg-card" };
     default:
       return { row: "border-transparent bg-muted hover:bg-muted-strong", key: "bg-card" };
   }

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage } from "./SlideImage";
 import { Icon, ICONS, MasteryChip, optionClasses, Strip, type OptionState } from "./ui";
@@ -39,6 +39,7 @@ export function StudySession(props: {
   const [ending, setEnding] = useState(false);
   const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
   const [chatOpen, setChatOpen] = useState(false);
+  const closeChat = useCallback(() => setChatOpen(false), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,7 +216,7 @@ export function StudySession(props: {
           </div>
         </article>
 
-        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} open={chatOpen} onClose={() => setChatOpen(false)} />
+        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} open={chatOpen} onClose={closeChat} />
       </div>
 
       {/* Phone: floating button that opens the tutor as a bottom sheet. */}
@@ -333,7 +334,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn-primary btn-sm" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>Try again</button>
-          <button className="btn-sm btn underline-offset-4 hover:underline" onClick={onNext}>
+          <button className="btn-ghost btn-sm text-on-coral" onClick={onNext}>
             {isLast ? "Skip & finish session" : "Skip to next section →"}
           </button>
         </div>
@@ -481,7 +482,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
       {saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
       {answered && (
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
-          <div className="mb-1 text-[13px] font-extrabold text-mint">{chosen === q.correct_index ? "Correct" : `Why ${String.fromCharCode(65 + q.correct_index)}`}</div>
+          <div className="mb-1 text-[13px] font-extrabold text-hero-accent">{chosen === q.correct_index ? "Correct" : `Why ${String.fromCharCode(65 + q.correct_index)}`}</div>
           <div className="text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
             <ReactMarkdown>{q.explanation}</ReactMarkdown>
           </div>
@@ -516,11 +517,30 @@ function TutorChat({
   const [messages, setMessages] = useState<ChatMsg[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [desktop, setDesktop] = useState(true);
   const bottom = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, open]);
+
+  // On phones the tutor is a bottom sheet: closed means hidden from keyboard and screen readers; open is a dialog.
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => setDesktop(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (!open || desktop) return;
+    field.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, desktop, onClose]);
+  const sheet = !desktop;
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -551,6 +571,9 @@ function TutorChat({
       {open && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} aria-hidden />}
       <aside
         aria-label="Ask the tutor"
+        role={sheet && open ? "dialog" : undefined}
+        aria-modal={sheet && open ? true : undefined}
+        inert={sheet && !open}
         className={`fixed inset-x-0 bottom-0 z-50 flex h-[85vh] flex-col rounded-t-[32px] bg-nav text-white transition-transform duration-[280ms] ease-out lg:sticky lg:inset-auto lg:top-4 lg:z-auto lg:h-[calc(100vh-2rem)] lg:translate-y-0 lg:rounded-[28px] ${
           open ? "translate-y-0" : "translate-y-full"
         }`}
@@ -576,7 +599,7 @@ function TutorChat({
               className={`rounded-[20px] px-4 py-3 text-[15px] leading-relaxed ${m.role === "user" ? "ml-8 bg-mint font-semibold text-on-mint" : "mr-4 bg-white/10"}`}
             >
               {m.role === "assistant" ? (
-                <div className="[&_a]:text-mint [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
+                <div className="[&_a]:text-hero-accent [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
                   <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
                 </div>
               ) : (
@@ -588,7 +611,8 @@ function TutorChat({
         </div>
         <form onSubmit={send} className="flex gap-2 p-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
           <input
-            className="h-[50px] w-full rounded-2xl bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-nav-foreground focus:bg-white/15"
+            ref={field}
+            className="h-[50px] w-full rounded-2xl border-2 border-transparent bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-nav-foreground focus:border-hero-accent focus:bg-white/15"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask anything…"

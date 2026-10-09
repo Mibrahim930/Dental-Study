@@ -362,7 +362,7 @@ function open(): Database.Database {
   // One-time switch to the Color blocks redesign: everyone moves to it once; they can still pick another theme in Settings.
   if (!db.prepare("SELECT 1 FROM meta WHERE key = 'theme_default_blocks'").get()) {
     db.prepare("UPDATE users SET theme = 'blocks'").run();
-    db.prepare("INSERT INTO meta (key, value) VALUES ('theme_default_blocks', '1')").run();
+    db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('theme_default_blocks', '1')").run();
   }
   return db;
 }

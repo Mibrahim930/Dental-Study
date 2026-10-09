@@ -31,8 +31,11 @@
   /* Hero block (one per screen), the main action button and the floating nav. */
   --hero: #0f766e;
   --hero-foreground: #ffffff;
-  --hero-muted: #cfe9e3;
+  --hero-muted: #e2f3ef;
   --hero-track: rgb(255 255 255 / 0.16);
+  /* Bright accents on the hero and dark nav; not themed, so they stay visible in dark two-colour themes. */
+  --hero-accent: #b8f5e6;
+  --hero-accent-2: #ffd465;
   --action: #0f766e;
   --action-hover: #115e59;
   --action-foreground: #ffffff;
@@ -338,7 +341,8 @@
   --color-muted: var(--muted);
   --color-muted-strong: var(--muted-strong);
   --color-muted-foreground: var(--muted-foreground);
-  --color-subtle: var(--subtle);
+  /* Faint text still has to pass AA contrast, so it shares the muted foreground. */
+  --color-subtle: var(--muted-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-primary: var(--primary);
@@ -356,6 +360,8 @@
   --color-hero: var(--hero);
   --color-hero-foreground: var(--hero-foreground);
   --color-hero-muted: var(--hero-muted);
+  --color-hero-accent: var(--hero-accent);
+  --color-hero-accent-2: var(--hero-accent-2);
   --color-action: var(--action);
   --color-action-hover: var(--action-hover);
   --color-action-foreground: var(--action-foreground);
@@ -391,6 +397,13 @@
   :focus-visible {
     outline: 3px solid var(--primary);
     outline-offset: 2px;
+  }
+  /* On teal/dark surfaces the primary colour can match the background; use the bright accent there. */
+  .card-hero :focus-visible,
+  .bg-hero :focus-visible,
+  .bg-nav :focus-visible,
+  .bg-nav:focus-visible {
+    outline-color: var(--hero-accent);
   }
   @media (prefers-reduced-motion: reduce) {
     *,

@@ -54,7 +54,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
             {keyProblem ? (
               <>
                 <Link href="/settings" className="btn-primary btn-sm">Update key</Link>
-                <Link href="/help/api-keys" className="btn btn-sm underline-offset-4 hover:underline">How to fix</Link>
+                <Link href="/help/api-keys" className="btn-ghost btn-sm text-on-coral">How to fix</Link>
               </>
             ) : (
               <Link href={`/exams/${attempt.exam_id}`} className="btn-primary btn-sm">Back to exam</Link>
@@ -179,7 +179,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
       />
 
       <div className="grid grid-cols-[1fr_2fr] gap-2">
-        <button className="btn btn-lg bg-card text-foreground hover:bg-muted-strong" disabled={index === 0} onClick={() => setIndex(index - 1)}>
+        <button className="btn-secondary btn-lg bg-card" disabled={index === 0} onClick={() => setIndex(index - 1)}>
           ← Back
         </button>
         {index + 1 < questions.length ? (
@@ -213,7 +213,7 @@ function Writing({ view }: { view: AttemptView }) {
         <div className="flex items-center gap-4">
           <svg width="56" height="56" viewBox="0 0 56 56" className="shrink-0 animate-spin" aria-hidden>
             <circle cx="28" cy="28" r="22" fill="none" stroke="rgb(255 255 255 / 0.12)" strokeWidth="7" />
-            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--mint)" strokeWidth="7" strokeLinecap="round" strokeDasharray="40 138" />
+            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--hero-accent)" strokeWidth="7" strokeLinecap="round" strokeDasharray="40 138" />
           </svg>
           <div>
             <h1 className="text-[24px] leading-tight font-extrabold tracking-tight">Writing your practice exam…</h1>
@@ -321,7 +321,7 @@ function Results({ view }: { view: AttemptView }) {
         <div>
           <h1 className="text-[32px] leading-[1.02] font-extrabold tracking-[-0.035em] sm:text-[44px]">{headline}</h1>
           {diff != null && diff !== 0 && (
-            <p className="mt-1.5 text-[17px] font-bold text-mint">
+            <p className="mt-1.5 text-[17px] font-bold text-hero-accent">
               {diff > 0 ? `Up ${diff} points since last time.` : `${Math.abs(diff)} points below last time. That's what practice is for.`}
             </p>
           )}
@@ -337,13 +337,13 @@ function Results({ view }: { view: AttemptView }) {
             <div className="flex flex-col gap-0.5">
               <span className="text-[13px] font-semibold text-hero-muted">Score</span>
               <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-mint" aria-hidden /> {Math.round(score * 100)}%
+                <span className="h-3 w-3 rounded-[4px] bg-hero-accent" aria-hidden /> {Math.round(score * 100)}%
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[13px] font-semibold text-hero-muted">Right and confident</span>
               <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-butter" aria-hidden /> {confidentRight} of {total}
+                <span className="h-3 w-3 rounded-[4px] bg-hero-accent-2" aria-hidden /> {confidentRight} of {total}
               </span>
             </div>
           </div>

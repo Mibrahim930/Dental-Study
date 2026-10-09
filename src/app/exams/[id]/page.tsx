@@ -116,7 +116,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               inner={progress.studied}
               center={progress.mastery == null ? "New" : `${Math.round(progress.mastery * 100)}%`}
               outerColor="currentColor"
-              innerColor="var(--card)"
+              innerColor="color-mix(in srgb, currentColor 40%, transparent)"
               track="rgb(0 0 0 / 0.12)"
               label={`Mastery ${progress.mastery == null ? "not tested yet" : `${Math.round(progress.mastery * 100)} percent`}, ${Math.round(progress.studied * 100)} percent of topics studied`}
             />
@@ -125,7 +125,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                 <span className="h-3 w-3 rounded-[4px] bg-current" aria-hidden /> Mastery {progress.mastery == null ? "–" : pct(progress.mastery)}
               </span>
               <span className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-[4px] bg-card" aria-hidden /> {Math.round(progress.studied * topics.length)}/{topics.length} topics studied
+                <span className="h-3 w-3 rounded-[4px] bg-current opacity-40" aria-hidden /> {Math.round(progress.studied * topics.length)}/{topics.length} topics studied
               </span>
             </div>
           </div>
@@ -158,7 +158,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                     {started ? "Continue" : "Start studying"} <Icon d={ICONS.arrowRight} />
                   </Link>
                   {started && (
-                    <Link href={`/exams/${id}/study?restart=1`} className="btn btn-lg bg-white/10 text-hero-foreground hover:bg-white/20">
+                    <Link href={`/exams/${id}/study?restart=1`} className="btn-secondary btn-lg bg-white/10 text-hero-foreground hover:bg-white/20">
                       Start over
                     </Link>
                   )}
@@ -168,7 +168,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                     <div className="text-[13px] font-bold text-hero-muted">Session notes</div>
                     {notes.map((s) => (
                       <p key={s.id} className="rounded-[18px] bg-white/10 p-3.5 text-[15px] leading-relaxed">
-                        <span className="font-bold text-mint">{s.ended_at?.slice(5, 10).replace("-", "/")} </span>
+                        <span className="font-bold text-hero-accent">{s.ended_at?.slice(5, 10).replace("-", "/")} </span>
                         {s.summary}
                       </p>
                     ))}
@@ -215,7 +215,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                         <div className="min-w-0 flex-1">
                           <div className="leading-snug font-bold">
                             {t.title}
-                            {t.emphasized ? <span className={isCurrent ? "text-butter" : "text-warning"} title="Emphasized in lecture"> ★</span> : null}
+                            {t.emphasized ? <span className={isCurrent ? "text-hero-accent-2" : "text-warning"} title="Emphasized in lecture"> ★</span> : null}
                           </div>
                           <div className={`text-[13px] font-medium ${isCurrent ? "text-hero-muted" : "text-muted-foreground"}`}>
                             {JSON.parse(t.page_ids).length} slides{isCurrent ? " · you're here" : ""}

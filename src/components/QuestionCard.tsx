@@ -139,7 +139,7 @@ export function QuestionCard({
 
       {revealed && (
         <section className="rounded-[28px] bg-hero p-5 text-hero-foreground sm:p-6">
-          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-mint">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-hero-accent">
             {selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : `✗ Why ${String.fromCharCode(65 + q.correct_index!)}`}
             {q.confidence && <span className="font-semibold text-hero-muted">· {CONFIDENCE_TEXT[q.confidence]}</span>}
           </div>
@@ -151,7 +151,7 @@ export function QuestionCard({
           )}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
             {q.source ? (
-              <button className="text-sm font-extrabold text-mint" onClick={() => setShowSource((s) => !s)}>
+              <button className="text-sm font-extrabold text-hero-accent" onClick={() => setShowSource((s) => !s)}>
                 Source: {q.source.filename}, slide {q.source.page_number} {showSource ? "↑" : "→"}
               </button>
             ) : (
