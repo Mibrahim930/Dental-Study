@@ -1,13 +1,16 @@
 @import "tailwindcss";
 
-/* Theme colours. Pages use these names (bg-card, text-muted-foreground, bg-primary…) instead of raw
-   palette colours, so light and dark mode both come from this one place. */
+/* Theme colours. Pages use these names (bg-card, text-muted-foreground, bg-primary, bg-mint…) instead of raw
+   palette colours, so light, dark and every theme come from this one place.
+   Themes (users.theme → <html data-theme>): "blocks" (Color blocks, default), "classic", "evergreen", "slate".
+   The layout and shapes are the same in every theme; themes only change colours. */
 :root {
   color-scheme: light;
   --background: #f6f7f9;
   --foreground: #0f172a;
   --card: #ffffff;
-  --muted: #f1f5f9;
+  --card-border: transparent;
+  --muted: #eef1f5;
   --muted-strong: #e2e8f0;
   --muted-foreground: #556070;
   --subtle: #94a3b8;
@@ -25,7 +28,152 @@
   --warning-soft: #fffbeb;
   --info: #3730a3;
   --info-soft: #eef2ff;
-  --shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
+  /* Hero block (one per screen), the main action button and the floating nav. */
+  --hero: #0f766e;
+  --hero-foreground: #ffffff;
+  --hero-muted: #cfe9e3;
+  --hero-track: rgb(255 255 255 / 0.16);
+  --action: #0f766e;
+  --action-hover: #115e59;
+  --action-foreground: #ffffff;
+  --nav: #0f172a;
+  --nav-foreground: #a8b3c2;
+  --slide: #0f1b2d;
+  /* Meaning blocks: fill + ink. */
+  --mint: #b8f5e6;
+  --on-mint: #06332d;
+  --coral: #ff8a73;
+  --on-coral: #3a0b00;
+  --butter: #ffd465;
+  --on-butter: #2b2100;
+  --lilac: #c9b8ff;
+  --on-lilac: #1d0e4a;
+  --sky: #a9d8ff;
+  --on-sky: #062a47;
+  --stone: #d9d5ca;
+  --on-stone: #2e2b24;
+}
+
+:root[data-theme="blocks"] {
+  --background: #efede6;
+  --foreground: #161616;
+  --card: #ffffff;
+  --muted: #efede6;
+  --muted-strong: #e4e1d8;
+  --muted-foreground: #67645b;
+  --subtle: #9a968b;
+  --border: #e4e1d8;
+  --input: #d9d5ca;
+  --primary: #0e5e55;
+  --primary-hover: #0a4a43;
+  --primary-foreground: #ffffff;
+  --primary-soft: #ddf8f1;
+  --danger: #b3243f;
+  --danger-soft: #ffe4dd;
+  --success: #157a4a;
+  --success-soft: #ddf8f1;
+  --warning: #855600;
+  --warning-soft: #fff1c2;
+  --info: #4b2fa3;
+  --info-soft: #ede6ff;
+  --hero: #0e5e55;
+  --hero-muted: #cfe9e3;
+  --action: #161616;
+  --action-hover: #33322e;
+  --action-foreground: #ffffff;
+  --nav: #161616;
+  --nav-foreground: #a8a59c;
+}
+
+/* Evergreen and Slate are two-colour: one ink on one paper. Meaning blocks use soft tints of the toned status colours. */
+:root[data-theme="evergreen"] {
+  --background: #f2efe8;
+  --foreground: #123021;
+  --card: #faf8f3;
+  --card-border: #e2ddd1;
+  --muted: #e9e5db;
+  --muted-strong: #dcd7ca;
+  --muted-foreground: #2f4a3b;
+  --subtle: #6b7d70;
+  --border: #dad5c8;
+  --input: #bdb8a9;
+  --primary: #123021;
+  --primary-hover: #1c4231;
+  --primary-foreground: #f2efe8;
+  --primary-soft: #e2e6da;
+  --danger: #9b2c2c;
+  --danger-soft: #f3e1dc;
+  --success: #1e6b45;
+  --success-soft: #dde9de;
+  --warning: #855600;
+  --warning-soft: #f2e6c8;
+  --info: #2e4a6b;
+  --info-soft: #e1e6ea;
+  --hero: #123021;
+  --hero-foreground: #f2efe8;
+  --hero-muted: #c9d6cc;
+  --action: #123021;
+  --action-hover: #1c4231;
+  --action-foreground: #f2efe8;
+  --nav: #123021;
+  --nav-foreground: #b9c7bd;
+  --mint: #d5e8da;
+  --on-mint: #123021;
+  --coral: #f0d5cd;
+  --on-coral: #5e1a1a;
+  --butter: #efe0bb;
+  --on-butter: #4a3300;
+  --lilac: #dcdfe8;
+  --on-lilac: #1f2f47;
+  --sky: #d9e3ea;
+  --on-sky: #1f2f47;
+  --stone: #e2ddd1;
+  --on-stone: #123021;
+}
+
+:root[data-theme="slate"] {
+  --background: #f4f4f2;
+  --foreground: #2b2f36;
+  --card: #fbfbfa;
+  --card-border: #e3e3df;
+  --muted: #eaeae7;
+  --muted-strong: #dededa;
+  --muted-foreground: #45484d;
+  --subtle: #7a7c80;
+  --border: #dfdfdb;
+  --input: #c4c5c3;
+  --primary: #2b2f36;
+  --primary-hover: #3a3f48;
+  --primary-foreground: #f4f4f2;
+  --primary-soft: #e6e7e8;
+  --danger: #a3333d;
+  --danger-soft: #f3e2e3;
+  --success: #2f6b4f;
+  --success-soft: #e0ebe4;
+  --warning: #855600;
+  --warning-soft: #f2e8cf;
+  --info: #34507a;
+  --info-soft: #e2e7ef;
+  --hero: #2b2f36;
+  --hero-foreground: #f4f4f2;
+  --hero-muted: #c9cbcf;
+  --action: #2b2f36;
+  --action-hover: #3a3f48;
+  --action-foreground: #f4f4f2;
+  --nav: #2b2f36;
+  --nav-foreground: #b4b7bc;
+  --mint: #d8e8de;
+  --on-mint: #1d4532;
+  --coral: #f0d8da;
+  --on-coral: #5c1c23;
+  --butter: #efe3c4;
+  --on-butter: #4a3300;
+  --lilac: #dde2ec;
+  --on-lilac: #22344f;
+  --sky: #dbe4ef;
+  --on-sky: #22344f;
+  --stone: #e3e3df;
+  --on-stone: #2b2f36;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -52,145 +200,16 @@
     --warning-soft: rgb(245 158 11 / 0.14);
     --info: #a5b4fc;
     --info-soft: rgb(99 102 241 / 0.16);
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
-  }
-}
-
-/* Themes picked in Settings (users.theme → <html data-theme>). "classic" is the :root palette above.
-   Evergreen and Slate are two-colour: one ink on one paper, with status colours toned to match. */
-:root[data-theme="evergreen"] {
-  color-scheme: light;
-  --background: #f2efe8;
-  --foreground: #123021;
-  --card: #faf8f3;
-  --muted: #e9e5db;
-  --muted-strong: #dcd7ca;
-  --muted-foreground: #3f5649;
-  --subtle: #778679;
-  --border: #dad5c8;
-  --input: #bdb8a9;
-  --primary: #123021;
-  --primary-hover: #1c4231;
-  --primary-foreground: #f2efe8;
-  --primary-soft: #e2e6da;
-  --danger: #9b2c2c;
-  --danger-soft: #f3e1dc;
-  --success: #1e6b45;
-  --success-soft: #dde9de;
-  --warning: #855600;
-  --warning-soft: #f2e6c8;
-  --info: #2e4a6b;
-  --info-soft: #e1e6ea;
-  --shadow: none;
-}
-
-:root[data-theme="slate"] {
-  color-scheme: light;
-  --background: #f4f4f2;
-  --foreground: #2b2f36;
-  --card: #fbfbfa;
-  --muted: #eaeae7;
-  --muted-strong: #dededa;
-  --muted-foreground: #535659;
-  --subtle: #86888b;
-  --border: #dfdfdb;
-  --input: #c4c5c3;
-  --primary: #2b2f36;
-  --primary-hover: #3a3f48;
-  --primary-foreground: #f4f4f2;
-  --primary-soft: #e6e7e8;
-  --danger: #a3333d;
-  --danger-soft: #f3e2e3;
-  --success: #2f6b4f;
-  --success-soft: #e0ebe4;
-  --warning: #855600;
-  --warning-soft: #f2e8cf;
-  --info: #34507a;
-  --info-soft: #e2e7ef;
-  --shadow: none;
-}
-
-:root[data-theme="blocks"] {
-  color-scheme: light;
-  --background: #efede6;
-  --foreground: #161616;
-  --card: #ffffff;
-  --muted: #f2f0ea;
-  --muted-strong: #e4e1d8;
-  --muted-foreground: #67645b;
-  --subtle: #9a968b;
-  --border: #e4e1d8;
-  --input: #d9d5ca;
-  --primary: #0e5e55;
-  --primary-hover: #0a4a43;
-  --primary-foreground: #ffffff;
-  --primary-soft: #ddf8f1;
-  --danger: #b3243f;
-  --danger-soft: #ffe4dd;
-  --success: #157a4a;
-  --success-soft: #ddf8f1;
-  --warning: #855600;
-  --warning-soft: #fff1c2;
-  --info: #4b2fa3;
-  --info-soft: #ede6ff;
-  --shadow: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="evergreen"] {
-    color-scheme: dark;
-    --background: #0d1710;
-    --foreground: #d2e5d6;
-    --card: #132019;
-    --muted: #1a2a21;
-    --muted-strong: #243629;
-    --muted-foreground: #9db3a3;
-    --subtle: #6e8475;
-    --border: #233328;
-    --input: #34473a;
-    --primary: #d2e5d6;
-    --primary-hover: #e6f1e8;
-    --primary-foreground: #0d1710;
-    --primary-soft: rgb(210 229 214 / 0.1);
-    --danger: #f08a8a;
-    --danger-soft: rgb(240 138 138 / 0.14);
-    --success: #7fd3a0;
-    --success-soft: rgb(127 211 160 / 0.14);
-    --warning: #e8c170;
-    --warning-soft: rgb(232 193 112 / 0.14);
-    --info: #a9c4e8;
-    --info-soft: rgb(169 196 232 / 0.14);
-    --shadow: none;
-  }
-
-  :root[data-theme="slate"] {
-    color-scheme: dark;
-    --background: #14161a;
-    --foreground: #e6e7e9;
-    --card: #1b1e23;
-    --muted: #23272d;
-    --muted-strong: #2e333a;
-    --muted-foreground: #a3a6ab;
-    --subtle: #6f737a;
-    --border: #2a2e35;
-    --input: #3b4049;
-    --primary: #e6e7e9;
-    --primary-hover: #ffffff;
-    --primary-foreground: #14161a;
-    --primary-soft: rgb(230 231 233 / 0.1);
-    --danger: #f28b95;
-    --danger-soft: rgb(242 139 149 / 0.14);
-    --success: #7dcfa3;
-    --success-soft: rgb(125 207 163 / 0.14);
-    --warning: #e8c170;
-    --warning-soft: rgb(232 193 112 / 0.14);
-    --info: #a8bfe6;
-    --info-soft: rgb(168 191 230 / 0.14);
-    --shadow: none;
+    --hero: #134e4a;
+    --hero-muted: #bfe3db;
+    --action: #e6ebf1;
+    --action-hover: #ffffff;
+    --action-foreground: #0b0f14;
+    --nav: #1d2530;
+    --nav-foreground: #9aa6b5;
   }
 
   :root[data-theme="blocks"] {
-    color-scheme: dark;
     --background: #121211;
     --foreground: #f4f2ec;
     --card: #1c1c1a;
@@ -212,7 +231,103 @@
     --warning-soft: rgb(255 212 101 / 0.16);
     --info: #c9b8ff;
     --info-soft: rgb(201 184 255 / 0.16);
-    --shadow: none;
+    --hero: #134e47;
+    --hero-muted: #bfe3db;
+    --action: #f4f2ec;
+    --action-hover: #ffffff;
+    --action-foreground: #161616;
+    --nav: #2a2a27;
+    --nav-foreground: #a8a59c;
+  }
+
+  :root[data-theme="evergreen"] {
+    --background: #0d1710;
+    --foreground: #d2e5d6;
+    --card: #132019;
+    --card-border: #1f3026;
+    --muted: #1a2a21;
+    --muted-strong: #243629;
+    --muted-foreground: #a9bdae;
+    --subtle: #6e8475;
+    --border: #233328;
+    --input: #34473a;
+    --primary: #d2e5d6;
+    --primary-hover: #e6f1e8;
+    --primary-foreground: #0d1710;
+    --primary-soft: rgb(210 229 214 / 0.1);
+    --danger: #f08a8a;
+    --danger-soft: rgb(240 138 138 / 0.14);
+    --success: #7fd3a0;
+    --success-soft: rgb(127 211 160 / 0.14);
+    --warning: #e8c170;
+    --warning-soft: rgb(232 193 112 / 0.14);
+    --info: #a9c4e8;
+    --info-soft: rgb(169 196 232 / 0.14);
+    --hero: #1c3326;
+    --hero-foreground: #e6f1e8;
+    --hero-muted: #a9bdae;
+    --action: #d2e5d6;
+    --action-hover: #e6f1e8;
+    --action-foreground: #0d1710;
+    --nav: #1a2a21;
+    --nav-foreground: #a9bdae;
+    --mint: #2a4a36;
+    --on-mint: #d2f0dc;
+    --coral: #4a2a26;
+    --on-coral: #f6d3cc;
+    --butter: #4a3d1e;
+    --on-butter: #f4e2b4;
+    --lilac: #2c3446;
+    --on-lilac: #d6def0;
+    --sky: #26384a;
+    --on-sky: #d3e2f0;
+    --stone: #2a332c;
+    --on-stone: #d2e5d6;
+  }
+
+  :root[data-theme="slate"] {
+    --background: #14161a;
+    --foreground: #e6e7e9;
+    --card: #1b1e23;
+    --card-border: #272b31;
+    --muted: #23272d;
+    --muted-strong: #2e333a;
+    --muted-foreground: #b2b5ba;
+    --subtle: #6f737a;
+    --border: #2a2e35;
+    --input: #3b4049;
+    --primary: #e6e7e9;
+    --primary-hover: #ffffff;
+    --primary-foreground: #14161a;
+    --primary-soft: rgb(230 231 233 / 0.1);
+    --danger: #f28b95;
+    --danger-soft: rgb(242 139 149 / 0.14);
+    --success: #7dcfa3;
+    --success-soft: rgb(125 207 163 / 0.14);
+    --warning: #e8c170;
+    --warning-soft: rgb(232 193 112 / 0.14);
+    --info: #a8bfe6;
+    --info-soft: rgb(168 191 230 / 0.14);
+    --hero: #2a2f37;
+    --hero-foreground: #f4f4f2;
+    --hero-muted: #b2b5ba;
+    --action: #e6e7e9;
+    --action-hover: #ffffff;
+    --action-foreground: #14161a;
+    --nav: #23272d;
+    --nav-foreground: #b2b5ba;
+    --mint: #24423a;
+    --on-mint: #d3efe4;
+    --coral: #482a2e;
+    --on-coral: #f6d5d8;
+    --butter: #473c22;
+    --on-butter: #f2e3bb;
+    --lilac: #2e3448;
+    --on-lilac: #d9def0;
+    --sky: #283749;
+    --on-sky: #d5e2f0;
+    --stone: #2c2f34;
+    --on-stone: #e6e7e9;
   }
 }
 
@@ -238,7 +353,28 @@
   --color-warning-soft: var(--warning-soft);
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
-  --font-sans: var(--font-geist-sans);
+  --color-hero: var(--hero);
+  --color-hero-foreground: var(--hero-foreground);
+  --color-hero-muted: var(--hero-muted);
+  --color-action: var(--action);
+  --color-action-hover: var(--action-hover);
+  --color-action-foreground: var(--action-foreground);
+  --color-nav: var(--nav);
+  --color-nav-foreground: var(--nav-foreground);
+  --color-slide: var(--slide);
+  --color-mint: var(--mint);
+  --color-on-mint: var(--on-mint);
+  --color-coral: var(--coral);
+  --color-on-coral: var(--on-coral);
+  --color-butter: var(--butter);
+  --color-on-butter: var(--on-butter);
+  --color-lilac: var(--lilac);
+  --color-on-lilac: var(--on-lilac);
+  --color-sky: var(--sky);
+  --color-on-sky: var(--on-sky);
+  --color-stone: var(--stone);
+  --color-on-stone: var(--on-stone);
+  --font-sans: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
 }
 
@@ -253,32 +389,70 @@
     color: var(--foreground);
   }
   :focus-visible {
-    outline: 2px solid var(--primary);
+    outline: 3px solid var(--primary);
     outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @utility btn {
-  @apply inline-flex min-h-9 items-center justify-center gap-2 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
+  @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl px-5 py-2 text-[15px] font-bold transition-[background-color,transform] duration-150 select-none active:scale-[.97] disabled:pointer-events-none disabled:opacity-50;
 }
 
 @layer components {
-  .card { @apply rounded-xl border border-border bg-card p-5 shadow-[var(--shadow)]; }
-  a.card { @apply transition-colors hover:border-primary/50; }
-  .btn-primary { @apply btn bg-primary text-primary-foreground hover:bg-primary-hover; }
-  .btn-secondary { @apply btn border border-input bg-card text-foreground hover:bg-muted; }
-  .btn-ghost { @apply btn text-muted-foreground hover:bg-muted hover:text-foreground; }
-  .input { @apply h-9 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-subtle focus:border-primary focus:ring-3 focus:ring-primary/20; }
-  textarea.input { @apply h-auto py-2; }
-  .label { @apply mb-1.5 block text-sm font-medium text-foreground; }
-  .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
-  .page-title { @apply text-2xl font-semibold tracking-tight; }
-  .section-title { @apply text-lg font-semibold tracking-tight; }
-  .prose-study { @apply text-[15px] leading-relaxed text-foreground; }
-  .prose-study p { @apply my-2; }
-  .prose-study ul { @apply my-2 list-disc pl-5; }
-  .prose-study ol { @apply my-2 list-decimal pl-5; }
-  .prose-study strong { @apply font-semibold; }
-  .prose-study h1, .prose-study h2, .prose-study h3 { @apply mt-3 mb-1 font-semibold; }
+  /* Cards: flat, rounded, no shadow. Two-colour themes add a hairline so cards still read on paper. */
+  .card { @apply rounded-[28px] border border-[var(--card-border)] bg-card p-5 sm:p-6; }
+  a.card { @apply transition-colors hover:bg-muted/60; }
+  .card-hero { @apply rounded-[32px] bg-hero p-6 text-hero-foreground sm:rounded-[36px] sm:p-8; }
+  .tile { @apply rounded-[26px] p-5; }
+  .cb-mint { @apply bg-mint text-on-mint; }
+  .cb-coral { @apply bg-coral text-on-coral; }
+  .cb-butter { @apply bg-butter text-on-butter; }
+  .cb-lilac { @apply bg-lilac text-on-lilac; }
+  .cb-sky { @apply bg-sky text-on-sky; }
+  .cb-stone { @apply bg-stone text-on-stone; }
+
+  .btn-primary { @apply btn bg-action text-action-foreground hover:bg-action-hover; }
+  .btn-hero { @apply btn bg-mint text-on-mint hover:brightness-95; }
+  .btn-secondary { @apply btn bg-muted text-foreground hover:bg-muted-strong; }
+  .btn-ghost { @apply btn text-muted-foreground underline-offset-4 hover:text-foreground hover:underline; }
+  .btn-danger { @apply btn bg-danger-soft text-danger hover:brightness-95; }
+  .btn-sm { @apply min-h-[38px] rounded-xl px-4 text-sm; }
+  .btn-lg { @apply min-h-[54px] rounded-[18px] px-6 text-base; }
+
+  .input { @apply h-[50px] w-full rounded-2xl border-2 border-transparent bg-muted px-4 text-[15px] text-foreground outline-none transition-colors placeholder:text-subtle focus:border-foreground focus:bg-card; }
+  textarea.input { @apply h-auto py-3; }
+  .label { @apply mb-1.5 block text-[13px] font-bold text-muted-foreground; }
+  .badge { @apply inline-flex items-center rounded-[10px] px-2 py-0.5 text-[13px] font-extrabold; }
+  .chip { @apply inline-flex items-center gap-1 rounded-[10px] px-2.5 py-1 text-[13px] font-extrabold; }
+
+  .page-title { @apply text-[34px] leading-[1.02] font-extrabold tracking-[-0.035em] sm:text-[44px]; }
+  .section-title { @apply text-[22px] leading-tight font-extrabold tracking-[-0.03em] sm:text-[26px]; }
+  .eyebrow { @apply text-[13px] font-bold text-muted-foreground; }
+  .big-number { @apply text-[44px] leading-[0.9] font-extrabold tracking-[-0.04em]; }
+
+  /* Segmented buttons: selected is filled with the action colour. */
+  .seg { @apply inline-flex min-h-[46px] items-center justify-center rounded-[14px] bg-muted px-4 text-[15px] font-bold text-foreground transition-colors hover:bg-muted-strong; }
+  .seg[aria-pressed="true"] { @apply bg-action text-action-foreground; }
+
+  /* Progress */
+  .bar { @apply h-2 overflow-hidden rounded-full bg-muted; }
+  .bar > span { @apply block h-full rounded-full transition-[width] duration-500; }
+
+  .prose-study { @apply max-w-[68ch] text-[17px] leading-[1.6] text-foreground; }
+  .prose-study p { @apply my-3; }
+  .prose-study ul { @apply my-3 list-disc pl-5; }
+  .prose-study ol { @apply my-3 list-decimal pl-5; }
+  .prose-study strong { @apply font-bold; }
+  .prose-study h1, .prose-study h2, .prose-study h3 { @apply mt-4 mb-1 font-extrabold tracking-tight; }
   .prose-study code { @apply rounded bg-muted px-1 py-0.5 text-[0.9em]; }
+
+  .shimmer { @apply animate-pulse rounded-2xl bg-muted; }
 }

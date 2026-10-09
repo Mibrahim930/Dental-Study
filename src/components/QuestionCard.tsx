@@ -2,6 +2,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
+import { optionClasses, type OptionState } from "./ui";
 
 export type QuestionData = {
   id: number;
@@ -31,18 +32,30 @@ const BOX_LABELS: Record<string, string> = {
   findings: "Findings",
 };
 
+const CONFIDENCE_TEXT = { guess: "You guessed", unsure: "You were unsure", sure: "You were confident" } as const;
+
+/**
+ * One question, laid out as separate blocks: the case (lilac), the patient box, the clinical image,
+ * the question with its options, then the explanation (teal) once revealed.
+ */
 export function QuestionCard({
   q,
   onChoose,
   pending,
   header,
+  tag,
   belowOptions,
+  practice = false,
 }: {
   q: QuestionData;
   onChoose?: (i: number) => void;
   pending?: number | null;
   header?: React.ReactNode;
+  /** Small label such as "↺ Missed last time", shown on the case block (or above the question). */
+  tag?: React.ReactNode;
   belowOptions?: React.ReactNode;
+  /** In a practice exam, a missed question comes back in the next exam; say so under the explanation. */
+  practice?: boolean;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
@@ -59,85 +72,103 @@ export function QuestionCard({
     setFlagged(true);
   }
 
+  const stateOf = (i: number): OptionState =>
+    revealed ? (i === q.correct_index ? "correct" : i === selected ? "wrong" : "dim") : i === selected ? "selected" : "default";
+
   return (
-    <div className="card space-y-4">
-      {header}
+    <>
       {q.caseInfo && (
-        <div className="rounded-lg bg-info-soft px-3 py-2 text-sm text-info">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-info">
-            Case {q.caseInfo.number} · Question {q.caseInfo.index} of {q.caseInfo.size}
+        <section className="tile cb-lilac flex flex-col gap-2 rounded-[28px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] font-extrabold">
+              Case set {q.caseInfo.number} · question {q.caseInfo.index} of {q.caseInfo.size}
+            </span>
+            {tag}
           </div>
-          {q.caseInfo.scenario}
-        </div>
+          <p className="text-base leading-normal font-medium">{q.caseInfo.scenario}</p>
+        </section>
       )}
+
       {q.patient_box && (
-        <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-info/30 bg-info-soft p-3 text-sm sm:grid-cols-[150px_1fr]">
-          {Object.entries(q.patient_box).map(([k, v]) => (
-            <div key={k} className="contents">
-              <dt className="font-medium text-info">{BOX_LABELS[k] ?? k}</dt>
-              <dd className="text-foreground">{v}</dd>
+        <section aria-label="Patient" className="card flex flex-col py-1.5">
+          {Object.entries(q.patient_box).map(([k, v], i, all) => (
+            <div key={k} className={`grid grid-cols-[112px_minmax(0,1fr)] gap-2.5 py-3 sm:grid-cols-[160px_minmax(0,1fr)] ${i < all.length - 1 ? "border-b border-border" : ""}`}>
+              <span className="text-[13px] font-bold text-muted-foreground">{BOX_LABELS[k] ?? k}</span>
+              <span className={`text-[15px] leading-relaxed ${k === "allergies" ? "font-bold" : ""}`}>{v}</span>
             </div>
           ))}
-        </dl>
+        </section>
       )}
+
       {q.image && (
-        <SlideImage
-          pageId={q.image.page_id}
-          aspect={q.image.aspect}
-          crop={revealed ? null : (q.image.crop as CropBox | null)}
-          alt="Clinical image for this question"
-        />
+        <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
+          <SlideImage
+            pageId={q.image.page_id}
+            aspect={q.image.aspect}
+            crop={revealed ? null : (q.image.crop as CropBox | null)}
+            alt="Clinical image for this question"
+          />
+        </figure>
       )}
-      <p className="text-[15px] font-medium leading-relaxed">{q.stem}</p>
-      <div className="grid gap-2">
+
+      <section className="card flex flex-col gap-2.5">
+        {header}
+        {tag && !q.caseInfo && <div>{tag}</div>}
+        <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">{q.stem}</p>
         {q.options.map((o, i) => {
-          let style = "border-input hover:bg-muted";
-          if (revealed) {
-            if (i === q.correct_index) style = "border-success bg-success-soft";
-            else if (i === selected) style = "border-danger bg-danger-soft";
-            else style = "border-border text-muted-foreground";
-          } else if (i === selected) style = "border-primary bg-primary-soft";
+          const s = optionClasses(stateOf(i));
           return (
             <button
               key={i}
               disabled={!onChoose}
               onClick={() => onChoose?.(i)}
-              className={`rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${style}`}
+              aria-pressed={!revealed && onChoose ? i === selected : undefined}
+              className={`flex min-h-[58px] items-center gap-3 rounded-[18px] border-2 px-3.5 py-3 text-left transition-colors disabled:cursor-default ${s.row}`}
             >
-              <span className="mr-2 font-medium">{String.fromCharCode(65 + i)}.</span>
-              {o}
+              <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] text-sm font-extrabold ${s.key}`}>
+                {String.fromCharCode(65 + i)}
+              </span>
+              <span className="flex-1 text-base leading-snug font-semibold">{o}</span>
+              {revealed && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+              {revealed && i === selected && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Your answer</span>}
             </button>
           );
         })}
-      </div>
-      {belowOptions}
+        {belowOptions}
+      </section>
+
       {revealed && (
-        <div className="space-y-2 rounded-lg bg-muted p-3 text-sm">
-          <p className="font-semibold">
-            {selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : "✗ Incorrect"}
-            {q.confidence && (
-              <span className="ml-2 font-normal text-muted-foreground">
-                · you said {q.confidence === "guess" ? "you guessed" : q.confidence === "unsure" ? "you were unsure" : "you were confident"}
-              </span>
-            )}
-          </p>
-          <div className="prose-study text-sm">
+        <section className="rounded-[28px] bg-hero p-5 text-hero-foreground sm:p-6">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-mint">
+            {selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : `✗ Why ${String.fromCharCode(65 + q.correct_index!)}`}
+            {q.confidence && <span className="font-semibold text-hero-muted">· {CONFIDENCE_TEXT[q.confidence]}</span>}
+          </div>
+          <div className="mt-1.5 text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
             <ReactMarkdown>{q.explanation ?? ""}</ReactMarkdown>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            {q.concept && <span>Concept: {q.concept}</span>}
-            {q.source && (
-              <button className="text-primary underline" onClick={() => setShowSource((s) => !s)}>
-                Source: {q.source.filename}, slide {q.source.page_number}
+          {practice && selected != null && selected !== q.correct_index && (
+            <p className="mt-2 text-[15px] text-hero-muted">This comes back in your next practice exam with the choices shuffled.</p>
+          )}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
+            {q.source ? (
+              <button className="text-sm font-extrabold text-mint" onClick={() => setShowSource((s) => !s)}>
+                Source: {q.source.filename}, slide {q.source.page_number} {showSource ? "↑" : "→"}
               </button>
+            ) : (
+              <span />
             )}
-            <button className="ml-auto text-muted-foreground underline" onClick={flag} disabled={flagged}>
+            <button className="text-[13px] font-semibold text-hero-muted underline-offset-4 hover:underline" onClick={flag} disabled={flagged}>
               {flagged ? "Reported. Thanks!" : "Report a problem"}
             </button>
           </div>
-          {showSource && q.source && <SlideImage pageId={q.source.page_id} alt="Source slide" />}
-        </div>
+          {q.concept && <div className="mt-2 text-[13px] text-hero-muted">Concept: {q.concept}</div>}
+          {showSource && q.source && (
+            <div className="mt-3 overflow-hidden rounded-[18px] bg-slide p-1.5">
+              <SlideImage pageId={q.source.page_id} alt="Source slide" />
+            </div>
+          )}
+        </section>
       )}
-    </div>
+    </>
   );
 }

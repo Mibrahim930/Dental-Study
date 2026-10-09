@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage } from "./SlideImage";
-import { masteryColor, pct } from "@/lib/format";
+import { Icon, ICONS, MasteryChip, optionClasses, Strip, type OptionState } from "./ui";
 
 type TopicLite = { id: number; position: number; title: string; emphasized: boolean };
 type ChatMsg = { id?: number; role: "user" | "assistant"; content: string };
@@ -38,6 +38,7 @@ export function StudySession(props: {
   const [visited, setVisited] = useState<Set<number>>(new Set([props.initialPosition]));
   const [ending, setEnding] = useState(false);
   const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,67 +84,114 @@ export function StudySession(props: {
   }
 
   const topic = topics[position];
+  const isLast = position + 1 >= topics.length;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <Link href={`/exams/${examId}`} className="text-sm text-muted-foreground hover:underline">← {props.examName}</Link>
-          <h1 className="text-xl font-semibold">
-            Topic {position + 1} of {topics.length}: {topic.title}
-          </h1>
+    <div className="flex flex-col gap-2.5 sm:gap-4">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <Link href={`/exams/${examId}`} className="flex min-w-0 items-center gap-1.5 text-[15px] font-bold text-muted-foreground hover:text-foreground">
+          <Icon d={ICONS.arrowLeft} size={18} />
+          <span className="truncate">{props.examName}</span>
+        </Link>
+        <div className="flex shrink-0 gap-1.5">
+          <button className="btn-secondary btn-sm hidden lg:inline-flex" disabled={position === 0} onClick={() => go(position - 1)}>
+            ← Previous
+          </button>
+          <button className="btn-secondary btn-sm hidden lg:inline-flex" disabled={isLast} onClick={() => go(position + 1)}>
+            Next →
+          </button>
+          <button className="btn-primary btn-sm" onClick={endSession} disabled={ending}>
+            End session
+          </button>
         </div>
-        <button className="btn-secondary" onClick={endSession} disabled={ending}>
-          End session
-        </button>
       </div>
+      <Strip total={topics.length} filled={position + 1} className="px-1 lg:hidden" />
 
       {endSummary !== undefined && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4">
-          <div className="card max-w-md space-y-3">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3.5 sm:items-center">
+          <div className="card flex w-full max-w-md flex-col gap-3">
             <h2 className="section-title">Session saved</h2>
-            {endSummary && <p className="text-sm text-foreground">{endSummary}</p>}
-            <p className="text-sm text-muted-foreground">
+            {endSummary && <p className="text-[15px] leading-relaxed">{endSummary}</p>}
+            <p className="text-[15px] text-muted-foreground">
               Want to lock it in? Take a short practice exam on the {visited.size} topic{visited.size === 1 ? "" : "s"} you covered.
             </p>
-            <div className="flex flex-wrap gap-2">
-              <button className="btn-primary" onClick={practiceCovered}>Practice exam on these topics</button>
-              <Link className="btn-secondary" href={`/exams/${examId}`}>Not now</Link>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button className="btn-primary btn-lg flex-1" onClick={practiceCovered}>Practice these topics</button>
+              <Link className="btn-secondary btn-lg" href={`/exams/${examId}`}>Not now</Link>
             </div>
           </div>
         </div>
       )}
       {ending && endSummary === undefined && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30">
-          <div className="card text-sm">Saving session notes…</div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="card text-[15px] font-semibold">Saving session notes…</div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[200px_1fr_360px]">
-        <nav className="hidden max-h-[80vh] overflow-y-auto lg:block">
-          <ol className="space-y-1 text-sm">
+      <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,1fr)_380px]">
+        <nav className="hidden lg:block" aria-label="Topics">
+          <ol className="card sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col gap-1 overflow-y-auto p-2.5">
             {topics.map((t) => (
               <li key={t.id}>
                 <button
                   onClick={() => go(t.position)}
-                  className={`w-full rounded-md px-2 py-1 text-left ${
-                    t.position === position ? "bg-primary text-primary-foreground" : visited.has(t.position) ? "text-foreground hover:bg-muted" : "text-muted-foreground hover:bg-muted"
+                  aria-current={t.position === position ? "step" : undefined}
+                  className={`flex w-full items-start gap-2 rounded-[16px] px-3 py-2.5 text-left text-sm font-semibold transition-colors ${
+                    t.position === position
+                      ? "bg-hero text-hero-foreground"
+                      : visited.has(t.position)
+                        ? "hover:bg-muted"
+                        : "text-muted-foreground hover:bg-muted"
                   }`}
                 >
-                  {t.position + 1}. {t.title} {t.emphasized && "★"}
+                  <span className="w-5 shrink-0 font-extrabold">{t.position + 1}</span>
+                  <span>
+                    {t.title}
+                    {t.emphasized && " ★"}
+                  </span>
                 </button>
               </li>
             ))}
           </ol>
         </nav>
 
-        <article className="min-w-0 space-y-4">
+        <article className="flex min-w-0 flex-col gap-2.5 sm:gap-4">
+          <section className="card-hero flex flex-col gap-3">
+            <div className="text-[13px] font-bold text-hero-muted">
+              Topic {position + 1} of {topics.length}
+              {topic.emphasized && " · ★ emphasized in lecture"}
+            </div>
+            <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.03em] sm:text-[38px]">{topic.title}</h1>
+            {data && data.concepts.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {data.concepts.map((c) => (
+                  <span
+                    key={c.id}
+                    className="inline-flex items-center gap-1.5 rounded-[10px] bg-white/10 py-0.5 pr-2 pl-0.5 text-[13px] font-semibold"
+                    title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : ""}
+                  >
+                    <MasteryChip value={c.mastery} className="px-1.5 py-0 text-[12px]" />
+                    {c.name}
+                    {c.earlier_exams.length > 0 && " ↺"}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+
           {!data && !error && (
-            <div className="card animate-pulse text-sm text-muted-foreground">Preparing this topic from your slides… (first time takes ~30s)</div>
+            <div className="card flex flex-col gap-3" aria-busy>
+              <p className="text-[15px] font-semibold text-muted-foreground">Preparing this topic from your slides… (the first time takes about 30 seconds)</p>
+              <div className="shimmer h-4 w-11/12" />
+              <div className="shimmer h-4 w-10/12" />
+              <div className="shimmer h-4 w-9/12" />
+              <div className="shimmer h-40 w-full" />
+            </div>
           )}
           {error && (
-            <div className="card text-sm text-danger">
-              {error} <button className="btn-ghost" onClick={() => { setResult(null); setAttempt((a) => a + 1); }}>Try again</button>
+            <div className="tile cb-coral flex flex-wrap items-center justify-between gap-3 rounded-[28px]">
+              <span className="text-[15px] font-semibold">{error}</span>
+              <button className="btn-primary btn-sm" onClick={() => { setResult(null); setAttempt((a) => a + 1); }}>Try again</button>
             </div>
           )}
           {data && <Lesson key={data.topic.id} data={data} />}
@@ -152,84 +200,90 @@ export function StudySession(props: {
               key={`quiz-${data.topic.id}`}
               sessionId={sessionId}
               position={position}
-              isLast={position + 1 >= topics.length}
-              onNext={() => (position + 1 < topics.length ? go(position + 1) : endSession())}
+              isLast={isLast}
+              onNext={() => (isLast ? endSession() : go(position + 1))}
             />
           )}
 
-          <div className="flex justify-between">
-            <button className="btn-secondary" disabled={position === 0} onClick={() => go(position - 1)}>← Previous</button>
-            {position + 1 < topics.length ? (
-              <button className="btn-primary" onClick={() => go(position + 1)}>Next topic →</button>
+          <div className="grid grid-cols-[1fr_2fr] gap-2">
+            <button className="btn-secondary btn-lg bg-card" disabled={position === 0} onClick={() => go(position - 1)}>← Back</button>
+            {isLast ? (
+              <button className="btn-primary btn-lg" onClick={endSession}>Finish session</button>
             ) : (
-              <button className="btn-primary" onClick={endSession}>Finish session</button>
+              <button className="btn-primary btn-lg" onClick={() => go(position + 1)}>Next topic →</button>
             )}
           </div>
         </article>
 
-        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} />
+        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} open={chatOpen} onClose={() => setChatOpen(false)} />
       </div>
+
+      {/* Phone: floating button that opens the tutor as a bottom sheet. */}
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          className="fixed right-4 bottom-[calc(100px+env(safe-area-inset-bottom))] z-30 flex h-14 items-center gap-2 rounded-full bg-hero px-5 text-[15px] font-extrabold text-hero-foreground shadow-[0_10px_30px_rgba(14,94,85,.35)] lg:hidden"
+        >
+          <Icon d={ICONS.chat} /> Tutor
+        </button>
+      )}
     </div>
   );
 }
 
 function Lesson({ data }: { data: LessonData }) {
-  const { lesson, concepts, topic } = data;
+  const { lesson } = data;
   const [zoom, setZoom] = useState<number | null>(null);
   return (
     <>
-      <section className="card space-y-3">
-        <div className="flex flex-wrap gap-1">
-          {topic.emphasized && <span className="badge bg-warning-soft text-warning">★ Emphasized in lecture</span>}
-          {concepts.map((c) => (
-            <span key={c.id} className={`badge ${masteryColor(c.mastery)}`} title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : ""}>
-              {c.name}
-              {c.mastery != null && ` · ${pct(c.mastery)}`}
-              {c.earlier_exams.length > 0 && " ↺"}
-            </span>
-          ))}
-        </div>
+      <section className="card">
         <div className="prose-study">
           <ReactMarkdown>{lesson.explanation}</ReactMarkdown>
         </div>
+        {lesson.slides.length > 0 && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {lesson.slides.map((s) => (
+              <figure key={s.page_id} className="flex flex-col gap-2">
+                <button onClick={() => setZoom(s.page_id)} className="group relative block w-full overflow-hidden rounded-[22px] bg-slide p-1.5" aria-label={`Zoom: ${s.caption}`}>
+                  <SlideImage pageId={s.page_id} alt={s.caption} />
+                  <span className="absolute right-3 bottom-3 flex h-9 w-9 items-center justify-center rounded-xl bg-black/50 text-white opacity-90 group-hover:opacity-100">
+                    <Icon d={ICONS.zoom} size={18} />
+                  </span>
+                </button>
+                <figcaption className="px-1.5 text-[13px] font-medium text-muted-foreground">{s.caption}</figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
       </section>
-
-      {lesson.slides.length > 0 && (
-        <section className="grid gap-3 sm:grid-cols-2">
-          {lesson.slides.map((s) => (
-            <figure key={s.page_id} className="card space-y-2 p-3">
-              <button onClick={() => setZoom(s.page_id)} className="block w-full">
-                <SlideImage pageId={s.page_id} alt={s.caption} />
-              </button>
-              <figcaption className="text-sm text-muted-foreground">{s.caption}</figcaption>
-            </figure>
-          ))}
-        </section>
-      )}
       {zoom != null && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/80 p-4" onClick={() => setZoom(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4" onClick={() => setZoom(null)}>
           <div className="w-full max-w-5xl">
             <SlideImage pageId={zoom} alt="Slide" />
           </div>
         </div>
       )}
 
-      <section className="card border-primary/30 bg-primary-soft/50">
-        <h3 className="mb-2 font-semibold text-primary">Key points</h3>
-        <ul className="list-disc space-y-1 pl-5 text-sm text-foreground">
-          {lesson.key_points.map((k) => (
-            <li key={k}>{k}</li>
+      <section className="tile cb-butter rounded-[28px]">
+        <h2 className="mb-3 text-[22px] font-extrabold tracking-tight">Key points</h2>
+        <ol className="flex flex-col gap-2.5">
+          {lesson.key_points.map((k, i) => (
+            <li key={k} className="flex gap-3 text-[15px] leading-snug font-medium">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-on-butter text-[12px] font-extrabold text-butter">{i + 1}</span>
+              {k}
+            </li>
           ))}
-        </ul>
+        </ol>
       </section>
 
       {lesson.connections && (
-        <section className="card border-info/30 bg-info-soft/50 text-sm">
-          <h3 className="mb-1 font-semibold text-info">↺ Connects to earlier exams</h3>
-          <p className="text-foreground">{lesson.connections}</p>
+        <section className="tile cb-lilac rounded-[28px]">
+          <h2 className="mb-1.5 text-[18px] font-extrabold">↺ Connects to earlier exams</h2>
+          <div className="text-[15px] leading-relaxed [&_p]:my-0 [&_strong]:font-extrabold">
+            <ReactMarkdown>{lesson.connections}</ReactMarkdown>
+          </div>
         </section>
       )}
-
     </>
   );
 }
@@ -238,6 +292,7 @@ function Lesson({ data }: { data: LessonData }) {
 function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: number; position: number; isLast: boolean; onNext: () => void }) {
   const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[] } | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [picked, setPicked] = useState<number | null>(null);
   const [index, setIndex] = useState(0);
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -263,32 +318,39 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     };
   }, [sessionId, position, attempt]);
 
-  const nextLabel = isLast ? "Finish session" : "Next section →";
   const skip = (
-    <button className="btn-ghost" onClick={onNext}>
+    <button className="btn-ghost px-1" onClick={onNext}>
       {isLast ? "Skip & finish session" : "Skip to next section →"}
     </button>
   );
 
   if (error) {
     return (
-      <section className="card flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span>
-          <span className="block text-danger">Couldn&apos;t write the quiz for this section right now.</span>
-          <span className="block text-xs text-muted-foreground">{error}</span>
-        </span>
-        <span className="flex gap-2">
-          <button className="btn-secondary" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>Try again</button>
-          {skip}
-        </span>
+      <section className="tile cb-coral flex flex-col gap-3 rounded-[28px]">
+        <div>
+          <div className="text-[17px] font-extrabold">Couldn&apos;t write the quiz for this section right now.</div>
+          <div className="mt-1 text-[13px] font-medium opacity-80">{error}</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn-primary btn-sm" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>Try again</button>
+          <button className="btn-sm btn underline-offset-4 hover:underline" onClick={onNext}>
+            {isLast ? "Skip & finish session" : "Skip to next section →"}
+          </button>
+        </div>
       </section>
     );
   }
   if (!quiz) {
     return (
-      <section className="card flex flex-wrap items-center justify-between gap-2">
-        <span className="animate-pulse text-sm text-muted-foreground">Writing a quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
-        {skip}
+      <section className="card flex flex-col gap-3" aria-busy>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[15px] font-semibold text-muted-foreground">Writing a quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
+          {skip}
+        </div>
+        <div className="shimmer h-5 w-3/4" />
+        <div className="shimmer h-14 w-full" />
+        <div className="shimmer h-14 w-full" />
+        <div className="shimmer h-14 w-full" />
       </section>
     );
   }
@@ -297,15 +359,16 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   const right = quiz.questions.filter((q, i) => answers[i] === q.correct_index).length;
   const done = Object.keys(answers).length;
 
-  function choose(i: number) {
-    if (answers[index] != null) return;
+  function check() {
+    if (picked == null || answers[index] != null) return;
     const at = index;
+    const chosen = picked;
     setSaveError("");
-    setAnswers((a) => ({ ...a, [at]: i }));
+    setAnswers((a) => ({ ...a, [at]: chosen }));
     fetch(`/api/sessions/${sessionId}/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId: quiz!.topicId, index: at, chosen: i }),
+      body: JSON.stringify({ topicId: quiz!.topicId, index: at, chosen }),
     })
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
@@ -321,14 +384,20 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
       });
   }
 
-  const dots = (
-    <div className="flex flex-wrap gap-1" aria-hidden>
+  const goTo = (i: number) => {
+    setPicked(null);
+    setIndex(i);
+  };
+
+  const strip = (
+    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
       {quiz.questions.map((q, i) => (
         <button
           key={i}
-          onClick={() => setIndex(i)}
-          className={`h-2 w-6 rounded-full ${
-            answers[i] == null ? (i === index ? "bg-primary/50" : "bg-muted-strong") : answers[i] === q.correct_index ? "bg-success" : "bg-danger"
+          onClick={() => goTo(i)}
+          aria-label={`Question ${i + 1}${answers[i] == null ? "" : answers[i] === q.correct_index ? ", right" : ", wrong"}`}
+          className={`h-1.5 rounded-full ${
+            answers[i] == null ? (i === index ? "bg-foreground" : "bg-muted-strong") : answers[i] === q.correct_index ? "bg-hero" : "bg-coral"
           }`}
         />
       ))}
@@ -338,35 +407,35 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   // Finished: score and what to look at again.
   if (index >= total) {
     const missed = quiz.questions.filter((q, i) => answers[i] != null && answers[i] !== q.correct_index);
+    const good = done > 0 && right / done >= 0.8;
     return (
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="section-title">Section quiz done</h3>
-          {dots}
+      <section className={`tile flex flex-col gap-4 rounded-[28px] ${good ? "cb-mint" : "bg-card"}`}>
+        {strip}
+        <div>
+          <div className="text-[13px] font-bold opacity-75">Section quiz</div>
+          <div className="text-[30px] leading-tight font-extrabold tracking-[-0.03em]">
+            {good ? `Topic ${position + 1}, done.` : done === 0 ? "No questions answered." : "Worth another look."}
+          </div>
+          {done > 0 && (
+            <div className="mt-1 text-[17px] font-bold">
+              {right}/{done} right{done < total && <span className="font-medium opacity-75"> · {total - done} skipped</span>}
+            </div>
+          )}
         </div>
-        <p className="text-2xl font-semibold tracking-tight">
-          {right}/{done} correct{done < total && <span className="ml-2 text-sm font-normal text-muted-foreground">({total - done} skipped)</span>}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          {done === 0
-            ? "No questions answered."
-            : right / done >= 0.8
-              ? "Nice work. You've got this section."
-              : "Worth another look before moving on. Ask the tutor about anything that's unclear."}
-        </p>
+        {!good && done > 0 && <p className="text-[15px] text-muted-foreground">Ask the tutor about anything that&apos;s unclear before moving on.</p>}
         {missed.length > 0 && (
-          <div className="text-sm">
-            <div className="mb-1 font-medium">Review:</div>
-            <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
+          <div>
+            <div className="mb-1.5 text-[13px] font-bold opacity-75">Look again at</div>
+            <div className="flex flex-wrap gap-1.5">
               {[...new Set(missed.map((q) => q.concept))].map((c) => (
-                <li key={c}>{c}</li>
+                <span key={c} className="chip cb-coral">{c}</span>
               ))}
-            </ul>
+            </div>
           </div>
         )}
-        <div className="flex flex-wrap justify-between gap-2">
-          <button className="btn-secondary" onClick={() => setIndex(0)}>Look back at the questions</button>
-          <button className="btn-primary" onClick={onNext}>{nextLabel}</button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+          <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
+          <button className="btn-primary btn-lg" onClick={onNext}>{isLast ? "Finish session" : "Next section →"}</button>
         </div>
       </section>
     );
@@ -375,54 +444,75 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   const q = quiz.questions[index];
   const chosen = answers[index];
   const answered = chosen != null;
+  const stateOf = (i: number): OptionState =>
+    answered ? (i === q.correct_index ? "correct" : i === chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
+
   return (
-    <section className="card space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Section quiz · Question {index + 1} of {total}
+    <section className="card flex flex-col gap-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[13px] font-bold text-muted-foreground">
+          Section quiz · {index + 1} of {total}
         </div>
-        {dots}
+        {skip}
       </div>
-      <p className="font-medium">{q.question}</p>
-      <div className="grid gap-2">
-        {q.options.map((o, i) => (
-          <button
-            key={i}
-            onClick={() => choose(i)}
-            disabled={answered}
-            className={`rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${
-              !answered
-                ? "border-input hover:bg-muted"
-                : i === q.correct_index
-                  ? "border-success bg-success-soft"
-                  : i === chosen
-                    ? "border-danger bg-danger-soft"
-                    : "border-border text-muted-foreground"
-            }`}
-          >
-            <span className="mr-2 font-medium">{String.fromCharCode(65 + i)}.</span>
-            {o}
-          </button>
-        ))}
+      {strip}
+      <p className="px-1 text-[18px] leading-snug font-bold">{q.question}</p>
+      <div className="flex flex-col gap-2">
+        {q.options.map((o, i) => {
+          const s = optionClasses(stateOf(i));
+          return (
+            <button
+              key={i}
+              onClick={() => !answered && setPicked(i)}
+              disabled={answered}
+              aria-pressed={!answered ? i === picked : undefined}
+              className={`flex min-h-[58px] items-center gap-3 rounded-[18px] border-2 px-3.5 py-3 text-left transition-colors disabled:cursor-default ${s.row}`}
+            >
+              <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] text-sm font-extrabold ${s.key}`}>
+                {String.fromCharCode(65 + i)}
+              </span>
+              <span className="flex-1 text-base leading-snug font-semibold">{o}</span>
+              {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+              {answered && i === chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
+            </button>
+          );
+        })}
       </div>
-      {saveError && <p className="text-sm text-danger">{saveError}</p>}
+      {saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
       {answered && (
-        <div className="prose-study rounded-lg bg-muted p-3 text-sm">
-          <strong>{chosen === q.correct_index ? "Correct. " : "Not quite. "}</strong>
-          <ReactMarkdown>{q.explanation}</ReactMarkdown>
+        <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
+          <div className="mb-1 text-[13px] font-extrabold text-mint">{chosen === q.correct_index ? "Correct" : `Why ${String.fromCharCode(65 + q.correct_index)}`}</div>
+          <div className="text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
+            <ReactMarkdown>{q.explanation}</ReactMarkdown>
+          </div>
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-        {skip}
-        <button className="btn-primary" disabled={!answered} onClick={() => setIndex(index + 1)}>
+      {answered ? (
+        <button className="btn-primary btn-lg" onClick={() => goTo(index + 1)}>
           {index + 1 < total ? "Next question →" : "See my score"}
         </button>
-      </div>
+      ) : (
+        <button className="btn-primary btn-lg" disabled={picked == null} onClick={check}>
+          Check answer
+        </button>
+      )}
     </section>
   );
 }
 
-function TutorChat({ sessionId, position, initial }: { sessionId: number; position: number; initial: ChatMsg[] }) {
+function TutorChat({
+  sessionId,
+  position,
+  initial,
+  open,
+  onClose,
+}: {
+  sessionId: number;
+  position: number;
+  initial: ChatMsg[];
+  open: boolean;
+  onClose: () => void;
+}) {
   const [messages, setMessages] = useState<ChatMsg[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -430,7 +520,7 @@ function TutorChat({ sessionId, position, initial }: { sessionId: number; positi
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [messages]);
+  }, [messages, open]);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -457,37 +547,58 @@ function TutorChat({ sessionId, position, initial }: { sessionId: number; positi
   }
 
   return (
-    <aside className="card flex h-[80vh] flex-col p-0 lg:sticky lg:top-4">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="font-semibold tracking-tight">Ask the tutor</h2>
-        <p className="text-xs text-muted-foreground">Answers come from your lectures and remember your past sessions.</p>
-      </div>
-      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
-        {messages.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            Try: &quot;What&apos;s the difference between SIP and SAP?&quot; or &quot;Quiz me on this topic.&quot;
-          </p>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-6 bg-primary text-primary-foreground" : "mr-2 bg-muted text-foreground"}`}
-          >
-            {m.role === "assistant" ? (
-              <div className="prose-study text-sm">
-                <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
-              </div>
-            ) : (
-              m.content
-            )}
+    <>
+      {open && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} aria-hidden />}
+      <aside
+        aria-label="Ask the tutor"
+        className={`fixed inset-x-0 bottom-0 z-50 flex h-[85vh] flex-col rounded-t-[32px] bg-nav text-white transition-transform duration-[280ms] ease-out lg:sticky lg:inset-auto lg:top-4 lg:z-auto lg:h-[calc(100vh-2rem)] lg:translate-y-0 lg:rounded-[28px] ${
+          open ? "translate-y-0" : "translate-y-full"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2 px-5 pt-5 pb-3">
+          <div>
+            <h2 className="text-[20px] font-extrabold tracking-tight">Ask the tutor</h2>
+            <p className="text-[13px] text-nav-foreground">Answers come from your lectures and remember your past sessions.</p>
           </div>
-        ))}
-        <div ref={bottom} />
-      </div>
-      <form onSubmit={send} className="flex gap-2 border-t border-border p-3">
-        <input className="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything…" />
-        <button className="btn-primary" disabled={busy || !input.trim()}>Send</button>
-      </form>
-    </aside>
+          <button onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-white/10 lg:hidden" aria-label="Close tutor">
+            <Icon d={ICONS.close} />
+          </button>
+        </div>
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-2">
+          {messages.length === 0 && (
+            <p className="px-1 text-[15px] text-nav-foreground">
+              Try: &quot;What&apos;s the difference between SIP and SAP?&quot; or &quot;Quiz me on this topic.&quot;
+            </p>
+          )}
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className={`rounded-[20px] px-4 py-3 text-[15px] leading-relaxed ${m.role === "user" ? "ml-8 bg-mint font-semibold text-on-mint" : "mr-4 bg-white/10"}`}
+            >
+              {m.role === "assistant" ? (
+                <div className="[&_a]:text-mint [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
+                  <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
+                </div>
+              ) : (
+                m.content
+              )}
+            </div>
+          ))}
+          <div ref={bottom} />
+        </div>
+        <form onSubmit={send} className="flex gap-2 p-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
+          <input
+            className="h-[50px] w-full rounded-2xl bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-nav-foreground focus:bg-white/15"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask anything…"
+            aria-label="Message the tutor"
+          />
+          <button className="btn bg-mint px-5 text-on-mint" disabled={busy || !input.trim()}>
+            Send
+          </button>
+        </form>
+      </aside>
+    </>
   );
 }

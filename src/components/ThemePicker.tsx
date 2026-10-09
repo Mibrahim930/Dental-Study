@@ -19,7 +19,7 @@ export function ThemePicker({ current }: { current: ThemeId }) {
       {THEMES.map((t) => (
         <label
           key={t.id}
-          className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-muted has-[:checked]:border-primary has-[:checked]:bg-primary-soft"
+          className="flex cursor-pointer items-start gap-3 rounded-[20px] bg-muted p-3 transition-colors hover:bg-muted has-[:checked]:border-primary has-[:checked]:bg-primary-soft"
         >
           <input type="radio" name="theme" value={t.id} defaultChecked={t.id === current} onChange={() => pick(t.id)} className="mt-1 accent-[var(--primary)]" />
           <span className="min-w-0 flex-1">

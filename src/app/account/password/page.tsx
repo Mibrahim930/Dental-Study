@@ -28,7 +28,7 @@ export default function ChangePasswordPage() {
       <Brand />
       <form onSubmit={submit} className="card space-y-4">
         <div>
-          <h1 className="text-lg font-semibold">Choose a new password</h1>
+          <h1 className="section-title">Choose a new password</h1>
           <p className="mt-1 text-sm text-muted-foreground">If an admin reset your password, enter the temporary one they gave you as your current password.</p>
         </div>
         <div>

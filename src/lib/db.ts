@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_admin INTEGER NOT NULL DEFAULT 0,             -- the site owner (first account)
   must_change_password INTEGER NOT NULL DEFAULT 0, -- set after an admin password reset
   focus_weak INTEGER NOT NULL DEFAULT 1,           -- practice exams lean toward missed / unsure material
-  theme TEXT NOT NULL DEFAULT 'classic',           -- colour theme, see lib/themes.ts
+  theme TEXT NOT NULL DEFAULT 'blocks',            -- colour theme, see lib/themes.ts
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   mode TEXT NOT NULL,                              -- tutor | timed
   task_id INTEGER,                                 -- plan task this attempt was started from
   adaptive INTEGER NOT NULL DEFAULT 1,             -- built with "focus on weak spots" on
+  plan_json TEXT,                                  -- what the exam is being built from, shown while it's written
   status TEXT NOT NULL DEFAULT 'generating',       -- generating | ready | finished | error
   error TEXT,
   time_limit_sec INTEGER,
@@ -323,6 +324,7 @@ function migrate(db: Database.Database) {
   if (!columns(db, "users").includes("focus_weak")) db.exec("ALTER TABLE users ADD COLUMN focus_weak INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "users").includes("theme")) db.exec("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'classic'");
   if (!columns(db, "attempts").includes("adaptive")) db.exec("ALTER TABLE attempts ADD COLUMN adaptive INTEGER NOT NULL DEFAULT 1");
+  if (!columns(db, "attempts").includes("plan_json")) db.exec("ALTER TABLE attempts ADD COLUMN plan_json TEXT");
   if (!columns(db, "attempt_questions").includes("confidence")) {
     db.exec("ALTER TABLE attempt_questions ADD COLUMN confidence TEXT");
     db.exec("ALTER TABLE attempt_questions ADD COLUMN option_order TEXT");
@@ -357,6 +359,11 @@ function open(): Database.Database {
     migrate(db);
   }
   db.exec(SCHEMA);
+  // One-time switch to the Color blocks redesign: everyone moves to it once; they can still pick another theme in Settings.
+  if (!db.prepare("SELECT 1 FROM meta WHERE key = 'theme_default_blocks'").get()) {
+    db.prepare("UPDATE users SET theme = 'blocks'").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('theme_default_blocks', '1')").run();
+  }
   return db;
 }
 

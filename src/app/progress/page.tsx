@@ -21,20 +21,20 @@ export default async function ProgressPage() {
     .all(user.id) as { id: number; score: number; finished_at: string; mode: string; exam_name: string; n: number }[];
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
+    <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[1fr_360px]">
       <section className="card">
-        <h1 className="text-xl font-semibold">Concept mastery</h1>
+        <h1 className="section-title">Concept mastery</h1>
         <p className="mb-3 text-sm text-muted-foreground">
           Across every exam. Built from practice exams and daily review. {untested > 0 && `${untested} concepts not tested yet.`}
         </p>
         {concepts.length === 0 ? (
           <p className="text-sm text-muted-foreground">Take a practice exam to start tracking mastery.</p>
         ) : (
-          <ul className="space-y-1 text-sm">
+          <ul className="flex flex-col gap-2.5 text-[15px] font-medium">
             {concepts.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
                 <span>{c.name}</span>
-                <span className={`badge ${masteryColor(c.mastery)}`}>
+                <span className={`chip ${masteryColor(c.mastery)}`}>
                   {pct(c.mastery)} · {c.correct}/{c.attempts}
                 </span>
               </li>
@@ -43,7 +43,7 @@ export default async function ProgressPage() {
         )}
       </section>
       <section className="card">
-        <h2 className="mb-2 font-semibold tracking-tight">Practice exam history</h2>
+        <h2 className="section-title mb-2 ">Practice exam history</h2>
         <ul className="divide-y divide-border text-sm">
           {attempts.map((a) => (
             <li key={a.id} className="flex justify-between py-2">

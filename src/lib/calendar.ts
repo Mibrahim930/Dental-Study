@@ -13,11 +13,11 @@ export const KIND_LABEL: Record<ExamKind, string> = {
 };
 
 export const KIND_STYLE: Record<ExamKind, string> = {
-  block: "bg-rose-600 text-white",
-  quiz: "bg-amber-500 text-white",
-  practical: "bg-violet-600 text-white",
-  board: "bg-indigo-700 text-white",
-  other: "bg-slate-600 text-white",
+  block: "cb-coral",
+  quiz: "cb-butter",
+  practical: "cb-lilac",
+  board: "cb-sky",
+  other: "cb-stone",
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");

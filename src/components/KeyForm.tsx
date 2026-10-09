@@ -39,7 +39,7 @@ export function KeyForm({ initialProvider, done }: { initialProvider?: Provider 
           ).map(([value, name, hint]) => (
             <label
               key={value}
-              className={`cursor-pointer rounded-lg border p-3 ${provider === value ? "border-primary bg-primary-soft" : "border-input bg-card"}`}
+              className={`cursor-pointer rounded-[20px] border-2 p-4 ${provider === value ? "border-foreground bg-card" : "border-transparent bg-muted"}`}
             >
               <input type="radio" name="provider" className="sr-only" checked={provider === value} onChange={() => setProvider(value)} />
               <div className="font-medium">{name}</div>

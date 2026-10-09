@@ -28,7 +28,7 @@ export default async function SettingsPage() {
       <h1 className="page-title">Settings</h1>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold tracking-tight">Spending</h2>
+        <h2 className="section-title ">Spending</h2>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-sm text-muted-foreground">This month</div>
@@ -56,14 +56,14 @@ export default async function SettingsPage() {
 
       <section className="card space-y-3">
         <div>
-          <h2 className="font-semibold tracking-tight">Appearance</h2>
+          <h2 className="section-title ">Appearance</h2>
           <p className="text-sm text-muted-foreground">Pick a colour theme. Dark mode still follows your device.</p>
         </div>
         <ThemePicker current={themeOf(user.theme)} />
       </section>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold tracking-tight">AI provider and key</h2>
+        <h2 className="section-title ">AI provider and key</h2>
         <p className="text-sm text-muted-foreground">
           Using <strong>{user.provider === "openai" ? "ChatGPT" : "Claude"}</strong> ({MODELS[user.provider ?? "anthropic"]}) with the key ending in{" "}
           <code className="rounded bg-muted px-1">…{user.api_key_last4}</code>.
@@ -78,7 +78,7 @@ export default async function SettingsPage() {
 
       <section className="card flex items-center justify-between">
         <div>
-          <h2 className="font-semibold tracking-tight">Account</h2>
+          <h2 className="section-title ">Account</h2>
           <p className="text-sm text-muted-foreground">{user.email}</p>
         </div>
         <div className="flex gap-2">

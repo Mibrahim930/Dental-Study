@@ -27,7 +27,7 @@ export default function LoginPage() {
     <div className="mx-auto mt-8 sm:mt-14 max-w-sm">
       <Brand />
       <form onSubmit={submit} className="card space-y-4">
-        <h1 className="text-lg font-semibold">Sign in</h1>
+        <h1 className="section-title">Sign in</h1>
         <div>
           <label className="label" htmlFor="passcode">Passcode</label>
           <input id="passcode" type="password" className="input" value={passcode} onChange={(e) => setPasscode(e.target.value)} autoFocus />

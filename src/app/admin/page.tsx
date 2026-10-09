@@ -29,7 +29,7 @@ export default async function AdminPage() {
       <h1 className="page-title">Admin</h1>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold tracking-tight">Users ({users.length})</h2>
+        <h2 className="section-title ">Users ({users.length})</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-muted-foreground">
@@ -69,7 +69,7 @@ export default async function AdminPage() {
       </section>
 
       <section className="card space-y-3">
-        <h2 className="font-semibold tracking-tight">Backups</h2>
+        <h2 className="section-title ">Backups</h2>
         {!backupConfigured() ? (
           <p className="text-sm text-warning">Backups aren&apos;t configured on this server.</p>
         ) : (

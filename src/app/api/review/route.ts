@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dueCards, countDue } from "@/lib/practice";
+import { dueCards, countDue, nextReviewDates } from "@/lib/practice";
 import { parseNotes } from "@/lib/processing";
 import { apiUser, unauthorized } from "@/lib/user";
 
@@ -19,6 +19,7 @@ export async function GET(request: Request) {
     explanation: q.explanation,
     image: imageFor(q.image_page_id),
     source_page_id: q.source_page_id,
+    next: nextReviewDates(q.card_id),
   }));
   return NextResponse.json({ due: countDue(user.id), cards });
 }

@@ -33,7 +33,7 @@ export function ClassForms() {
           e.currentTarget.reset();
         }}
       >
-        <h2 className="font-semibold tracking-tight">Join a class</h2>
+        <h2 className="section-title ">Join a class</h2>
         <input name="code" className="input font-mono uppercase" placeholder="Invite code, e.g. K7M2QX9P" required />
         <button className="btn-primary w-full" disabled={busy}>Join</button>
       </form>
@@ -46,7 +46,7 @@ export function ClassForms() {
           e.currentTarget.reset();
         }}
       >
-        <h2 className="font-semibold tracking-tight">Start a class</h2>
+        <h2 className="section-title ">Start a class</h2>
         <input name="name" className="input" placeholder="e.g. Class of 2028" required />
         <button className="btn-secondary w-full" disabled={busy}>Create and get an invite code</button>
       </form>

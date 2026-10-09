@@ -39,7 +39,7 @@ export function CalendarForms({ date }: { date: string }) {
       {open === "exam" && (
         <form
           key={`exam-${date}`}
-          className="space-y-2 rounded-lg border border-border bg-muted p-3"
+          className="space-y-2 rounded-[20px] bg-muted bg-muted p-3"
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
@@ -63,7 +63,7 @@ export function CalendarForms({ date }: { date: string }) {
       {open === "busy" && (
         <form
           key={`busy-${date}`}
-          className="space-y-2 rounded-lg border border-border bg-muted p-3"
+          className="space-y-2 rounded-[20px] bg-muted bg-muted p-3"
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);

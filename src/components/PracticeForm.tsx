@@ -51,7 +51,7 @@ export function PracticeForm({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div>
         <label className="label" htmlFor="cover">What to cover</label>
         <select id="cover" className="input" value={cover} onChange={(e) => setCover(e.target.value as Cover)}>
@@ -65,45 +65,45 @@ export function PracticeForm({
         {cover === "topics" && <CheckList items={topics.map((t) => ({ id: t.id, label: t.title }))} selected={topicIds} onChange={setTopicIds} />}
       </div>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
-        <input type="checkbox" role="switch" className="peer sr-only" checked={adaptive} onChange={(e) => setAdaptive(e.target.checked)} />
-        <span
-          aria-hidden
-          className="relative mt-0.5 h-5 w-9 shrink-0 rounded-full bg-muted-strong transition-colors peer-checked:bg-primary peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-card after:shadow after:transition-transform peer-checked:after:translate-x-4"
-        />
-        <span className="text-sm">
-          <span className="font-medium">Focus on my weak spots</span>
-          <span className="mt-0.5 block text-muted-foreground">
+      <label className="flex cursor-pointer items-start gap-3 rounded-[22px] bg-butter p-4 text-on-butter">
+        <span className="min-w-0 flex-1">
+          <span className="block text-base font-extrabold">Focus on my weak spots</span>
+          <span className="mt-0.5 block text-sm font-medium">
             {adaptive
               ? "More questions on what you missed or weren't sure about, while still covering the rest."
               : "Questions spread evenly over the material. Only questions you got wrong come back."}
           </span>
+          {(missed > 0 || (adaptive && unsure > 0)) && (
+            <span className="mt-2 block text-sm font-bold">
+              {missed > 0 && `↺ ${missed} missed question${missed === 1 ? "" : "s"} come${missed === 1 ? "s" : ""} back${missed > size * 0.4 ? " (some now, the rest next time)" : ""}.`}
+              {adaptive && unsure > 0 && ` ${unsure} unsure idea${unsure === 1 ? "" : "s"} get new questions.`}
+            </span>
+          )}
         </span>
+        <input type="checkbox" role="switch" className="peer sr-only" checked={adaptive} onChange={(e) => setAdaptive(e.target.checked)} />
+        <span
+          aria-hidden
+          className="relative mt-0.5 h-8 w-[54px] shrink-0 rounded-full bg-black/15 transition-colors peer-checked:bg-on-butter peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary after:absolute after:top-[3px] after:left-[3px] after:h-[26px] after:w-[26px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[22px] peer-checked:after:bg-butter"
+        />
       </label>
 
-      {(missed > 0 || (adaptive && unsure > 0)) && (
-        <p className="rounded-lg bg-primary-soft px-3 py-2 text-sm text-primary">
-          {missed > 0 && `${missed} question${missed === 1 ? "" : "s"} you missed will come back${missed > size * 0.4 ? " (some now, the rest next time)" : ""}.`}
-          {adaptive && unsure > 0 && ` ${unsure} idea${unsure === 1 ? "" : "s"} you weren't sure about will be tested with new questions.`}
-        </p>
-      )}
-
-      <Choice label="Length" value={size} onChange={setSize} options={[[10, "10 questions"], [25, "25"], [50, "50"]]} />
-      <Choice
-        label="Mode"
-        value={mode}
-        onChange={setMode}
-        options={[["tutor", "Tutor (explanations as you go)"], ["timed", "Timed (exam conditions)"]]}
-      />
-      <Choice
-        label="Question style"
-        value={style}
-        onChange={setStyle}
-        options={[["mixed", "Mixed"], ["recall", "Recall only"], ["case", "Case & image"], ["caseset", "Case sets (INBDE)"]]}
-      />
-      {error && <p className="text-sm text-danger">{error}</p>}
-      <button className="btn-primary" onClick={start} disabled={busy || nothingChosen}>
-        {busy ? "Starting…" : nothingChosen ? `Choose ${cover === "lectures" ? "a lecture" : "a topic"} first` : "Start practice exam"}
+      <Choice label="Length" value={size} onChange={setSize} options={[[10, "10"], [25, "25"], [50, "50"]]} />
+      <Choice label="Mode" value={mode} onChange={setMode} options={[["tutor", "Tutor"], ["timed", "Timed"]]} />
+      <p className="-mt-2 text-[13px] text-muted-foreground">
+        {mode === "tutor" ? "See the answer and explanation after each question." : "Exam conditions: a timer, and answers only at the end."}
+      </p>
+      <div>
+        <label className="label" htmlFor="style">Question style</label>
+        <select id="style" className="input" value={style} onChange={(e) => setStyle(e.target.value as typeof style)}>
+          <option value="mixed">Mixed (recall, cases and images)</option>
+          <option value="recall">Recall only</option>
+          <option value="case">Clinical cases and images</option>
+          <option value="caseset">Case sets, INBDE style</option>
+        </select>
+      </div>
+      {error && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{error}</p>}
+      <button className="btn-primary btn-lg w-full" onClick={start} disabled={busy || nothingChosen}>
+        {busy ? "Starting…" : nothingChosen ? `Choose ${cover === "lectures" ? "a lecture" : "a topic"} first` : "Write my practice exam"}
       </button>
     </div>
   );
@@ -112,25 +112,38 @@ export function PracticeForm({
 function CheckList({ items, selected, onChange }: { items: { id: number; label: string }[]; selected: number[]; onChange: (ids: number[]) => void }) {
   const all = selected.length === items.length;
   return (
-    <div className="mt-2 rounded-lg border border-border">
-      <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+    <div className="mt-2 overflow-hidden rounded-[20px] border-2 border-foreground bg-card">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2 text-[13px] font-bold text-muted-foreground">
         <span>{selected.length} selected</span>
-        <button type="button" className="font-medium text-primary hover:underline" onClick={() => onChange(all ? [] : items.map((i) => i.id))}>
+        <button type="button" className="text-primary hover:underline" onClick={() => onChange(all ? [] : items.map((i) => i.id))}>
           {all ? "Clear" : "Select all"}
         </button>
       </div>
-      <div className="max-h-56 space-y-0.5 overflow-y-auto p-1.5">
-        {items.map((item) => (
-          <label key={item.id} className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-              checked={selected.includes(item.id)}
-              onChange={() => onChange(selected.includes(item.id) ? selected.filter((x) => x !== item.id) : [...selected, item.id])}
-            />
-            {item.label}
-          </label>
-        ))}
+      <div className="max-h-64 overflow-y-auto p-1.5">
+        {items.map((item) => {
+          const on = selected.includes(item.id);
+          return (
+            <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-[14px] px-2.5 py-2 text-[15px] font-medium hover:bg-muted">
+              <input
+                type="checkbox"
+                className="peer sr-only"
+                checked={on}
+                onChange={() => onChange(on ? selected.filter((x) => x !== item.id) : [...selected, item.id])}
+              />
+              <span
+                aria-hidden
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg peer-focus-visible:outline-3 peer-focus-visible:outline-primary ${on ? "bg-hero text-hero-foreground" : "bg-muted"}`}
+              >
+                {on && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12.5l4.5 4.5L19 7" />
+                  </svg>
+                )}
+              </span>
+              {item.label}
+            </label>
+          );
+        })}
       </div>
     </div>
   );
@@ -148,16 +161,11 @@ function Choice<T extends string | number>({
   options: [T, string][];
 }) {
   return (
-    <div>
+    <div role="group" aria-label={label}>
       <div className="label">{label}</div>
-      <div className="flex flex-wrap gap-2">
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
         {options.map(([v, text]) => (
-          <button
-            key={String(v)}
-            type="button"
-            onClick={() => onChange(v)}
-            className={`btn ${value === v ? "bg-primary text-primary-foreground" : "border border-input bg-card text-foreground hover:bg-muted"}`}
-          >
+          <button key={String(v)} type="button" aria-pressed={value === v} onClick={() => onChange(v)} className="seg">
             {text}
           </button>
         ))}

@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const isFirst = !db.prepare("SELECT 1 FROM users LIMIT 1").get();
   // The first account is the site owner (admin) and inherits any data from before accounts existed.
   const id = Number(
-    db.prepare("INSERT INTO users (email, password_hash, is_admin) VALUES (?, ?, ?)").run(cleanEmail, hashPassword(password), isFirst ? 1 : 0)
+    db.prepare("INSERT INTO users (email, password_hash, is_admin, theme) VALUES (?, ?, ?, 'blocks')").run(cleanEmail, hashPassword(password), isFirst ? 1 : 0)
       .lastInsertRowid,
   );
   if (isFirst) claimLegacyData(id);

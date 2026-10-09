@@ -43,18 +43,23 @@ export function Uploader({ examId }: { examId: number }) {
         setDragging(false);
         void upload(e.dataTransfer.files);
       }}
-      className={`rounded-xl border-2 border-dashed p-6 text-center transition ${
-        dragging ? "border-primary bg-primary-soft" : "border-input bg-card"
+      className={`flex flex-col items-center gap-2 rounded-[22px] border-2 border-dashed p-5 text-center transition-colors ${
+        dragging ? "border-primary bg-primary-soft" : "border-muted-strong"
       }`}
     >
-      <p className="text-sm text-muted-foreground">Drag lecture PDFs here, or</p>
-      <button type="button" className="btn-secondary mt-2" disabled={!!status} onClick={() => input.current?.click()}>
+      <span className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-butter text-on-butter" aria-hidden>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />
+        </svg>
+      </span>
+      <p className="text-[15px] font-semibold">Drop lecture PDFs here</p>
+      <button type="button" className="btn-primary btn-sm" disabled={!!status} onClick={() => input.current?.click()}>
         Choose files
       </button>
       <input ref={input} type="file" accept="application/pdf" multiple hidden onChange={(e) => e.target.files && upload(e.target.files)} />
-      {status && <p className="mt-3 text-sm text-primary">{status}</p>}
+      {status && <p className="text-sm font-semibold text-primary">{status}</p>}
       {errors.map((e) => (
-        <p key={e} className="mt-2 text-sm text-danger">{e}</p>
+        <p key={e} className="w-full rounded-2xl bg-coral px-3 py-2 text-left text-sm font-semibold text-on-coral">{e}</p>
       ))}
     </div>
   );

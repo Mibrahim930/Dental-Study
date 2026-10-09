@@ -63,8 +63,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         {month == null ? (
           <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">
             {MONTHS.map((name, m) => (
-              <div key={name} className="card p-2 sm:p-3">
-                <Link href={`?month=${year}-${String(m + 1).padStart(2, "0")}`} className="mb-2 block text-sm font-semibold hover:underline">{name}</Link>
+              <div key={name} className={`card p-2.5 sm:p-3.5 ${year === Number(today.slice(0, 4)) && m < Number(today.slice(5, 7)) - 1 ? "opacity-55" : ""}`}>
+                <Link href={`?month=${year}-${String(m + 1).padStart(2, "0")}`} className="mb-2 block text-[15px] font-extrabold hover:underline">{name}</Link>
                 <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] text-subtle">
                   {WEEKDAYS.map((w) => <div key={w}>{w[0]}</div>)}
                 </div>
@@ -80,11 +80,12 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                           key={j}
                           href={dayHref(d)}
                           title={[...examsOn(d).map((e) => e.name), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
-                          className={`flex aspect-square items-center justify-center rounded text-[11px] ${
-                            ex ? KIND_STYLE[ex.kind] : isBusy ? "bg-muted-strong text-subtle line-through" : study ? "bg-primary-soft text-primary" : "text-muted-foreground hover:bg-muted"
-                          } ${d === today ? "ring-2 ring-primary" : ""}`}
+                          className={`relative flex aspect-square items-center justify-center rounded-lg text-[11px] font-semibold ${
+                            ex ? `${KIND_STYLE[ex.kind]} font-extrabold` : isBusy ? "bg-stone text-on-stone" : d < today ? "text-subtle hover:bg-muted" : "hover:bg-muted"
+                          } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
                         >
                           {Number(d.slice(8))}
+                          {study > 0 && !ex && <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-hero" aria-hidden />}
                         </Link>
                       );
                     })}
@@ -94,32 +95,37 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             ))}
           </div>
         ) : (
-          <div className="card overflow-hidden p-0">
-            <div className="grid grid-cols-7 border-b border-border bg-muted text-center text-xs font-medium text-muted-foreground">
-              {WEEKDAYS.map((w) => <div key={w} className="py-2">{w}</div>)}
+          <div className="card p-3 sm:p-5">
+            <div className="grid grid-cols-7 gap-1.5 pb-1.5 text-center text-[12px] font-bold text-muted-foreground">
+              {WEEKDAYS.map((w) => <div key={w}>{w}</div>)}
             </div>
             {monthWeeks(year, month).map((week, i) => (
-              <div key={i} className="grid grid-cols-7 border-b border-border last:border-0">
+              <div key={i} className="grid grid-cols-7 gap-1.5 pb-1.5">
                 {week.map((d, j) => {
-                  if (!d) return <div key={j} className="min-h-16 bg-muted/50 sm:min-h-24" />;
+                  if (!d) return <div key={j} />;
                   const study = minutesOn(d);
                   const isBusy = busyOn(d);
+                  const ex = examsOn(d)[0];
                   return (
                     <Link
                       key={j}
                       href={dayHref(d)}
-                      className={`min-h-16 space-y-1 overflow-hidden border-l sm:min-h-24 border-border p-1.5 text-left first:border-0 hover:bg-muted ${d === selected ? "bg-primary-soft/60" : ""} ${isBusy.length ? "bg-muted" : ""}`}
+                      title={[...examsOn(d).map((e) => e.name), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : ""].filter(Boolean).join(" · ")}
+                      className={`relative flex min-h-12 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[14px] p-1 text-[15px] font-bold sm:min-h-24 sm:items-start sm:justify-start sm:p-2 ${
+                        ex ? KIND_STYLE[ex.kind] : isBusy.length ? "bg-stone text-on-stone" : d < today ? "bg-muted/50 text-subtle hover:bg-muted" : "bg-muted hover:bg-muted-strong"
+                      } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
                     >
-                      <div className={`text-xs ${d === today ? "inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground" : "text-muted-foreground"}`}>
-                        {Number(d.slice(8))}
-                      </div>
-                      {examsOn(d).map((e) => (
-                        <div key={e.id} className={`truncate rounded px-1 text-[11px] font-medium ${KIND_STYLE[e.kind]}`}>{e.name}</div>
-                      ))}
-                      {isBusy.map((b) => (
-                        <div key={b.id} className="truncate text-[11px] text-muted-foreground">⛔ {b.label}</div>
-                      ))}
-                      {study > 0 && <div className="text-[11px] text-primary">📚 {Math.round(study / 6) / 10}h</div>}
+                      {Number(d.slice(8))}
+                      <span className="hidden w-full flex-col gap-0.5 sm:flex">
+                        {examsOn(d).map((e) => (
+                          <span key={e.id} className="truncate text-[11px] font-extrabold">{e.name}</span>
+                        ))}
+                        {isBusy.map((b) => (
+                          <span key={b.id} className="truncate text-[11px] font-semibold">{b.label}</span>
+                        ))}
+                        {study > 0 && <span className="text-[11px] font-bold text-primary">{Math.round(study / 6) / 10} h study</span>}
+                      </span>
+                      {study > 0 && !ex && <span className="h-1.5 w-1.5 rounded-full bg-hero sm:hidden" aria-hidden />}
                     </Link>
                   );
                 })}
@@ -132,22 +138,22 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           {(Object.keys(KIND_LABEL) as (keyof typeof KIND_LABEL)[]).map((k) => (
             <span key={k} className="flex items-center gap-1"><span className={`h-3 w-3 rounded ${KIND_STYLE[k]}`} />{KIND_LABEL[k]}</span>
           ))}
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-muted-strong" />Busy</span>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-primary-soft ring-1 ring-primary/30" />Study planned</span>
+          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-stone" />Busy</span>
+          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-hero" />Study planned</span>
         </div>
       </section>
 
       <aside className="space-y-4">
         <section className="card space-y-3">
-          <h2 className="font-semibold tracking-tight">{formatDay(selected)}</h2>
+          <h2 className="section-title">{formatDay(selected)}</h2>
           {examsOn(selected).map((e) => (
-            <Link key={e.id} href={`/exams/${e.id}`} className={`block rounded-lg px-3 py-2 text-sm font-medium ${KIND_STYLE[e.kind]}`}>
+            <Link key={e.id} href={`/exams/${e.id}`} className={`block rounded-[20px] px-4 py-3 text-[15px] font-extrabold ${KIND_STYLE[e.kind]}`}>
               {KIND_LABEL[e.kind]}: {e.name} →
             </Link>
           ))}
           {busyOn(selected).map((b) => (
-            <div key={b.id} className="flex items-center justify-between rounded-lg bg-muted px-3 py-2 text-sm">
-              <span>⛔ {b.label}{b.start_date !== b.end_date ? ` (${b.start_date.slice(5)} to ${b.end_date.slice(5)})` : ""}</span>
+            <div key={b.id} className="flex items-center justify-between rounded-[20px] bg-stone px-4 py-3 text-[15px] font-semibold text-on-stone">
+              <span>{b.label}{b.start_date !== b.end_date ? ` (${b.start_date.slice(5)} to ${b.end_date.slice(5)})` : ""}</span>
               <DeleteBusyButton id={b.id} />
             </div>
           ))}
@@ -156,7 +162,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         </section>
 
         {warnings.length > 0 && (
-          <section className="card border-warning/40 bg-warning-soft text-sm text-warning">
+          <section className="tile cb-coral rounded-[28px] text-sm">
             <h2 className="mb-1 font-semibold tracking-tight">Not enough study time</h2>
             {warnings.map((w) => (
               <p key={w.examId}>

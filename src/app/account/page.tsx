@@ -29,7 +29,7 @@ export default function AccountPage() {
     <div className="mx-auto mt-8 sm:mt-14 max-w-sm">
       <Brand />
       <form onSubmit={submit} className="card space-y-4">
-        <div className="flex rounded-lg bg-muted p-1 text-sm">
+        <div className="flex rounded-2xl bg-muted p-1 text-sm">
           {(["signin", "signup"] as const).map((m) => (
             <button
               key={m}

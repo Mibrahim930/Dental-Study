@@ -110,8 +110,10 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
   if (opts.style === "caseset") {
     const caseCount = Math.max(1, Math.round(opts.size / 4));
     const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)), { wholeExam: !scoped });
+    const newCases = Math.max(1, caseCount - retried.length);
+    savePlan(attemptId, { style: opts.style, cases: newCases + retried.length, retried: retried.flat().length, fresh: newCases, topics: topics.length });
     // Always at least one new case, so even a short exam isn't only retries.
-    const fresh = await buildCaseSets(topics, Math.max(1, caseCount - retried.length), focus);
+    const fresh = await buildCaseSets(topics, newCases, focus);
     // Shuffle the order of cases, but keep each case's questions together and in order.
     const groups = [...retried, ...fresh].sort(() => Math.random() - 0.5);
     return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
@@ -135,6 +137,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
   const fresh = opts.size - retried.length;
   const pastCount = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
   const plan = [...allocate(topics, fresh - pastCount, focus), ...allocate(pastTopics, pastCount, null)];
+  savePlan(attemptId, { style: opts.style, size: opts.size, retried: retried.length, fresh, topics: topics.length });
 
   const created: number[] = [];
   await mapLimit(plan, 4, async ({ topic, count }) => {
@@ -147,6 +150,12 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
 
   // Interleave topics so the exam doesn't run topic by topic.
   finishGeneration(attemptId, [...retried, ...created].sort(() => Math.random() - 0.5), new Set(retried));
+}
+
+/** What the exam is being built from, so the loading screen can show real steps while the AI writes. */
+export type AttemptPlan = { style: Style; size?: number; cases?: number; retried: number; fresh: number; topics: number };
+function savePlan(attemptId: number, plan: AttemptPlan) {
+  db.prepare("UPDATE attempts SET plan_json = ? WHERE id = ?").run(JSON.stringify(plan), attemptId);
 }
 
 function finishGeneration(attemptId: number, questionIds: number[], retried: Set<number>) {
@@ -478,6 +487,17 @@ export function dueCards(userId: number, limit: number) {
 
 export function countDue(userId: number): number {
   return (db.prepare(`SELECT COUNT(*) n ${DUE_FROM}`).get(userId, new Date().toISOString()) as { n: number }).n;
+}
+
+/** When a review card would come back for each rating, shown under the Hard / Good / Easy buttons. */
+export function nextReviewDates(cardId: number): { hard: string; good: string; easy: string } {
+  const row = db.prepare("SELECT card_json FROM review_cards WHERE id = ?").get(cardId) as { card_json: string };
+  const log = scheduler.repeat(JSON.parse(row.card_json) as Card, new Date());
+  return {
+    hard: log[Rating.Hard].card.due.toISOString(),
+    good: log[Rating.Good].card.due.toISOString(),
+    easy: log[Rating.Easy].card.due.toISOString(),
+  };
 }
 
 export function reviewCard(cardId: number, correct: boolean, confidence: "hard" | "good" | "easy") {

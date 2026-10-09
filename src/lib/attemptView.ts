@@ -1,6 +1,8 @@
 import { db } from "./db";
 import { parseNotes } from "./processing";
 import type { Confidence } from "./practicePlan";
+import type { AttemptPlan } from "./practice";
+import { scoreContext } from "./readiness";
 
 type Row = {
   question_id: number;
@@ -10,6 +12,7 @@ type Row = {
   confidence: Confidence | null;
   option_order: string | null;
   type: "recall" | "case" | "image";
+  topic_id: number | null;
   patient_box: string | null;
   stem: string;
   options: string;
@@ -39,6 +42,7 @@ export function attemptView(attemptId: number) {
         time_limit_sec: number | null;
         score: number | null;
         adaptive: number;
+        plan_json: string | null;
         started_at: string;
       }
     | undefined;
@@ -88,6 +92,7 @@ export function attemptView(attemptId: number) {
     const shown = (i: number | null) => (i == null ? null : order.indexOf(i));
     return {
       id: r.question_id,
+      topic_id: r.topic_id,
       position: r.position,
       caseInfo,
       type: r.type,
@@ -113,7 +118,12 @@ export function attemptView(attemptId: number) {
         : {}),
     };
   });
-  return { attempt, questions };
+  return {
+    attempt,
+    questions,
+    plan: attempt.plan_json ? (JSON.parse(attempt.plan_json) as AttemptPlan) : null,
+    context: finished ? scoreContext(attemptId) : null,
+  };
 }
 
 export type AttemptView = NonNullable<ReturnType<typeof attemptView>>;
