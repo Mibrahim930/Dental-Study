@@ -164,14 +164,62 @@ export function pendingCounts(examId: number, topicIds: number[] = []): { missed
 }
 
 /**
- * How many new questions each topic gets.
- * Focus on: weak topics (low mastery, recent misses and unsure answers) get more.
- * Focus off: spread by topic size so the whole lecture gets covered evenly.
- * Lecture-emphasized topics get a little more either way.
+ * When each topic of an exam was last practised: the id of the latest practice exam in which a question
+ * from it was actually answered. Topics never practised are absent.
  */
-export function allocate(topics: Topic[], total: number, focus: Map<number, FocusPoint[]> | null): { topic: Topic; count: number }[] {
+export function lastPracticed(examId: number): Map<number, number> {
+  const rows = db
+    .prepare(
+      `SELECT q.topic_id AS topic_id, MAX(aq.attempt_id) AS last FROM attempt_questions aq
+       JOIN attempts a ON a.id = aq.attempt_id JOIN questions q ON q.id = aq.question_id
+       WHERE a.exam_id = ? AND aq.chosen_index IS NOT NULL AND q.topic_id IS NOT NULL GROUP BY q.topic_id`,
+    )
+    .all(examId) as { topic_id: number; last: number }[];
+  return new Map(rows.map((r) => [r.topic_id, r.last]));
+}
+
+/**
+ * How many new questions each topic gets.
+ * Coverage first: every topic gets at least one question, except topics already covered by a missed question
+ * coming back. If the exam is too short for that, the topics practised longest ago (or never) go first, so the
+ * ones left out lead the next exam.
+ * The rest is weighted. Focus on: weak topics (low mastery, recent misses and unsure answers) get more.
+ * Focus off: spread by topic size. Lecture-emphasized topics get a little more either way.
+ */
+export function allocate(
+  topics: Topic[],
+  total: number,
+  focus: Map<number, FocusPoint[]> | null,
+  coverage: { last?: Map<number, number>; covered?: Set<number> } = {},
+): { topic: Topic; count: number }[] {
   if (topics.length === 0 || total <= 0) return [];
-  const weights = topics.map((t) => {
+  const weights = topicWeights(topics, focus);
+  const counts = topics.map(() => 0);
+
+  // 1. One question for each topic not already covered; stalest first when there isn't room for all.
+  const order = topics
+    .map((_, i) => i)
+    .filter((i) => !coverage.covered?.has(topics[i].id))
+    .sort((a, b) => (coverage.last?.get(topics[a].id) ?? 0) - (coverage.last?.get(topics[b].id) ?? 0) || weights[b] - weights[a]);
+  for (const i of order.slice(0, total)) counts[i] = 1;
+  const rest = total - Math.min(total, order.length);
+
+  // 2. The rest by weight (largest remainder).
+  if (rest > 0) {
+    const sum = weights.reduce((a, b) => a + b, 0);
+    const extra = weights.map((w) => (w / sum) * rest);
+    extra.forEach((x, i) => (counts[i] += Math.floor(x)));
+    let left = rest - extra.reduce((a, x) => a + Math.floor(x), 0);
+    for (const i of extra.map((_, i) => i).sort((a, b) => (extra[b] % 1) - (extra[a] % 1))) {
+      if (left-- <= 0) break;
+      counts[i]++;
+    }
+  }
+  return topics.map((topic, i) => ({ topic, count: counts[i] })).filter((a) => a.count > 0);
+}
+
+function topicWeights(topics: Topic[], focus: Map<number, FocusPoint[]> | null): number[] {
+  return topics.map((t) => {
     const slides = Math.max(1, (JSON.parse(t.page_ids) as number[]).length);
     const emphasis = t.emphasized ? 1.5 : 1;
     if (!focus) return emphasis * slides;
@@ -182,17 +230,6 @@ export function allocate(topics: Topic[], total: number, focus: Map<number, Focu
     const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 0.5;
     return emphasis * (1.5 - avg) * Math.sqrt(slides) * (1 + (focus.get(t.id)?.length ?? 0) / 3);
   });
-  const sum = weights.reduce((a, b) => a + b, 0);
-  const alloc = topics.map((topic, i) => {
-    const exact = (weights[i] / sum) * total;
-    return { topic, count: Math.floor(exact), rem: exact - Math.floor(exact) };
-  });
-  let left = total - alloc.reduce((a, b) => a + b.count, 0);
-  for (const a of [...alloc].sort((x, y) => y.rem - x.rem)) {
-    if (left-- <= 0) break;
-    a.count++;
-  }
-  return alloc.filter((a) => a.count > 0).map(({ topic, count }) => ({ topic, count }));
 }
 
 /** Questions already written for a topic, newest first, so the AI can be told not to repeat them. */

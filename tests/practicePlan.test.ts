@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { answerQuestion } from "@/lib/practice";
 import { attemptView } from "@/lib/attemptView";
-import { allocate, focusPoints, pendingCounts, retryQuestions, scopeTopicIds, type Confidence } from "@/lib/practicePlan";
+import { allocate, focusPoints, lastPracticed, pendingCounts, retryQuestions, scopeTopicIds, type Confidence } from "@/lib/practicePlan";
 import type { Topic } from "@/lib/db";
 import { makeExam, makeUser } from "./helpers";
 
@@ -122,5 +122,52 @@ describe("practice exam question selection", () => {
     expect(scopeTopicIds(examId, { kind: "lectures", documentIds: [d2] })).toEqual([both, onlyTwo]);
     expect(scopeTopicIds(examId, { kind: "topics", topicIds: [onlyOne, 999999] })).toEqual([onlyOne]);
     expect(scopeTopicIds(examId, { kind: "all" })).toEqual([]);
+  });
+
+  it("gives every section at least one question when the exam is long enough, however lopsided the weights", () => {
+    const u = makeUser();
+    const { examId } = makeExam(u, null, [40, 1, 1, 1, 1]);
+    const topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
+    const plan = allocate(topics, 10, null);
+    expect(plan).toHaveLength(5);
+    expect(plan.every((p) => p.count >= 1)).toBe(true);
+    expect(plan.reduce((n, p) => n + p.count, 0)).toBe(10);
+  });
+
+  it("when the exam is too short, covers the sections practised longest ago, and the ones left out lead the next exam", () => {
+    const u = makeUser();
+    const { examId, topicIds } = makeExam(u, null, [5, 5, 5, 5, 5]);
+    const topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
+    // Topics 0-2 were practised (0 longest ago); 3 and 4 never.
+    const last = new Map([
+      [topicIds[0], 5],
+      [topicIds[1], 6],
+      [topicIds[2], 7],
+    ]);
+    const first = allocate(topics, 3, null, { last }).map((p) => p.topic.id);
+    expect(first.sort()).toEqual([topicIds[0], topicIds[3], topicIds[4]].sort());
+    // After that exam, the two left out (1 and 2) come first.
+    for (const id of first) last.set(id, 8);
+    const second = allocate(topics, 2, null, { last }).map((p) => p.topic.id);
+    expect(second.sort()).toEqual([topicIds[1], topicIds[2]].sort());
+  });
+
+  it("counts a section as covered when a missed question from it is coming back", () => {
+    const u = makeUser();
+    const { examId, topicIds } = makeExam(u, null, [5, 5, 5]);
+    const topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
+    const plan = allocate(topics, 2, null, { covered: new Set([topicIds[0]]) });
+    expect(plan.map((p) => p.topic.id).sort()).toEqual([topicIds[1], topicIds[2]].sort());
+  });
+
+  it("only counts a section as practised when one of its questions was actually answered", () => {
+    const u = makeUser();
+    const { examId, topicIds } = makeExam(u, null, [5, 5]);
+    const [answered, skipped] = [question(examId, topicIds[0]), question(examId, topicIds[1])];
+    const a = attempt(examId, [answered, skipped]);
+    answer(a, answered, true);
+    const last = lastPracticed(examId);
+    expect(last.get(topicIds[0])).toBe(a);
+    expect(last.has(topicIds[1])).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import {
   retryQuestions,
   RETRY_SHARE,
   isValidChoice,
+  lastPracticed,
   shuffledOrder,
   slideCoverage,
   type Confidence,
@@ -113,7 +114,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
     const newCases = Math.max(1, caseCount - retried.length);
     savePlan(attemptId, { style: opts.style, cases: newCases + retried.length, retried: retried.flat().length, fresh: newCases, topics: topics.length });
     // Always at least one new case, so even a short exam isn't only retries.
-    const fresh = await buildCaseSets(topics, newCases, focus);
+    const fresh = await buildCaseSets(topics, newCases, focus, { last: lastPracticed(examId), covered: topicsOf(retried.flat()) });
     // Shuffle the order of cases, but keep each case's questions together and in order.
     const groups = [...retried, ...fresh].sort(() => Math.random() - 0.5);
     return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
@@ -136,7 +137,9 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
     : [];
   const fresh = opts.size - retried.length;
   const pastCount = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
-  const plan = [...allocate(topics, fresh - pastCount, focus), ...allocate(pastTopics, pastCount, null)];
+  // Every section of the chosen material gets a question; missed questions coming back already cover theirs.
+  const coverage = { last: lastPracticed(examId), covered: topicsOf(retried) };
+  const plan = [...allocate(topics, fresh - pastCount, focus, coverage), ...allocate(pastTopics, pastCount, null)];
   savePlan(attemptId, { style: opts.style, size: opts.size, retried: retried.length, fresh, topics: topics.length });
 
   const created: number[] = [];
@@ -156,6 +159,16 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
 export type AttemptPlan = { style: Style; size?: number; cases?: number; retried: number; fresh: number; topics: number };
 function savePlan(attemptId: number, plan: AttemptPlan) {
   db.prepare("UPDATE attempts SET plan_json = ? WHERE id = ?").run(JSON.stringify(plan), attemptId);
+}
+
+/** The topics a set of questions belongs to. */
+function topicsOf(questionIds: number[]): Set<number> {
+  if (questionIds.length === 0) return new Set();
+  return new Set(
+    (db.prepare(`SELECT DISTINCT topic_id FROM questions WHERE topic_id IS NOT NULL AND id IN (${questionIds.map(() => "?").join(",")})`).all(...questionIds) as {
+      topic_id: number;
+    }[]).map((r) => r.topic_id),
+  );
 }
 
 function finishGeneration(attemptId: number, questionIds: number[], retried: Set<number>) {
@@ -234,9 +247,14 @@ diagnosis → what test or finding confirms it → emergency/definitive treatmen
 - Prioritize slides marked ★IMPORTANT or with annotations. Every fact must be supported by the slides.`;
 
 /** New case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
-async function buildCaseSets(topics: Topic[], caseCount: number, focus: Map<number, FocusPoint[]> | null): Promise<number[][]> {
+async function buildCaseSets(
+  topics: Topic[],
+  caseCount: number,
+  focus: Map<number, FocusPoint[]> | null,
+  coverage: Parameters<typeof allocate>[3],
+): Promise<number[][]> {
   const groups: number[][] = [];
-  await mapLimit(allocate(topics, caseCount, focus), 3, async ({ topic, count }) => {
+  await mapLimit(allocate(topics, caseCount, focus, coverage), 3, async ({ topic, count }) => {
     const reused = unusedCases(topic.id, count);
     groups.push(...reused);
     if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [])));

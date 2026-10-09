@@ -32,6 +32,8 @@ export function PracticeForm({
   const missed = inScope.reduce((n, t) => n + t.missed, 0);
   const unsure = inScope.reduce((n, t) => n + t.unsure, 0);
   const nothingChosen = cover !== "all" && inScope.length === 0;
+  // Each section gets at least one question (or case set) when there is room; otherwise the rest lead the next exam.
+  const slots = style === "caseset" ? Math.max(1, Math.round(size / 4)) : size;
 
   async function start() {
     setBusy(true);
@@ -88,6 +90,12 @@ export function PracticeForm({
       </label>
 
       <Choice label="Length" value={size} onChange={setSize} options={[[10, "10"], [25, "25"], [50, "50"]]} />
+      {slots < inScope.length && (
+        <p className="-mt-2 rounded-2xl bg-muted px-4 py-3 text-[13px] font-semibold">
+          {style === "caseset" ? `${slots} case set${slots === 1 ? "" : "s"}` : `${slots} questions`} can&apos;t cover all {inScope.length} sections.
+          The {inScope.length - slots} left out come first in your next exam{style === "caseset" ? "." : ", or pick a longer exam to cover everything."}
+        </p>
+      )}
       <Choice label="Mode" value={mode} onChange={setMode} options={[["tutor", "Tutor"], ["timed", "Timed"]]} />
       <p className="-mt-2 text-[13px] text-muted-foreground">
         {mode === "tutor" ? "See the answer and explanation after each question." : "Exam conditions: a timer, and answers only at the end."}
