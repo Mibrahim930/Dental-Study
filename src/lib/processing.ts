@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { db, FILES_DIR, type PageRow } from "./db";
-import { batchResults, createBatch, generate, mapLimit } from "./ai";
+import { batchResults, cancelBatch, createBatch, generate, mapLimit } from "./ai";
 import { credentials, type Credentials } from "./credentials";
 import { buildTopicMap } from "./topics";
 import { NOTES_SYSTEM, SlideNotes } from "./notes";
@@ -208,4 +208,52 @@ export function resumeUnfinished(userId?: number) {
 
 export function parseNotes(page: Pick<PageRow, "notes_json">): SlideNotes | null {
   return page.notes_json ? (JSON.parse(page.notes_json) as SlideNotes) : null;
+}
+
+/**
+ * Remove a lecture (or cancel one still being read): stops its slide batch, deletes its slides and files, and
+ * takes its slides out of the topic map. Questions written from it are deleted if never answered; answered ones
+ * are retired (flagged) so they never come back but practice history and scores stay intact.
+ * Topics that lose slides have their cached lesson and quiz cleared so they're rewritten from what's left.
+ */
+export async function removeDocument(docId: number): Promise<void> {
+  const doc = docInfo(docId);
+  if (!doc) return;
+  if (doc.batch_id && doc.user_id) {
+    try {
+      await cancelBatch(credentials(doc.user_id), doc.batch_id);
+    } catch (err) {
+      console.error(`Cancelling batch for document ${docId} failed`, err);
+    }
+  }
+
+  const pageIds = new Set((db.prepare("SELECT id FROM pages WHERE document_id = ?").all(docId) as { id: number }[]).map((p) => p.id));
+  db.transaction(() => {
+    if (pageIds.size) {
+      const ids = [...pageIds];
+      const marks = ids.map(() => "?").join(",");
+      const fromLecture = `(source_page_id IN (${marks}) OR image_page_id IN (${marks}))`;
+      // Never-answered questions from this lecture go; answered ones are retired so history stays.
+      db.prepare(
+        `DELETE FROM questions WHERE ${fromLecture} AND NOT EXISTS (SELECT 1 FROM attempt_questions aq WHERE aq.question_id = questions.id AND aq.chosen_index IS NOT NULL)`,
+      ).run(...ids, ...ids);
+      db.prepare(`UPDATE questions SET flagged = 1, flag_note = COALESCE(flag_note, 'Lecture removed') WHERE ${fromLecture}`).run(...ids, ...ids);
+    }
+
+    const topics = db.prepare("SELECT id, page_ids FROM topics WHERE exam_id = ?").all(doc.exam_id) as { id: number; page_ids: string }[];
+    for (const t of topics) {
+      const pages = JSON.parse(t.page_ids) as number[];
+      const kept = pages.filter((p) => !pageIds.has(p));
+      if (kept.length === pages.length) continue;
+      if (kept.length === 0) db.prepare("DELETE FROM topics WHERE id = ?").run(t.id);
+      else db.prepare("UPDATE topics SET page_ids = ?, lesson_json = NULL, checks_json = NULL WHERE id = ?").run(JSON.stringify(kept), t.id);
+    }
+    // Renumber what's left so positions stay 0..n-1.
+    const left = db.prepare("SELECT id FROM topics WHERE exam_id = ? ORDER BY position").all(doc.exam_id) as { id: number }[];
+    left.forEach((t, i) => db.prepare("UPDATE topics SET position = ? WHERE id = ?").run(i, t.id));
+    if (left.length === 0) db.prepare("UPDATE exams SET topic_status = 'none' WHERE id = ?").run(doc.exam_id);
+
+    db.prepare("DELETE FROM documents WHERE id = ?").run(docId);
+  })();
+  fs.rmSync(path.join(FILES_DIR, `doc-${docId}`), { recursive: true, force: true });
 }

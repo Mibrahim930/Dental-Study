@@ -7,6 +7,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { Uploader } from "@/components/Uploader";
 import { PracticeForm } from "@/components/PracticeForm";
 import { ActionButton } from "@/components/ActionButton";
+import { RemoveLectureButton } from "@/components/RemoveLectureButton";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
 import { plannerSettings } from "@/lib/planner";
@@ -305,6 +306,9 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                     ) : (
                       <span className="chip cb-butter shrink-0">{d.status === "pending" ? "Waiting" : "Reading"}</span>
                     )}
+                  </div>
+                  <div className="-mt-1 flex justify-end">
+                    <RemoveLectureButton docId={d.id} name={d.filename.replace(/\.pdf$/i, "")} reading={d.status === "processing" || d.status === "pending"} />
                   </div>
                   {d.status === "processing" && d.page_count > 0 && (
                     <div className="flex items-center gap-2.5">

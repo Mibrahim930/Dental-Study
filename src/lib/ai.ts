@@ -222,6 +222,11 @@ export async function createBatch<S extends z.ZodType>(creds: Credentials, schem
   return batch.id;
 }
 
+/** Stop a batch that is still running (e.g. its lecture was removed), so unread slides aren't paid for. */
+export async function cancelBatch(creds: Credentials, batchId: string): Promise<void> {
+  await client<Anthropic>(creds).messages.batches.cancel(batchId);
+}
+
 export type BatchResult<T> = { customId: string; ok: true; value: T } | { customId: string; ok: false; error: string };
 
 /** null while the batch is still running; otherwise every result (parsed and validated). */
