@@ -33,7 +33,8 @@ export type PlannerSettings = {
   rebuilt_on: string | null;
 };
 
-export type PlanWarning = { examId: number; examName: string; minutesShort: number };
+/** An exam whose work doesn't all fit before it. Newer warnings also say what was left out and the extra time per day that would cover it. */
+export type PlanWarning = { examId: number; examName: string; minutesShort: number; topicsLeft?: number; starredLeft?: number; perDay?: number };
 
 const LEARN_GROUP = 3; // practice after every N topics
 const MIN_PER_SLIDE = 2;
@@ -175,7 +176,13 @@ export function rebuildPlan(userId: number): PlanWarning[] {
 
     const queue: Draft[] = [];
     let group: Topic[] = [];
-    const remaining = topics.filter((t) => !studied.has(t.id));
+    // Learning should wrap up three days out, leaving room for the final stretch.
+    const deadline = addDays(examDay, -3) >= today ? addDays(examDay, -3) : addDays(examDay, -1);
+    let remaining = topics.filter((t) => !studied.has(t.id));
+    // Not enough time for everything: the topics the professor emphasized go first, so what doesn't fit is lighter material.
+    const needed = remaining.reduce((m, t) => m + topicMinutes(t), 0) + Math.ceil(remaining.length / LEARN_GROUP) * 20;
+    const available = days.filter((d) => d <= deadline).reduce((m, d) => m + Math.max(0, cap.get(d) ?? 0), 0);
+    if (needed > available) remaining = [...remaining.filter((t) => t.emphasized), ...remaining.filter((t) => !t.emphasized)];
     remaining.forEach((t, i) => {
       queue.push({ date: "", exam_id: exam.id, kind: "learn", topic_ids: JSON.stringify([t.id]), minutes: topicMinutes(t), title: `Study: ${t.title}` });
       group.push(t);
@@ -191,8 +198,6 @@ export function rebuildPlan(userId: number): PlanWarning[] {
         group = [];
       }
     });
-    // Learning should wrap up three days out, leaving room for the final stretch.
-    const deadline = addDays(examDay, -3) >= today ? addDays(examDay, -3) : addDays(examDay, -1);
     queues.push({ exam, deadline, queue });
   }
 
@@ -228,7 +233,21 @@ export function rebuildPlan(userId: number): PlanWarning[] {
 
   const warnings: PlanWarning[] = queues
     .filter((q) => q.queue.length > 0)
-    .map((q) => ({ examId: q.exam.id, examName: q.exam.name, minutesShort: q.queue.reduce((s, t) => s + t.minutes, 0) }));
+    .map((q) => {
+      const minutesShort = q.queue.reduce((s, t) => s + t.minutes, 0);
+      const left = q.queue.filter((t) => t.kind === "learn").map((t) => (JSON.parse(t.topic_ids) as number[])[0]);
+      const starredLeft = left.length
+        ? (db.prepare(`SELECT COUNT(*) n FROM topics WHERE emphasized = 1 AND id IN (${left.map(() => "?").join(",")})`).get(...left) as { n: number }).n
+        : 0;
+      return {
+        examId: q.exam.id,
+        examName: q.exam.name,
+        minutesShort,
+        topicsLeft: left.length,
+        starredLeft,
+        perDay: Math.ceil(minutesShort / Math.max(1, studyDaysBetween(today, q.deadline))),
+      };
+    });
 
   const insert = db.prepare(
     "INSERT INTO plan_tasks (user_id, date, exam_id, kind, topic_ids, minutes, title) VALUES (?, ?, ?, ?, ?, ?, ?)",

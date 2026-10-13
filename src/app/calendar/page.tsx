@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PlanWarnings } from "@/components/PlanWarnings";
 import { headers } from "next/headers";
 import { db, type Exam } from "@/lib/db";
 import { requireUser } from "@/lib/user";
@@ -161,19 +162,10 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           <CalendarForms date={selected >= today ? selected : today} />
         </section>
 
-        {warnings.length > 0 && (
-          <section className="tile cb-coral rounded-[28px] text-sm">
-            <h2 className="mb-1 font-semibold tracking-tight">Not enough study time</h2>
-            {warnings.map((w) => (
-              <p key={w.examId}>
-                {w.examName}: about {Math.ceil(w.minutesShort / 60)} more hour{w.minutesShort > 60 ? "s" : ""} needed. Add study time below or remove busy days.
-              </p>
-            ))}
-          </section>
-        )}
+        <PlanWarnings warnings={warnings} />
 
-        <section className="card space-y-3">
-          <h2 className="font-semibold tracking-tight">Study planner</h2>
+        <section id="planner" className="card scroll-mt-4 space-y-3">
+          <h2 className="section-title">Study planner</h2>
           <p className="text-sm text-muted-foreground">
             Your plan spreads each exam&apos;s topics, practice quizzes and review across the days before it, works around busy days, and
             updates automatically when things change.

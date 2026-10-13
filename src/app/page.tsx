@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress, firstName } from "@/lib/readiness";
+import { PlanWarnings } from "@/components/PlanWarnings";
 import { StartTaskButton, TaskList, type TaskItem } from "@/components/TaskList";
 import { DoubleRing, Icon, ICONS, MasteryChip, RingLegend, Strip } from "@/components/ui";
 
@@ -134,12 +135,11 @@ export default async function Home() {
                 </div>
                 <Strip total={todayTasks.length} filled={doneToday} className="px-1 pb-2" />
                 <TaskList tasks={todayTasks} empty="Nothing planned today. Enjoy the break, or get ahead from the calendar." />
-                {warnings.map((w) => (
-                  <p key={w.examId} className="mt-2 rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
-                    Not enough study time before {w.examName} (about {Math.ceil(w.minutesShort / 60)} h short).{" "}
-                    <Link href="/calendar" className="underline">Adjust your plan</Link>
-                  </p>
-                ))}
+                {warnings.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <PlanWarnings warnings={warnings} />
+                  </div>
+                )}
               </section>
             </>
           )}

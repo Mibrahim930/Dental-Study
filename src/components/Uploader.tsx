@@ -8,6 +8,7 @@ export function Uploader({ examId }: { examId: number }) {
   const [status, setStatus] = useState<string>("");
   const [errors, setErrors] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
+  const abort = useRef<AbortController | null>(null);
 
   async function upload(files: FileList | File[]) {
     const list = Array.from(files).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
@@ -16,17 +17,26 @@ export function Uploader({ examId }: { examId: number }) {
       return;
     }
     setErrors([]);
+    const controller = new AbortController();
+    abort.current = controller;
     for (const [i, file] of list.entries()) {
+      if (controller.signal.aborted) break;
       setStatus(`Uploading ${i + 1} of ${list.length}: ${file.name}… (rendering slides can take a moment)`);
       const body = new FormData();
       body.append("file", file);
-      const res = await fetch(`/api/exams/${examId}/upload`, { method: "POST", body });
-      if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: res.statusText }));
-        setErrors((e) => [...e, `${file.name}: ${error}`]);
+      try {
+        const res = await fetch(`/api/exams/${examId}/upload`, { method: "POST", body, signal: controller.signal });
+        if (!res.ok) {
+          const { error } = await res.json().catch(() => ({ error: res.statusText }));
+          setErrors((e) => [...e, `${file.name}: ${error}`]);
+        }
+      } catch {
+        // Cancelled. If the file already reached the server it shows in the list below, where it can be removed.
+        setErrors((e) => [...e, `Cancelled ${list.length - i > 1 ? `${file.name} and the files after it` : file.name}. If it still appears below, use Remove.`]);
       }
       router.refresh();
     }
+    abort.current = null;
     setStatus("");
     if (input.current) input.current.value = "";
   }
@@ -57,7 +67,14 @@ export function Uploader({ examId }: { examId: number }) {
         Choose files
       </button>
       <input ref={input} type="file" accept="application/pdf" multiple hidden onChange={(e) => e.target.files && upload(e.target.files)} />
-      {status && <p className="text-sm font-semibold text-primary">{status}</p>}
+      {status && (
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-sm font-semibold text-primary">{status}</p>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => abort.current?.abort()}>
+            Cancel upload
+          </button>
+        </div>
+      )}
       {errors.map((e) => (
         <p key={e} className="w-full rounded-2xl bg-coral px-3 py-2 text-left text-sm font-semibold text-on-coral">{e}</p>
       ))}
