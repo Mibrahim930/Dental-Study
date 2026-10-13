@@ -1,7 +1,7 @@
 // PDF page rendering, shared by uploads, backup restore and scripts. No database imports.
 import * as mupdf from "mupdf";
 
-const IMAGE_WIDTH = 1400;
+const IMAGE_WIDTH = 1280;
 
 export function openPdf(bytes: Buffer | Uint8Array): mupdf.Document {
   return mupdf.Document.openDocument(bytes, "application/pdf");
@@ -14,7 +14,7 @@ export function renderPage(doc: mupdf.Document, index: number): { jpeg: Uint8Arr
   const scale = IMAGE_WIDTH / (x1 - x0);
   const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
   return {
-    jpeg: pix.asJPEG(80),
+    jpeg: pix.asJPEG(72),
     text: page.toStructuredText("preserve-whitespace").asText().trim(),
     aspect: (x1 - x0) / (y1 - y0),
   };

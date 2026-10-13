@@ -18,6 +18,12 @@ export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/
     const id = await addDocument(examId, file.name.replace(/\.pdf$/i, ""), Buffer.from(await file.arrayBuffer()));
     return NextResponse.json({ id });
   } catch (err) {
+    if (String(err).includes("ENOSPC")) {
+      return NextResponse.json(
+        { error: "The site has run out of storage space, so this lecture couldn't be saved. The site owner needs to add space; your other lectures are safe." },
+        { status: 507 },
+      );
+    }
     return NextResponse.json({ error: `Could not read this PDF: ${String(err)}` }, { status: 400 });
   }
 }

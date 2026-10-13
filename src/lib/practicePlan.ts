@@ -125,6 +125,17 @@ function inOpenExams(): Set<number> {
   );
 }
 
+/**
+ * The correct option of an AI-written question, cross-checked: the AI gives both the index and the answer's text.
+ * Returns -1 when they point at different options (the AI contradicted itself), so the question is dropped.
+ */
+export function checkedAnswer(options: string[], correctIndex: number, correctAnswer: string | undefined): number {
+  if (!correctAnswer) return correctIndex;
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const byText = options.findIndex((o) => norm(o) === norm(correctAnswer));
+  return byText === -1 || byText === correctIndex ? correctIndex : -1;
+}
+
 /** An AI-written multiple-choice question is usable: a whole-number answer in range, and distinct, non-blank options. */
 export function isValidChoice(options: string[], correctIndex: number): boolean {
   const clean = options.map((o) => o.trim().toLowerCase());

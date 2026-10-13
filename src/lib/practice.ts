@@ -12,6 +12,7 @@ import {
   retryCases,
   retryQuestions,
   RETRY_SHARE,
+  checkedAnswer,
   isValidChoice,
   lastPracticed,
   shuffledOrder,
@@ -49,6 +50,7 @@ const GeneratedQuestions = z.object({
       stem: z.string(),
       options: z.array(z.string()).describe("Exactly 5 answer choices, no letter prefixes"),
       correct_index: z.number().describe("0-based index of the correct option"),
+      correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
       explanation: z.string().describe("Why the answer is correct and briefly why the main distractors are wrong. Cite the slide"),
       source_page_id: z.number().describe("ID of the slide this question is based on"),
       concept: z.string().describe("The concept tested; use one of the listed concept names"),
@@ -272,6 +274,7 @@ const GeneratedCases = z.object({
             stem: z.string(),
             options: z.array(z.string()).describe("Exactly 5 answer choices, no letter prefixes"),
             correct_index: z.number().describe("0-based index of the correct option"),
+            correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
             explanation: z.string().describe("Why the answer is correct and why the main distractors are wrong. Cite the slide"),
             source_page_id: z.number().describe("ID of the slide this question is based on"),
             concept: z.string().describe("The concept tested; use one of the listed concept names"),
@@ -364,7 +367,9 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): 
   );
   const groups: number[][] = [];
   for (const c of out.cases.slice(0, count)) {
-    const qs = c.questions.filter((q) => isValidChoice(q.options, q.correct_index));
+    const qs = c.questions
+      .map((q) => ({ ...q, correct_index: checkedAnswer(q.options, q.correct_index, q.correct_answer) }))
+      .filter((q) => isValidChoice(q.options, q.correct_index));
     if (qs.length === 0) continue;
     const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
     const box = JSON.stringify(c.patient_box);
@@ -442,6 +447,7 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
   );
   const ids: number[] = [];
   for (const q of out.questions.slice(0, count)) {
+    q.correct_index = checkedAnswer(q.options, q.correct_index, q.correct_answer);
     if (!isValidChoice(q.options, q.correct_index)) continue;
     if (seen.has(norm(q.stem))) continue;
     seen.add(norm(q.stem));

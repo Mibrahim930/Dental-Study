@@ -4,7 +4,7 @@ import { chatStream, generate, type ChatTurn } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, weakConcepts, glossaryText } from "./memory";
-import { isValidChoice } from "./practicePlan";
+import { checkedAnswer, isValidChoice } from "./practicePlan";
 
 export const Lesson = z.object({
   explanation: z
@@ -30,6 +30,7 @@ const SectionQuiz = z.object({
         question: z.string(),
         options: z.array(z.string()).describe("4 answer choices, no letter prefixes"),
         correct_index: z.number().describe("0-based index of the correct option"),
+        correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
         explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
         concept: z.string().describe("The concept tested; use one of the listed concept names when one fits"),
       }),
@@ -152,6 +153,7 @@ Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that
     ].join("\n\n"),
   });
   const questions = out.questions
+    .map((q) => ({ ...q, correct_index: checkedAnswer(q.options, q.correct_index, q.correct_answer) }))
     .filter((q) => isValidChoice(q.options, q.correct_index))
     .slice(0, QUIZ_SIZE)
     .map((q) => {
