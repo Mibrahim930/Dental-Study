@@ -27,6 +27,7 @@ type Row = {
   concept_name: string | null;
   source_filename: string | null;
   source_page_number: number | null;
+  source_emphasized: number | null;
 };
 
 /** The attempt as the student may see it: answers are only revealed when allowed. */
@@ -51,7 +52,7 @@ export function attemptView(attemptId: number) {
   const rows = db
     .prepare(
       `SELECT aq.question_id, aq.position, aq.chosen_index, aq.correct, aq.confidence, aq.option_order, q.*, t.title AS topic_title, c.name AS concept_name,
-              d.filename AS source_filename, sp.page_number AS source_page_number
+              d.filename AS source_filename, sp.page_number AS source_page_number, sp.emphasized AS source_emphasized
        , cs.scenario
        FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id
        LEFT JOIN cases cs ON cs.id = q.case_id
@@ -103,6 +104,7 @@ export function attemptView(attemptId: number) {
       chosen_index: shown(r.chosen_index),
       confidence: r.confidence,
       retry: r.option_order != null,
+      emphasized: !!r.source_emphasized,
       flagged: !!r.flagged,
       topic: r.topic_title,
       concept: r.concept_name,

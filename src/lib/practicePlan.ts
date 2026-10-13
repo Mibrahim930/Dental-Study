@@ -235,7 +235,7 @@ export function allocate(
 function topicWeights(topics: Topic[], focus: Map<number, FocusPoint[]> | null): number[] {
   return topics.map((t) => {
     const slides = Math.max(1, (JSON.parse(t.page_ids) as number[]).length);
-    const emphasis = t.emphasized ? 1.5 : 1;
+    const emphasis = t.emphasized ? 2 : 1;
     if (!focus) return emphasis * slides;
     const concepts = db
       .prepare("SELECT c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?")

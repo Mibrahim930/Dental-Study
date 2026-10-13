@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
-import { getLesson } from "@/lib/study";
+import { getLesson, topicPages } from "@/lib/study";
+import { parseNotes } from "@/lib/processing";
 import { markTopicStudied } from "@/lib/planner";
 import { topicConcepts } from "@/lib/memory";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
@@ -37,6 +38,18 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
       concepts: topicConcepts(topic.id, session.exam_id),
       lesson,
       aspects,
+      // Slides the professor emphasized, with what was stressed, for the "Your professor stressed this" block.
+      stressed: topicPages(topic)
+        .filter((p) => p.emphasized)
+        .map((p) => {
+          const n = parseNotes(p);
+          return {
+            page_id: p.id,
+            where: `${p.filename.replace(/\.pdf$/i, "")}, slide ${p.page_number}`,
+            point: n?.emphasis_note ?? n?.key_facts?.[0] ?? n?.summary ?? p.title ?? "",
+          };
+        })
+        .filter((s) => s.point),
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

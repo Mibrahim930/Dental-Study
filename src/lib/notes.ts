@@ -14,7 +14,13 @@ export const SlideNotes = z.object({
     .describe("Notes the student or professor added on top of the slide: typed notes, handwriting, circled/highlighted text. Transcribe them"),
   emphasized: z
     .boolean()
-    .describe("True if the slide or its annotations flag this as important/high-yield/'will be on the exam'"),
+    .describe(
+      "True if the professor marks this as important in any way: stars/asterisks, 'important', 'know this', 'high-yield', 'will be on the exam', 'remember', exclamation marks, bold/red/coloured/highlighted/boxed/circled/underlined text, arrows pointing at it, or handwritten emphasis",
+    ),
+  emphasis_note: z
+    .string()
+    .nullable()
+    .describe("When emphasized: in one short line, exactly what the professor stressed (e.g. 'Know the 4 signs of irreversible pulpitis'). Otherwise null"),
   case_prompt: z
     .string()
     .nullable()
@@ -37,4 +43,5 @@ You get the rendered slide image plus the slide's extracted text layer.
 Much of the meaning is in the images (radiographs, clinical photos, histology) and in small labels such as diagnosis abbreviations, so read the image carefully.
 The PDF may contain the student's own annotations (typed notes at the top of the slide or handwriting on it); transcribe them into "annotations".
 Spell out dental abbreviations (e.g. SIP = symptomatic irreversible pulpitis, PN = pulp necrosis, AAA = acute apical abscess) using standard AAE terminology.
+Notice what the professor emphasizes (stars, "important", "know this", "on the exam", bold, red, highlighted or boxed text, handwritten marks): set "emphasized" and say what was stressed in "emphasis_note".
 Stay faithful to the slide. Do not add facts that are not on the slide or directly implied by it.`;

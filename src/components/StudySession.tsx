@@ -18,6 +18,7 @@ type LessonData = {
     connections: string | null;
   };
   aspects: Record<number, number>;
+  stressed?: { page_id: number; where: string; point: string }[];
 };
 type QuizQ = { question: string; options: string[]; correct_index: number; explanation: string; concept: string };
 
@@ -263,6 +264,23 @@ function Lesson({ data }: { data: LessonData }) {
             <SlideImage pageId={zoom} alt="Slide" />
           </div>
         </div>
+      )}
+
+      {data.stressed && data.stressed.length > 0 && (
+        <section className="tile cb-coral rounded-[28px]">
+          <h2 className="mb-1 text-[22px] font-extrabold tracking-tight">★ Your professor stressed this</h2>
+          <p className="mb-3 text-[13px] font-semibold opacity-80">Starred, highlighted or called out in the lecture. Expect it on the exam.</p>
+          <ul className="flex flex-col gap-2">
+            {data.stressed.map((s) => (
+              <li key={s.page_id}>
+                <button onClick={() => setZoom(s.page_id)} className="w-full rounded-[18px] bg-white/45 px-4 py-3 text-left transition-colors hover:bg-white/60">
+                  <span className="block text-[15px] leading-snug font-bold">★ {s.point}</span>
+                  <span className="mt-0.5 block text-[12px] font-semibold opacity-75">{s.where} · tap to see the slide</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <section className="tile cb-butter rounded-[28px]">

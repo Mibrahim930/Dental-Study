@@ -10,7 +10,9 @@ export const Lesson = z.object({
   explanation: z
     .string()
     .describe("Markdown teaching walkthrough of the topic, 200-450 words, clinically oriented, with **bold** key terms"),
-  key_points: z.array(z.string()).describe("4-7 high-yield points to remember"),
+  key_points: z
+    .array(z.string())
+    .describe("4-7 high-yield points to remember. Start with what slides marked ★IMPORTANT emphasize, and begin those points with \"★ \""),
   slides: z
     .array(z.object({ page_id: z.number(), caption: z.string() }))
     .describe("Up to 4 of the provided slides whose images are most worth looking at, with a caption saying what to notice"),
@@ -57,7 +59,7 @@ export function slideNotesText(pages: (PageRow & { filename: string })[]): strin
       const n = parseNotes(p);
       if (!n) return `[P${p.id}] ${p.filename} slide ${p.page_number}\n${p.text}`;
       return [
-        `[P${p.id}] ${p.filename} slide ${p.page_number}: ${n.title}${n.emphasized ? " ★IMPORTANT" : ""}`,
+        `[P${p.id}] ${p.filename} slide ${p.page_number}: ${n.title}${n.emphasized ? ` ★IMPORTANT${n.emphasis_note ? ` (${n.emphasis_note})` : ""}` : ""}`,
         n.summary,
         n.image_description && `Image: ${n.image_description}`,
         ...n.key_facts.map((f) => `- ${f}`),
@@ -142,7 +144,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
     maxTokens: 16000,
     system: `You write the end-of-section quiz for a dental student's guided study session, based strictly on their lecture slides.
 Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that together check the student learned this section:
-- Spread them across the slides so the whole section is covered; give slides marked ★IMPORTANT or with annotations extra weight.
+- Spread them across the slides so the whole section is covered; slides marked ★IMPORTANT were emphasized by the professor, so at least a third of the questions must test them when there are any.
 - Mix question kinds: about half straight recall of key facts, the rest applying them (short clinical vignettes, "which finding/next step", comparisons).
 - Each question tests a different fact. Plausible distractors of similar length; no "all/none of the above"; no trivia like citations or years.
 - Order them from more basic to more applied.`,

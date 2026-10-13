@@ -13,6 +13,8 @@ export type QuestionData = {
   image: { page_id: number; aspect: number; crop: unknown } | null;
   chosen_index: number | null;
   confidence?: "guess" | "unsure" | "sure" | null;
+  /** Written from a slide the professor emphasized. */
+  emphasized?: boolean;
   flagged: boolean;
   topic: string | null;
   concept: string | null;
@@ -114,6 +116,7 @@ export function QuestionCard({
       <section className="card flex flex-col gap-2.5">
         {header}
         {tag && !q.caseInfo && <div>{tag}</div>}
+        {q.emphasized && <span className="chip cb-coral self-start">★ Emphasized in lecture</span>}
         <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">{q.stem}</p>
         {q.options.map((o, i) => {
           const s = optionClasses(stateOf(i));
