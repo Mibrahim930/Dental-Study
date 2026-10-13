@@ -34,7 +34,7 @@ export type PlannerSettings = {
 };
 
 /** An exam whose work doesn't all fit before it. Newer warnings also say what was left out and the extra time per day that would cover it. */
-export type PlanWarning = { examId: number; examName: string; minutesShort: number; topicsLeft?: number; starredLeft?: number; perDay?: number };
+export type PlanWarning = { examId: number; examName: string; minutesShort: number; topicsLeft?: number; starredLeft?: number; starredTotal?: number; perDay?: number };
 
 const LEARN_GROUP = 3; // practice after every N topics
 const MIN_PER_SLIDE = 2;
@@ -129,6 +129,7 @@ export function rebuildPlan(userId: number): PlanWarning[] {
     if (d === today) minutes = Math.max(0, minutes - doneToday);
     cap.set(d, minutes);
   }
+  const studyDays = new Map(cap); // each day's study time before anything is placed
 
   const out: Draft[] = [];
   const place = (task: Draft, day: string) => {
@@ -245,7 +246,8 @@ export function rebuildPlan(userId: number): PlanWarning[] {
         minutesShort,
         topicsLeft: left.length,
         starredLeft,
-        perDay: Math.ceil(minutesShort / Math.max(1, studyDaysBetween(today, q.deadline))),
+        starredTotal: (db.prepare("SELECT COUNT(*) n FROM topics WHERE exam_id = ? AND emphasized = 1").get(q.exam.id) as { n: number }).n,
+        perDay: Math.ceil(minutesShort / Math.max(1, days.filter((d) => d <= q.deadline && (studyDays.get(d) ?? 0) > 0).length)),
       };
     });
 

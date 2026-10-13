@@ -132,8 +132,10 @@ function inOpenExams(): Set<number> {
 export function checkedAnswer(options: string[], correctIndex: number, correctAnswer: string | undefined): number {
   if (!correctAnswer) return correctIndex;
   const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const byText = options.findIndex((o) => norm(o) === norm(correctAnswer));
-  return byText === -1 || byText === correctIndex ? correctIndex : -1;
+  const target = norm(correctAnswer);
+  const matches = options.map((o, i) => (norm(o) === target ? i : -1)).filter((i) => i !== -1);
+  if (!target || matches.length !== 1) return correctIndex;
+  return matches[0] === correctIndex ? correctIndex : -1;
 }
 
 /** An AI-written multiple-choice question is usable: a whole-number answer in range, and distinct, non-blank options. */

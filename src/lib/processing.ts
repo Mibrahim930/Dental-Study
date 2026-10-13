@@ -176,6 +176,7 @@ function slideRequest(lecture: string, page: PageRow) {
 }
 
 function savePageNotes(userId: number, page: PageRow, notes: SlideNotes) {
+  if (!db.prepare("SELECT 1 FROM pages WHERE id = ?").get(page.id)) return; // lecture was removed meanwhile
   const tx = db.transaction(() => {
     db.prepare(
       "UPDATE pages SET status = 'done', error = NULL, title = ?, notes_json = ?, emphasized = ?, has_case = ? WHERE id = ?",
@@ -253,7 +254,20 @@ export async function removeDocument(docId: number): Promise<void> {
     left.forEach((t, i) => db.prepare("UPDATE topics SET position = ? WHERE id = ?").run(i, t.id));
     if (left.length === 0) db.prepare("UPDATE exams SET topic_status = 'none' WHERE id = ?").run(doc.exam_id);
 
+    if (pageIds.size) db.prepare(`DELETE FROM pages_fts WHERE page_id IN (${[...pageIds].map(() => "?").join(",")})`).run(...pageIds);
+    db.prepare("DELETE FROM cases WHERE exam_id = ? AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.case_id = cases.id)").run(doc.exam_id);
+    db.prepare("UPDATE study_sessions SET current_position = MIN(current_position, ?) WHERE exam_id = ?").run(Math.max(0, left.length - 1), doc.exam_id);
     db.prepare("DELETE FROM documents WHERE id = ?").run(docId);
   })();
-  fs.rmSync(path.join(FILES_DIR, `doc-${docId}`), { recursive: true, force: true });
+  // A classmate's copy of a shared exam points at the same slide images; keep them while anyone else still uses them.
+  const shared = doc.user_id
+    ? db
+        .prepare(
+          `SELECT 1 FROM pages p JOIN documents d ON d.id = p.document_id JOIN exams e ON e.id = d.exam_id
+           WHERE p.image_path LIKE ? AND e.user_id != ? LIMIT 1`,
+        )
+        .get(`doc-${docId}/%`, doc.user_id)
+    : null;
+  if (shared) fs.rmSync(path.join(FILES_DIR, `doc-${docId}`, "original.pdf"), { force: true });
+  else fs.rmSync(path.join(FILES_DIR, `doc-${docId}`), { recursive: true, force: true });
 }

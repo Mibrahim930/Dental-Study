@@ -9,14 +9,17 @@ export function PlanWarnings({ warnings }: { warnings: PlanWarning[] }) {
   return (
     <>
       {warnings.map((w) => {
-        const starredIn = w.starredLeft === 0;
+        const hasStarred = (w.starredTotal ?? 0) > 0;
+        const starredIn = hasStarred && w.starredLeft === 0;
         return (
           <section key={w.examId} className="tile cb-butter flex flex-col gap-2 rounded-[24px]">
             <div className="text-[17px] font-extrabold">Tight on time for {w.examName}, and that&apos;s okay.</div>
             <p className="text-[15px] leading-relaxed font-medium">
               {starredIn
                 ? "Your plan covers the ★ topics your professor stressed first, so the most important material is in. "
-                : "Your plan puts the ★ topics your professor stressed first. "}
+                : hasStarred
+                  ? "Your plan puts the ★ topics your professor stressed first. "
+                  : "Your plan fits in as much as your study time allows. "}
               {w.topicsLeft
                 ? `${w.topicsLeft} ${w.topicsLeft === 1 ? "topic" : "topics"} didn't fit${w.perDay ? `; about ${w.perDay} extra minutes a day would cover ${w.topicsLeft === 1 ? "it" : "them"}` : ""}.`
                 : `About ${hours(w.minutesShort)} of practice didn't fit.`}
