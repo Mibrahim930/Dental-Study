@@ -92,7 +92,10 @@ CREATE TABLE IF NOT EXISTS topics (
   page_ids TEXT NOT NULL DEFAULT '[]',
   emphasized INTEGER NOT NULL DEFAULT 0,
   lesson_json TEXT,
-  checks_json TEXT                                 -- 10-question section quiz shown after the lesson
+  checks_json TEXT,                                -- section quiz shown after the lesson (JSON array; see lib/study.ts)
+  checks_version INTEGER                           -- how checks_json was written: NULL = old 10-question quiz,
+                                                   -- 2 = 20 questions planned over the slides and checked by a second AI pass.
+                                                   -- Quizzes older than QUIZ_VERSION are rewritten once on next open.
 );
 
 CREATE TABLE IF NOT EXISTS topic_concepts (
@@ -330,6 +333,7 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE attempt_questions ADD COLUMN option_order TEXT");
   }
   if (!columns(db, "topics").includes("checks_json")) db.exec("ALTER TABLE topics ADD COLUMN checks_json TEXT");
+  if (!columns(db, "topics").includes("checks_version")) db.exec("ALTER TABLE topics ADD COLUMN checks_version INTEGER");
   if (!columns(db, "session_checks").includes("check_index")) {
     db.exec("ALTER TABLE session_checks ADD COLUMN check_index INTEGER");
     db.exec("ALTER TABLE session_checks ADD COLUMN chosen INTEGER");
@@ -440,7 +444,17 @@ export type Topic = {
   emphasized: number;
   lesson_json: string | null;
   checks_json: string | null;
+  checks_version: number | null;
 };
+
+/**
+ * Throw away a topic's section quiz so it's written again. Answers already given stay (summaries, mastery, history)
+ * but are detached from the old question positions, so they never show against a different question.
+ */
+export function resetSectionQuiz(topicId: number) {
+  db.prepare("UPDATE topics SET checks_json = NULL, checks_version = NULL WHERE id = ?").run(topicId);
+  db.prepare("UPDATE session_checks SET check_index = NULL WHERE topic_id = ?").run(topicId);
+}
 
 export type Question = {
   id: number;

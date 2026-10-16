@@ -1,10 +1,12 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { db, examOwner, type Exam, type PageRow, type Topic } from "./db";
 import { chatStream, generate, type ChatTurn } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
-import { recentSummaries, searchLibrary, topicConcepts, weakConcepts, glossaryText } from "./memory";
+import { recentSummaries, searchLibrary, topicConcepts, upsertConcept, weakConcepts, glossaryText } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
+import { ANGLE_TEXT, normStem, planQuiz, type Angle } from "./quizPlan";
 
 export const Lesson = z.object({
   explanation: z
@@ -23,23 +25,51 @@ export const Lesson = z.object({
 });
 export type Lesson = z.infer<typeof Lesson>;
 
-export const QUIZ_SIZE = 10;
+/** Questions in a section quiz (fewer only if the AI couldn't write enough distinct, checked ones). */
+export const QUIZ_SIZE = 20;
+/** Stored in topics.checks_version. Quizzes written by an older version are rewritten once on next open. */
+export const QUIZ_VERSION = 2;
 
 const SectionQuiz = z.object({
-  questions: z
-    .array(
-      z.object({
-        question: z.string(),
-        options: z.array(z.string()).describe("4 answer choices, no letter prefixes"),
-        correct_index: z.number().describe("0-based index of the correct option"),
-        correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
-        explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
-        concept: z.string().describe("The concept tested; use one of the listed concept names when one fits"),
-      }),
-    )
-    .describe(`${QUIZ_SIZE} questions`),
+  questions: z.array(
+    z.object({
+      slot: z.number().describe("The Q number of the planned question this answers"),
+      question: z.string(),
+      options: z.array(z.string()).describe("4 answer choices, no letter prefixes"),
+      correct_index: z.number().describe("0-based index of the correct option"),
+      correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
+      explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
+      source_page_id: z.number().describe("The [P…] id of the slide this question tests"),
+      concept: z.string().describe("The concept tested; use one of the listed concept names when one fits"),
+    }),
+  ),
 });
-export type QuizQuestion = z.infer<typeof SectionQuiz>["questions"][number];
+
+const QuizCheck = z.object({
+  verdicts: z.array(
+    z.object({
+      n: z.number().describe("The question number"),
+      ok: z.boolean().describe("True only if the keyed answer is stated or directly implied by the slides, no other option is also correct, and it doesn't repeat an earlier question"),
+      reason: z.string().describe("One short line"),
+    }),
+  ),
+});
+
+/** One section-quiz question as stored in topics.checks_json. Positions in the array never change once written. */
+export type QuizQuestion = {
+  /** Stable id (highlights, reports). Old quizzes have none. */
+  id?: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+  concept: string;
+  source_page_id?: number | null;
+  kind?: Angle;
+  /** Reported by the student: not shown again in this copy of the exam. */
+  hidden?: boolean;
+  report_note?: string | null;
+};
 
 export function topicPages(topic: Topic): (PageRow & { filename: string })[] {
   const ids = JSON.parse(topic.page_ids) as number[];
@@ -122,9 +152,12 @@ Refer to slides as "Lecture name, slide N".`,
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 
+/** The current quiz is up to date (written by this version); older ones are rewritten once. */
+export const quizIsCurrent = (topic: Pick<Topic, "checks_json" | "checks_version">) => !!topic.checks_json && (topic.checks_version ?? 0) >= QUIZ_VERSION;
+
 /** The section quiz after a lesson: written once per topic and cached, like the lesson. */
 export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
-  if (topic.checks_json) return Promise.resolve(JSON.parse(topic.checks_json) as QuizQuestion[]);
+  if (quizIsCurrent(topic)) return Promise.resolve(JSON.parse(topic.checks_json!) as QuizQuestion[]);
   let p = quizInflight.get(topic.id);
   if (!p) {
     p = generateSectionQuiz(topic).finally(() => quizInflight.delete(topic.id));
@@ -133,38 +166,163 @@ export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   return p;
 }
 
+const QUIZ_SYSTEM = `You write end-of-section quiz questions for a dental student's guided study session, based strictly on their lecture slides.
+You are given a numbered list of planned questions: each names the slide it must test and its angle. Write exactly one question for each, and set slot to its Q number and source_page_id to that slide.
+- Single best answer, 4 options. Exactly one option is defensibly correct from the slides.
+- Distractors are plausible, of similar length, from the same category as the answer and ideally from the same slides.
+- No "all of the above", "none of the above" or "both A and B". Use "EXCEPT"/"NOT" only when the angle says so.
+- Don't test citations, authors, years or slide numbers.
+- The stem must not contain the answer's key term or give it away.
+- When one slide has several planned questions, each tests a different fact or takes a clearly different angle. Never write the same question twice.
+- The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).`;
+
+const JUDGE_SYSTEM = `You check quiz questions written for a dental student against their lecture slides. Be strict but fair.
+For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).`;
+
+type Draft = Omit<QuizQuestion, "id" | "hidden" | "report_note"> & { slot: number };
+
+/**
+ * Write a topic's section quiz (QUIZ_SIZE questions):
+ * 1. Plan which slide each question tests and from what angle (every slide covered when there's room; see quizPlan).
+ * 2. Two AI calls of half the plan each, run together.
+ * 3. Keep questions whose answer key checks out, that cite one of the topic's slides, and aren't duplicates.
+ * 4. A second AI pass checks each one against the slides (QUIZ_JUDGE=0 turns it off) and drops the doubtful.
+ * 5. One repair call for the slots left empty (checked the same way). If it still falls short, the quiz is shorter.
+ * Replacing an older quiz detaches the answers given to it (they stay for history, summaries and mastery).
+ */
 async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const userId = examOwner(topic.exam_id);
+  const creds = credentials(userId);
   const concepts = topicConcepts(topic.id, topic.exam_id);
-  const out = await generate({
-    creds: credentials(userId),
-    purpose: "section quiz",
-    schema: SectionQuiz,
-    effort: "medium",
-    maxTokens: 16000,
-    system: `You write the end-of-section quiz for a dental student's guided study session, based strictly on their lecture slides.
-Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that together check the student learned this section:
-- Spread them across the slides so the whole section is covered; slides marked ★IMPORTANT were emphasized by the professor, so at least a third of the questions must test them when there are any.
-- Mix question kinds: about half straight recall of key facts, the rest applying them (short clinical vignettes, "which finding/next step", comparisons).
-- Each question tests a different fact. Plausible distractors of similar length; no "all/none of the above"; no trivia like citations or years.
-- Order them from more basic to more applied.`,
-    content: [
-      `Topic: ${topic.title}\n${topic.summary}`,
-      `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`,
-      `Slides:\n${slideNotesText(topicPages(topic))}`,
-    ].join("\n\n"),
-  });
-  const questions = out.questions
-    .map((q) => ({ ...q, correct_index: checkedAnswer(q.options, q.correct_index, q.correct_answer) }))
-    .filter((q) => isValidChoice(q.options, q.correct_index))
-    .slice(0, QUIZ_SIZE)
-    .map((q) => {
+  const pages = topicPages(topic);
+  const notes = slideNotesText(pages);
+  const valid = new Set(pages.map((p) => p.id));
+  const slots = planQuiz(
+    pages.map((p) => {
+      const n = parseNotes(p);
+      return { id: p.id, keyFacts: n?.key_facts.length ?? 0, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case) };
+    }),
+    QUIZ_SIZE,
+  );
+  const judge = process.env.QUIZ_JUDGE !== "0";
+  const context = [`Topic: ${topic.title}\n${topic.summary}`, `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`, `Slides:\n${notes}`].join("\n\n");
+
+  const write = async (wanted: number[], avoid: string[]): Promise<Draft[]> => {
+    const list = wanted
+      .map((i) => `Q${i + 1}: ${slots[i].page != null ? `slide P${slots[i].page}` : "the topic"} — ${ANGLE_TEXT[slots[i].angle]}`)
+      .join("\n");
+    const out = await generate({
+      creds,
+      purpose: "section quiz",
+      schema: SectionQuiz,
+      effort: "medium",
+      maxTokens: 16000,
+      system: QUIZ_SYSTEM,
+      content: `${context}\n\nWrite exactly these ${wanted.length} questions:\n${list}${
+        avoid.length ? `\n\nQuestions already in this quiz. Don't repeat them or ask the same fact again:\n${avoid.map((s) => `- ${s}`).join("\n")}` : ""
+      }`,
+    });
+    // Match each answer to its planned slot (by Q number; failing that, the first open slot for the same slide).
+    const open = new Set(wanted);
+    const drafts: Draft[] = [];
+    for (const q of out.questions) {
+      const bySlot = Number.isInteger(q.slot) && open.has(q.slot - 1) ? q.slot - 1 : null;
+      const slot = bySlot ?? wanted.find((i) => open.has(i) && slots[i].page === q.source_page_id) ?? wanted.find((i) => open.has(i));
+      if (slot == null) break;
+      open.delete(slot);
+      const correct = checkedAnswer(q.options, q.correct_index, q.correct_answer);
+      if (!isValidChoice(q.options, correct)) continue;
+      // The question must test one of this topic's slides (any slide works when the topic has none).
+      const page = valid.size === 0 ? null : valid.has(q.source_page_id) ? q.source_page_id : null;
+      if (valid.size > 0 && page == null) continue;
+      drafts.push({ slot, question: q.question, options: q.options, correct_index: correct, explanation: q.explanation, concept: q.concept, source_page_id: page, kind: slots[slot].angle });
+    }
+    return drafts;
+  };
+
+  /** Drop what the checking pass rejects. If the check itself fails, keep everything rather than lose the quiz. */
+  const check = async (drafts: Draft[]): Promise<Draft[]> => {
+    if (!judge || drafts.length === 0) return drafts;
+    try {
+      const out = await generate({
+        creds,
+        purpose: "section quiz check",
+        schema: QuizCheck,
+        effort: "low",
+        maxTokens: 8000,
+        system: JUDGE_SYSTEM,
+        content: `Slides:\n${notes}\n\nQuestions:\n${drafts
+          .map(
+            (d, i) =>
+              `${i + 1}. ${d.question}\n${d.options.map((o, k) => `   ${String.fromCharCode(65 + k)}. ${o}`).join("\n")}\n   Keyed answer: ${String.fromCharCode(65 + d.correct_index)}${
+                d.source_page_id != null ? ` (slide P${d.source_page_id})` : ""
+              }`,
+          )
+          .join("\n\n")}`,
+      });
+      const rejected = new Set(out.verdicts.filter((v) => v.ok === false).map((v) => v.n - 1));
+      return drafts.filter((_, i) => !rejected.has(i));
+    } catch (err) {
+      console.error(`Section quiz check failed for topic ${topic.id}; keeping the questions`, err);
+      return drafts;
+    }
+  };
+
+  const kept = new Map<number, Draft>();
+  const seen = new Set<string>();
+  const keep = (drafts: Draft[]) => {
+    for (const d of drafts) {
+      const key = normStem(d.question);
+      if (!key || seen.has(key) || kept.has(d.slot)) continue;
+      seen.add(key);
+      kept.set(d.slot, d);
+    }
+  };
+
+  const all = slots.map((_, i) => i);
+  const halves = [all.slice(0, Math.ceil(all.length / 2)), all.slice(Math.ceil(all.length / 2))].filter((h) => h.length);
+  const settled = await Promise.allSettled(halves.map((h) => write(h, [])));
+  const first = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  if (first.length === 0 && settled.every((r) => r.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
+  // Check the dedupe first so the checking pass doesn't see the same question twice.
+  const firstDistinct: Draft[] = [];
+  {
+    const s = new Set<string>();
+    for (const d of first) if (!s.has(normStem(d.question)) && (s.add(normStem(d.question)), true)) firstDistinct.push(d);
+  }
+  keep(await check(firstDistinct));
+
+  // One repair call for empty slots: slides that lost their only question first, then the rest.
+  const coveredPages = new Set([...kept.values()].map((d) => d.source_page_id));
+  const missing = all.filter((i) => !kept.has(i)).sort((a, b) => Number(coveredPages.has(slots[a].page)) - Number(coveredPages.has(slots[b].page)) || a - b);
+  if (missing.length > 0) {
+    try {
+      const repaired = (await write(missing, [...kept.values()].map((d) => d.question.slice(0, 160)))).filter((d) => !seen.has(normStem(d.question)));
+      keep(await check(repaired));
+    } catch (err) {
+      console.error(`Section quiz repair failed for topic ${topic.id}`, err);
+    }
+  }
+
+  const questions: QuizQuestion[] = [...kept.values()]
+    .sort((a, b) => a.slot - b.slot)
+    .map((d) => {
+      const { slot, ...q } = d;
+      void slot;
       // Shuffle options so the correct answer isn't biased to one position.
       const order = shuffle(q.options.map((_, i) => i));
-      return { ...q, options: order.map((i) => q.options[i]), correct_index: order.indexOf(q.correct_index) };
+      return { id: randomUUID().slice(0, 8), ...q, options: order.map((i) => q.options[i]), correct_index: order.indexOf(q.correct_index) };
     });
   if (questions.length === 0) throw new Error("Couldn't write the section quiz. Try again.");
-  db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(questions), topic.id);
+
+  db.transaction(() => {
+    // Replacing an older quiz: earlier answers point at the old positions, so detach them (rows stay for history).
+    db.prepare("UPDATE session_checks SET check_index = NULL WHERE topic_id = ?").run(topic.id);
+    db.prepare("UPDATE topics SET checks_json = ?, checks_version = ? WHERE id = ?").run(JSON.stringify(questions), QUIZ_VERSION, topic.id);
+    // Concepts the quiz tests count toward this topic's mastery even when the AI named a new one.
+    const link = db.prepare("INSERT OR IGNORE INTO topic_concepts (topic_id, concept_id) VALUES (?, ?)");
+    for (const name of new Set(questions.map((q) => q.concept?.trim()).filter(Boolean))) link.run(topic.id, upsertConcept(userId, name!));
+  })();
   return questions;
 }
 

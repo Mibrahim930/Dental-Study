@@ -21,7 +21,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
     .prepare("SELECT t.* FROM topics t JOIN study_sessions s ON s.exam_id = t.exam_id WHERE s.id = ? AND t.id = ?")
     .get(sessionId, topicId) as Topic | undefined;
   const q = topic?.checks_json ? (JSON.parse(topic.checks_json) as QuizQuestion[])[index as number] : undefined;
-  if (!topic || !q || typeof chosen !== "number" || !Number.isInteger(chosen) || chosen < 0 || chosen >= q.options.length) {
+  if (!topic || !q || q.hidden || typeof chosen !== "number" || !Number.isInteger(chosen) || chosen < 0 || chosen >= q.options.length) {
     return NextResponse.json({ error: "Unknown question or answer" }, { status: 400 });
   }
   const already = db.prepare("SELECT 1 FROM session_checks WHERE session_id = ? AND topic_id = ? AND check_index = ?").get(sessionId, topicId, index);

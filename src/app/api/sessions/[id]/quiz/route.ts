@@ -27,7 +27,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
           .all(sessionId, topic.id) as { check_index: number; chosen: number }[]
       ).map((r) => [r.check_index, r.chosen]),
     );
-    return NextResponse.json({ topicId: topic.id, questions, answered });
+    return NextResponse.json({ topicId: topic.id, questions, answered, slides: (JSON.parse(topic.page_ids) as number[]).length });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

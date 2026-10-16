@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { db, FILES_DIR, type PageRow } from "./db";
+import { db, FILES_DIR, resetSectionQuiz, type PageRow } from "./db";
 import { batchResults, cancelBatch, createBatch, generate, mapLimit } from "./ai";
 import { credentials, type Credentials } from "./credentials";
 import { buildTopicMap } from "./topics";
@@ -247,7 +247,10 @@ export async function removeDocument(docId: number): Promise<void> {
       const kept = pages.filter((p) => !pageIds.has(p));
       if (kept.length === pages.length) continue;
       if (kept.length === 0) db.prepare("DELETE FROM topics WHERE id = ?").run(t.id);
-      else db.prepare("UPDATE topics SET page_ids = ?, lesson_json = NULL, checks_json = NULL WHERE id = ?").run(JSON.stringify(kept), t.id);
+      else {
+        db.prepare("UPDATE topics SET page_ids = ?, lesson_json = NULL WHERE id = ?").run(JSON.stringify(kept), t.id);
+        resetSectionQuiz(t.id); // rewritten from what's left; earlier answers detach from the old positions
+      }
     }
     // Renumber what's left so positions stay 0..n-1.
     const left = db.prepare("SELECT id FROM topics WHERE exam_id = ? ORDER BY position").all(doc.exam_id) as { id: number }[];

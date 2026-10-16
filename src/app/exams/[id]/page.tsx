@@ -57,6 +57,30 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
     ...pendingCounts(id, [t.id]),
   }));
 
+  // Is every slide in the study plan? Title/agenda slides are left out on purpose; anything else missing shows here.
+  const inTopics = new Set(topics.flatMap((t) => JSON.parse(t.page_ids) as number[]));
+  const slideRows = db
+    .prepare("SELECT p.id, p.notes_json FROM pages p JOIN documents d ON d.id = p.document_id WHERE d.exam_id = ? AND p.status = 'done'")
+    .all(id) as { id: number; notes_json: string | null }[];
+  let fillerSlides = 0;
+  let contentSlides = 0;
+  let missingSlides = 0;
+  for (const p of slideRows) {
+    // Same rule as the topic map: slides without notes aren't mapped (nothing to study from them yet).
+    let filler: boolean;
+    try {
+      if (!p.notes_json) continue;
+      filler = !!(JSON.parse(p.notes_json) as { is_filler?: boolean }).is_filler;
+    } catch {
+      continue;
+    }
+    if (filler) fillerSlides++;
+    else {
+      contentSlides++;
+      if (!inTopics.has(p.id)) missingSlides++;
+    }
+  }
+
   const processing = docs.some((d) => d.status === "processing") || exam.topic_status === "building";
   const lastPosition = sessions[0]?.current_position ?? 0;
   const started = sessions.length > 0;
@@ -194,6 +218,14 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             )}
             {exam.topic_status === "error" && (
               <p className="mb-3 rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">Topic map failed: {exam.topic_error}</p>
+            )}
+            {topics.length > 0 && exam.topic_status !== "building" && contentSlides > 0 && (
+              <p className={`mb-3 text-[13px] font-semibold ${missingSlides ? "rounded-2xl bg-butter px-4 py-3 text-on-butter" : "text-muted-foreground"}`}>
+                {missingSlides
+                  ? `${missingSlides} of ${contentSlides} slides aren't in a topic yet. Tap Rebuild to add them.`
+                  : `All ${contentSlides} slides are in your study plan.`}
+                {fillerSlides > 0 && ` ${fillerSlides} title or agenda slide${fillerSlides === 1 ? " was" : "s were"} left out.`}
+              </p>
             )}
             <ol className="grid gap-2.5 sm:grid-cols-2">
               {topics.map((t) => {

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Q = { question: string; options: string[]; correct_index: number; explanation: string; concept: string };
-let quizResponse: () => { questions: Q[] } = () => ({ questions: [] });
+type Q = { question: string; options: string[]; correct_index: number; explanation: string; concept: string; id?: string; slot?: number; source_page_id?: number };
+/** Planned slot numbers (1-based) asked for in a section-quiz prompt. */
+const slotsIn = (content: string) => [...content.matchAll(/^Q(\d+):/gm)].map((m) => Number(m[1]));
+/** By default the AI answers every planned slot with a distinct question. */
+let quizResponse: (slots: number[]) => { questions: Q[] } = (slots) => ({
+  questions: slots.map((n) => ({ ...mk(1)[0], question: `Question ${n}?`, options: [`a${n}`, `b${n}`, `c${n}`, `d${n}`], concept: `Concept ${n % 3}`, slot: n, source_page_id: 0 })),
+});
 let genCalls: string[] = [];
 let summaryText = "sum";
 vi.mock("@/lib/ai", async (orig) => ({
@@ -9,7 +14,8 @@ vi.mock("@/lib/ai", async (orig) => ({
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     genCalls.push(opts.purpose);
     await new Promise((r) => setTimeout(r, 5));
-    if (opts.purpose === "section quiz") return quizResponse();
+    if (opts.purpose === "section quiz") return quizResponse(slotsIn(opts.content));
+    if (opts.purpose === "section quiz check") return { verdicts: [] };
     if (opts.purpose === "session summary") return { summary: summaryText };
     throw new Error("unexpected " + opts.purpose);
   }),
@@ -25,7 +31,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getSectionQuiz, getLesson, QUIZ_SIZE } from "@/lib/study";
+import { getSectionQuiz, getLesson, QUIZ_SIZE, type QuizQuestion } from "@/lib/study";
 import { weakConcepts } from "@/lib/memory";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
@@ -54,63 +60,81 @@ const get = (sessionId: number, position: number) => quizGET(new Request(`http:/
 const post = (sessionId: number, body: unknown) =>
   checkPOST(new Request("http://x/c", { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }), ctx(sessionId));
 
+const defaultQuiz = quizResponse;
 beforeEach(() => {
   genCalls = [];
-  quizResponse = () => ({ questions: mk(QUIZ_SIZE) });
+  quizResponse = defaultQuiz;
 });
 
 describe("getSectionQuiz", () => {
-  it("returns 10 questions, shuffled consistently, cached in checks_json", async () => {
+  it(`returns ${QUIZ_SIZE} questions with stable ids, shuffled consistently, cached as the current version`, async () => {
     const w = world();
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(10);
+    expect(qs).toHaveLength(QUIZ_SIZE);
     for (const q of qs) {
       expect(q.options).toHaveLength(4);
       expect(q.options[q.correct_index]).toBe("b" + q.question.match(/\d+/)![0]);
+      expect(q.id).toMatch(/^[0-9a-f]{8}$/);
     }
+    expect(new Set(qs.map((q) => q.id)).size).toBe(QUIZ_SIZE);
     expect(JSON.parse(w.topic().checks_json!)).toEqual(qs);
+    expect(w.topic().checks_version).toBe(2);
     await getSectionQuiz(w.topic());
-    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(1);
+    // Two writing calls of 10 and one checking pass, once.
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(2);
+    expect(genCalls.filter((c) => c === "section quiz check")).toHaveLength(1);
   });
 
   it("dedupes concurrent generation", async () => {
     const w = world();
     const t = w.topic();
     await Promise.all([getSectionQuiz(t), getSectionQuiz(t), getSectionQuiz(t)]);
-    expect(genCalls).toHaveLength(1);
+    expect(genCalls).toHaveLength(3);
   });
 
   it("works for a topic with zero slides", async () => {
     const userId = makeUser();
     const { topicIds } = makeExam(userId, null, [0]);
     const t = db.prepare("SELECT * FROM topics WHERE id = ?").get(topicIds[0]) as Topic;
-    expect(await getSectionQuiz(t)).toHaveLength(10);
+    expect(await getSectionQuiz(t)).toHaveLength(QUIZ_SIZE);
   });
 
-  it("truncates >10 and filters malformed, accepts <10 and caches the short quiz permanently", async () => {
+  it("filters malformed answers, repairs the gaps once, and accepts a shorter quiz if the repair falls short", async () => {
     const w = world();
-    quizResponse = () => ({ questions: [...mk(8), { ...mk(1)[0], options: ["only"] }, { ...mk(1)[0], correct_index: 9 }, ...mk(5)] });
+    let call = 0;
+    quizResponse = (slots) => {
+      call++;
+      // First two calls: every 4th slot comes back broken. Repair call: only half of what's asked.
+      const keep = call <= 2 ? slots : slots.slice(0, Math.ceil(slots.length / 2));
+      return {
+        questions: keep.map((n) => ({
+          ...mk(1)[0],
+          question: `Q ${n} try ${call}?`,
+          options: [`a${n}`, `b${n}`, `c${n}`, `d${n}`],
+          slot: n,
+          ...(call <= 2 && n % 4 === 0 ? { correct_index: 9 } : {}),
+        })),
+      };
+    };
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(10);
-    const w2 = world();
-    quizResponse = () => ({ questions: mk(3) });
-    expect(await getSectionQuiz(w2.topic())).toHaveLength(3); // documented behaviour: no top-up/retry
-    expect(w2.topic().checks_json).not.toBeNull();
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(3); // 2 + one repair, never more
+    expect(qs).toHaveLength(QUIZ_SIZE - 5 + 3); // 5 broken, 3 of them repaired
+    expect(w.topic().checks_json).not.toBeNull();
   });
 
   it("throws and does not cache when nothing valid comes back, then can retry", async () => {
     const w = world();
-    quizResponse = () => ({ questions: mk(4, { correct_index: -1 }) });
+    quizResponse = (slots) => ({ questions: slots.map((n) => ({ ...mk(1)[0], question: `x${n}`, correct_index: -1, slot: n })) });
     await expect(getSectionQuiz(w.topic())).rejects.toThrow();
     expect(w.topic().checks_json).toBeNull();
-    quizResponse = () => ({ questions: mk(10) });
-    expect(await getSectionQuiz(w.topic())).toHaveLength(10);
+    quizResponse = defaultQuiz;
+    expect(await getSectionQuiz(w.topic())).toHaveLength(QUIZ_SIZE);
   });
 
   it("BUG? non-integer correct_index (1.5) passes validation and yields an unanswerable question", async () => {
     const w = world();
-    quizResponse = () => ({ questions: mk(10, { correct_index: 1.5 }) });
-    let qs: Q[] = [];
+    quizResponse = (slots) => ({ questions: slots.map((n) => ({ ...mk(1)[0], question: `q${n}`, correct_index: 1.5, slot: n })) });
+    let qs: QuizQuestion[] = [];
     try {
       qs = await getSectionQuiz(w.topic());
     } catch {
@@ -121,8 +145,8 @@ describe("getSectionQuiz", () => {
 
   it("BUG? duplicate/blank options are not rejected", async () => {
     const w = world();
-    quizResponse = () => ({ questions: mk(10, { options: ["x", "x", "", "  "] }) });
-    let qs: Q[] = [];
+    quizResponse = (slots) => ({ questions: slots.map((n) => ({ ...mk(1)[0], question: `q${n}`, options: ["x", "x", "", "  "], slot: n })) });
+    let qs: QuizQuestion[] = [];
     try {
       qs = await getSectionQuiz(w.topic());
     } catch {
@@ -159,7 +183,7 @@ describe("GET /quiz", () => {
     const w = world();
     currentUserId = w.userId;
     const r = await (await get(w.sessionId, 0)).json();
-    expect(r.questions).toHaveLength(10);
+    expect(r.questions).toHaveLength(QUIZ_SIZE);
     expect(r.answered).toEqual({});
     expect((await post(w.sessionId, { topicId: r.topicId, index: 2, chosen: 3 })).status).toBe(200);
     const s2 = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(w.examId).lastInsertRowid);
@@ -176,16 +200,30 @@ describe("GET /quiz", () => {
     const res = await get(w.sessionId, 0);
     expect(res.status).toBe(500);
     expect((await res.json()).error).toContain("boom");
-    quizResponse = () => ({ questions: mk(10) });
+    quizResponse = defaultQuiz;
     expect((await get(w.sessionId, 0)).status).toBe(200);
   });
 
-  it("class-copied checks_json is served as-is (no AI call)", async () => {
+  it("a current-version checks_json (e.g. class-copied) is served as-is (no AI call)", async () => {
+    const w = world();
+    currentUserId = w.userId;
+    db.prepare("UPDATE topics SET checks_json = ?, checks_version = 2 WHERE id = ?").run(JSON.stringify(mk(10)), w.topicIds[0]);
+    await get(w.sessionId, 0);
+    expect(genCalls).toHaveLength(0);
+  });
+
+  it("an old 10-question quiz is rewritten once as 20; answers given to it are detached but kept", async () => {
     const w = world();
     currentUserId = w.userId;
     db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(mk(10)), w.topicIds[0]);
+    expect((await post(w.sessionId, { topicId: w.topicIds[0], index: 3, chosen: 1 })).status).toBe(200);
+    const r = await (await get(w.sessionId, 0)).json();
+    expect(r.questions).toHaveLength(QUIZ_SIZE);
+    expect(r.answered).toEqual({}); // the old answer no longer points at a (different) question
+    const rows = db.prepare("SELECT check_index, question FROM session_checks WHERE session_id = ?").all(w.sessionId) as { check_index: number | null; question: string }[];
+    expect(rows).toEqual([{ check_index: null, question: "Question 3?" }]);
     await get(w.sessionId, 0);
-    expect(genCalls).toHaveLength(0);
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(2); // only once
   });
 });
 
@@ -221,7 +259,7 @@ describe("POST /check", () => {
     currentUserId = w.userId;
     expect((await post(w.sessionId, { topicId: other.topicIds[0], index: 0, chosen: 0 })).status).toBe(400);
     for (const body of [
-      { topicId: w.topicId, index: 10, chosen: 0 },
+      { topicId: w.topicId, index: QUIZ_SIZE, chosen: 0 },
       { topicId: w.topicId, index: -1, chosen: 0 },
       { topicId: w.topicId, index: 0, chosen: 4 },
       { topicId: w.topicId, index: 0, chosen: -1 },

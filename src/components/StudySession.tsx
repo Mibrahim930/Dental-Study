@@ -20,7 +20,16 @@ type LessonData = {
   aspects: Record<number, number>;
   stressed?: { page_id: number; where: string; point: string }[];
 };
-type QuizQ = { question: string; options: string[]; correct_index: number; explanation: string; concept: string };
+type QuizQ = {
+  id?: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+  concept: string;
+  /** Reported earlier: skipped. Its place in the list (and the answer numbering) stays. */
+  hidden?: boolean;
+};
 
 export function StudySession(props: {
   examId: number;
@@ -307,9 +316,12 @@ function Lesson({ data }: { data: LessonData }) {
   );
 }
 
-/** End-of-section quiz: one question at a time, with a way to skip ahead at any point. */
+/**
+ * End-of-section quiz: one question at a time, with a way to skip ahead or stop and see the score at any point.
+ * `index` counts the questions shown (reported ones are skipped); answers are keyed by the question's place in the quiz.
+ */
 function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: number; position: number; isLast: boolean; onNext: () => void }) {
-  const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[] } | null>(null);
+  const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[]; slides: number } | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [picked, setPicked] = useState<number | null>(null);
   const [index, setIndex] = useState(0);
@@ -325,11 +337,12 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         if (cancelled) return;
         if (!res.ok) return setError(json.error ?? "Couldn't load the quiz.");
         const answered = Object.fromEntries(Object.entries(json.answered as Record<string, number>).map(([k, v]) => [Number(k), v]));
-        setQuiz({ topicId: json.topicId, questions: json.questions });
+        setQuiz({ topicId: json.topicId, questions: json.questions, slides: Number(json.slides) || 0 });
         setAnswers(answered);
         // Pick up where the student left off.
-        const firstOpen = (json.questions as QuizQ[]).findIndex((_, i) => answered[i] == null);
-        setIndex(firstOpen === -1 ? json.questions.length : firstOpen);
+        const shown = (json.questions as QuizQ[]).map((q, i) => ({ q, i })).filter((x) => !x.q.hidden);
+        const firstOpen = shown.findIndex((x) => answered[x.i] == null);
+        setIndex(firstOpen === -1 ? shown.length : firstOpen);
       })
       .catch((err) => !cancelled && setError(String(err)));
     return () => {
@@ -363,7 +376,9 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     return (
       <section className="card flex flex-col gap-3" aria-busy>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[15px] font-semibold text-muted-foreground">Writing a quiz for this section… keep reading, it&apos;ll be ready in a moment.</span>
+          <span className="text-[15px] font-semibold text-muted-foreground">
+            Writing 20 questions and checking them against your slides… about 1–2 minutes. Keep reading; it&apos;ll appear here.
+          </span>
           {skip}
         </div>
         <div className="shimmer h-5 w-3/4" />
@@ -374,13 +389,15 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     );
   }
 
-  const total = quiz.questions.length;
-  const right = quiz.questions.filter((q, i) => answers[i] === q.correct_index).length;
-  const done = Object.keys(answers).length;
+  // Reported questions are skipped; `at` is each one's place in the stored quiz (what answers are keyed by).
+  const shown = quiz.questions.map((q, at) => ({ q, at })).filter((x) => !x.q.hidden);
+  const total = shown.length;
+  const right = shown.filter((x) => answers[x.at] === x.q.correct_index).length;
+  const done = shown.filter((x) => answers[x.at] != null).length;
 
   function check() {
-    if (picked == null || answers[index] != null) return;
-    const at = index;
+    const at = shown[index]?.at;
+    if (at == null || picked == null || answers[at] != null) return;
     const chosen = picked;
     setSaveError("");
     setAnswers((a) => ({ ...a, [at]: chosen }));
@@ -409,23 +426,23 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   };
 
   const strip = (
-    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
-      {quiz.questions.map((q, i) => (
+    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, total)}, minmax(0, 1fr))` }}>
+      {shown.map(({ q, at }, i) => (
         <button
-          key={i}
+          key={q.id ?? at}
           onClick={() => goTo(i)}
-          aria-label={`Question ${i + 1}${answers[i] == null ? "" : answers[i] === q.correct_index ? ", right" : ", wrong"}`}
+          aria-label={`Question ${i + 1}${answers[at] == null ? "" : answers[at] === q.correct_index ? ", right" : ", wrong"}`}
           className={`h-1.5 rounded-full ${
-            answers[i] == null ? (i === index ? "bg-foreground" : "bg-muted-strong") : answers[i] === q.correct_index ? "bg-hero" : "bg-coral"
+            answers[at] == null ? (i === index ? "bg-foreground" : "bg-muted-strong") : answers[at] === q.correct_index ? "bg-hero" : "bg-coral"
           }`}
         />
       ))}
     </div>
   );
 
-  // Finished: score and what to look at again.
+  // Finished (or stopped early): score and what to look at again.
   if (index >= total) {
-    const missed = quiz.questions.filter((q, i) => answers[i] != null && answers[i] !== q.correct_index);
+    const missed = shown.filter((x) => answers[x.at] != null && answers[x.at] !== x.q.correct_index).map((x) => x.q);
     const good = done > 0 && right / done >= 0.8;
     return (
       <section className={`tile flex flex-col gap-4 rounded-[28px] ${good ? "cb-mint" : "bg-card"}`}>
@@ -460,21 +477,33 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     );
   }
 
-  const q = quiz.questions[index];
-  const chosen = answers[index];
+  const { q, at } = shown[index];
+  const chosen = answers[at];
   const answered = chosen != null;
   const stateOf = (i: number): OptionState =>
     answered ? (i === q.correct_index ? "correct" : i === chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
 
   return (
     <section className="card flex flex-col gap-3.5">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[13px] font-bold text-muted-foreground">
           Section quiz · {index + 1} of {total}
         </div>
-        {skip}
+        <div className="flex flex-wrap items-center gap-1">
+          {done > 0 && (
+            <button className="btn-ghost px-1" onClick={() => goTo(total)}>
+              I&apos;m done — see my score
+            </button>
+          )}
+          {skip}
+        </div>
       </div>
       {strip}
+      {index === 0 && !answered && quiz.slides > total && (
+        <p className="px-1 text-[13px] font-semibold text-muted-foreground">
+          {total} questions over the most important of this section&apos;s {quiz.slides} slides.
+        </p>
+      )}
       <p className="px-1 text-[18px] leading-snug font-bold">{q.question}</p>
       <div className="flex flex-col gap-2">
         {q.options.map((o, i) => {
@@ -504,6 +533,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           <div className="text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
             <ReactMarkdown>{q.explanation}</ReactMarkdown>
           </div>
+          {q.id && <ReportQuizQuestion key={q.id} sessionId={sessionId} topicId={quiz.topicId} questionId={q.id} />}
         </div>
       )}
       {answered ? (
@@ -516,6 +546,58 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         </button>
       )}
     </section>
+  );
+}
+
+/** "Report a problem" under a quiz answer: an inline note, then the question is hidden from this quiz from now on. */
+function ReportQuizQuestion({ sessionId, topicId, questionId }: { sessionId: number; topicId: number; questionId: string }) {
+  const [state, setState] = useState<"idle" | "open" | "sending" | "sent" | "error">("idle");
+  const [note, setNote] = useState("");
+
+  async function send() {
+    setState("sending");
+    const res = await fetch(`/api/sessions/${sessionId}/quiz/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId, questionId, note }),
+    }).catch(() => null);
+    setState(res?.ok ? "sent" : "error");
+  }
+
+  if (state === "sent") return <p className="mt-3 text-[13px] font-semibold text-hero-muted">Reported. Thanks! This question won&apos;t be shown again.</p>;
+  if (state === "idle") {
+    return (
+      <div className="mt-3 flex justify-end">
+        <button className="text-[13px] font-semibold text-hero-muted underline-offset-4 hover:underline" onClick={() => setState("open")}>
+          Report a problem
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <label className="text-[13px] font-bold text-hero-muted" htmlFor={`report-${questionId}`}>
+        What&apos;s wrong with this question? (optional)
+      </label>
+      <textarea
+        id={`report-${questionId}`}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        maxLength={500}
+        rows={2}
+        className="w-full rounded-2xl border-2 border-transparent bg-white/10 px-3 py-2 text-[15px] text-hero-foreground outline-none placeholder:text-hero-muted focus:border-hero-accent"
+        placeholder="e.g. the marked answer is wrong"
+      />
+      {state === "error" && <p className="text-[13px] font-semibold text-hero-accent">Couldn&apos;t send it. Try again.</p>}
+      <div className="flex justify-end gap-2">
+        <button className="btn-ghost btn-sm text-hero-foreground" onClick={() => setState("idle")} disabled={state === "sending"}>
+          Cancel
+        </button>
+        <button className="btn-hero btn-sm" onClick={send} disabled={state === "sending"}>
+          {state === "sending" ? "Sending…" : "Send report"}
+        </button>
+      </div>
+    </div>
   );
 }
 
