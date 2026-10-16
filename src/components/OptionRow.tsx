@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import type { Range } from "@/lib/marks";
 import { Highlightable } from "./Highlightable";
 import { optionClasses, type OptionState } from "./ui";
@@ -35,11 +36,23 @@ export function OptionRow({
 }) {
   const s = optionClasses(state);
   const letter = String.fromCharCode(65 + index);
+  const pickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (pickTimer.current && clearTimeout(pickTimer.current)), []);
 
-  function pick() {
-    // A drag or double-click to select words is for highlighting, not answering.
-    if (window.getSelection()?.toString()) return;
-    onSelect?.();
+  /**
+   * A click picks the answer, but a drag or double-click to select words is for highlighting, not answering.
+   * The first click of a double-click comes before any text is selected, so the pick waits a moment and the
+   * second click cancels it.
+   */
+  function pick(e: React.MouseEvent) {
+    if (!onSelect) return;
+    if (pickTimer.current) clearTimeout(pickTimer.current);
+    pickTimer.current = null;
+    if (e.detail > 1 || window.getSelection()?.toString()) return;
+    pickTimer.current = setTimeout(() => {
+      pickTimer.current = null;
+      if (!window.getSelection()?.toString()) onSelect();
+    }, 220);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {

@@ -3,13 +3,18 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addRange, coveringRange, removeRangeAt, segments, type Range } from "@/lib/marks";
 
-/** Character offsets of a selection inside `el` (whose only content is the text), or null if it's empty. */
-function offsetsIn(el: HTMLElement, r: globalThis.Range, length: number): Range | null {
+/**
+ * Character offsets of a selection inside `el` (whose only content is `text`), without spaces at either edge
+ * (a double-click on Windows selects the word plus the space after it). Null if nothing but spaces is selected.
+ */
+function offsetsIn(el: HTMLElement, r: globalThis.Range, text: string): Range | null {
   const pre = document.createRange();
   pre.selectNodeContents(el);
   pre.setEnd(r.startContainer, r.startOffset);
-  const start = Math.min(pre.toString().length, length);
-  const end = Math.min(start + r.toString().length, length);
+  let start = Math.min(pre.toString().length, text.length);
+  let end = Math.min(start + r.toString().length, text.length);
+  while (start < end && /\s/.test(text[start])) start++;
+  while (end > start && /\s/.test(text[end - 1])) end--;
   return end > start ? [start, end] : null;
 }
 
@@ -50,7 +55,7 @@ export function Highlightable({
         setPill((p) => (p?.kind === "add" ? null : p));
         return;
       }
-      const off = offsetsIn(el, r, live.current.text.length);
+      const off = offsetsIn(el, r, live.current.text);
       if (!off) return setPill(null);
       const rect = r.getBoundingClientRect();
       const covering = coveringRange(live.current.ranges, off);
