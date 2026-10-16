@@ -151,7 +151,8 @@ export function QuestionCard({
               checked={i === selected}
               onSelect={onChoose ? () => choose(i) : undefined}
               crossed={marks.crossed.includes(i)}
-              onToggleCross={() => toggleCross(i)}
+              // The option she has picked can't also be crossed out.
+              onToggleCross={onChoose && i === selected ? undefined : () => toggleCross(i)}
               {...hl(`opt${i}`)}
               chips={
                 <>

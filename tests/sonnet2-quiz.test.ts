@@ -199,7 +199,10 @@ describe("GET /quiz", () => {
     };
     const res = await get(w.sessionId, 0);
     expect(res.status).toBe(500);
-    expect((await res.json()).error).toContain("boom");
+    // The technical text stays in the server log; the student gets a plain message.
+    const error = (await res.json()).error as string;
+    expect(error).not.toContain("boom");
+    expect(error).toMatch(/try again/i);
     quizResponse = defaultQuiz;
     expect((await get(w.sessionId, 0)).status).toBe(200);
   });

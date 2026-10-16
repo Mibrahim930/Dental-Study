@@ -287,7 +287,7 @@ describe("report and check routes", () => {
     expect(db.prepare("SELECT COUNT(*) n FROM session_checks WHERE session_id = ?").get(w.sessionId)).toEqual({ n: 1 });
   });
 
-  it("a class copy keeps quiz ids and hidden flags, maps source_page_id to the copy's own slides, and answers don't travel", async () => {
+  it("a class copy keeps quiz ids, drops the owner's reports, maps source_page_id to the copy's own slides, and answers don't travel", async () => {
     const w = await ready();
     await report(w.sessionId, { topicId: w.topicId, questionId: w.qs[3].id, note: "bad key" });
     const classmate = makeUser();
@@ -308,7 +308,9 @@ describe("report and check routes", () => {
     const copyPages = new Set(JSON.parse(t2.page_ids) as number[]);
     expect(copyQs.every((q) => q.source_page_id != null && copyPages.has(q.source_page_id))).toBe(true);
     expect(copyQs.some((q) => w.pages.includes(q.source_page_id!))).toBe(false);
-    // BUG?: the owner's "report a problem" travels to classmates as a hidden question
-    expect(copyQs.filter((q) => q.hidden)).toHaveLength(1);
+    // The owner's "report a problem" hides the question in the owner's copy only; the classmate's copy starts clean.
+    expect(copyQs.filter((q) => q.hidden)).toHaveLength(0);
+    expect(copyQs.some((q) => q.report_note)).toBe(false);
+    expect(copyQs).toHaveLength(w.qs.length);
   });
 });

@@ -110,6 +110,7 @@ export function Highlightable({
               className="hl"
               onClick={(e) => {
                 if (!onChange || window.getSelection()?.toString()) return;
+                e.stopPropagation(); // tapping a highlight is about the highlight, not picking the answer
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 setPill({ x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom, kind: "remove", range: [p.start, p.start + p.text.length] });
               }}

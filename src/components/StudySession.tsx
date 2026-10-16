@@ -574,7 +574,8 @@ function QuizBody({
                   }
             }
             crossed={marks.crossed.includes(i)}
-            onToggleCross={() => toggleCross(i)}
+            // The option she has picked can't also be crossed out.
+            onToggleCross={!answered && i === picked ? undefined : () => toggleCross(i)}
             ranges={marks.hl[`opt${i}`] ?? []}
             onRanges={setHl(`opt${i}`)}
             chips={

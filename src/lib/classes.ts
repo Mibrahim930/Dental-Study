@@ -124,8 +124,15 @@ function copyExam(sourceId: number, userId: number): number {
       // Quizzes carry their source slide ids: map them to the copy's slides, like the lesson's.
       let checks = t.checks_json;
       if (checks) {
-        const qs = JSON.parse(checks) as { source_page_id?: number | null }[];
-        checks = JSON.stringify(qs.map((q) => (q.source_page_id != null ? { ...q, source_page_id: mapPage(q.source_page_id) } : q)));
+        const qs = JSON.parse(checks) as { source_page_id?: number | null; hidden?: boolean; report_note?: string | null }[];
+        // A question the owner reported stays hidden only in the owner's copy; the classmate starts clean.
+        checks = JSON.stringify(
+          qs.map(({ hidden, report_note, ...q }) => {
+            void hidden;
+            void report_note;
+            return q.source_page_id != null ? { ...q, source_page_id: mapPage(q.source_page_id) } : q;
+          }),
+        );
       }
       const topicId = Number(
         insertTopic.run(examId, t.position, t.title, t.summary, JSON.stringify(pages), t.emphasized, lesson, checks, t.checks_version).lastInsertRowid,

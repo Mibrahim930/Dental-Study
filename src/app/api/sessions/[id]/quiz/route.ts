@@ -29,6 +29,10 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
     );
     return NextResponse.json({ topicId: topic.id, questions, answered, slides: (JSON.parse(topic.page_ids) as number[]).length });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    // The technical text goes to the server log; the student sees a plain message (key problems are worth saying).
+    console.error(`Section quiz for topic ${topic.id} failed`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
+    return NextResponse.json({ error: keyProblem ? msg : "The AI didn't answer in time. Try again in a moment." }, { status: 500 });
   }
 }
