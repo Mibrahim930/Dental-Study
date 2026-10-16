@@ -4,6 +4,14 @@ export async function register() {
     const { backupIfDue } = await import("./lib/backup");
     const { db } = await import("./lib/db");
     resumeUnfinished();
+    // Exams in progress that still hold unanswered questions from another exam (older versions mixed them in): take them out.
+    try {
+      const { dropForeignQuestions } = await import("./lib/practice");
+      const n = dropForeignQuestions();
+      if (n) console.log(`Removed ${n} unanswered question(s) from other exams out of practice exams in progress`);
+    } catch (err) {
+      console.error("Cleaning other exams' questions out of open practice exams failed", err);
+    }
     // Claude slide batches finish in the background; collect results every minute.
     setInterval(() => void pollBatches(), 60_000);
     // Daily off-disk backup (checked hourly; first check shortly after start).

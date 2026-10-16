@@ -4,7 +4,7 @@ import { chatStream, generate, type ChatTurn } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, weakConcepts, glossaryText } from "./memory";
-import { checkedAnswer, isValidChoice } from "./practicePlan";
+import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 
 export const Lesson = z.object({
   explanation: z
@@ -160,7 +160,7 @@ Write exactly ${QUIZ_SIZE} single-best-answer questions with 4 options each that
     .slice(0, QUIZ_SIZE)
     .map((q) => {
       // Shuffle options so the correct answer isn't biased to one position.
-      const order = q.options.map((_, i) => i).sort(() => Math.random() - 0.5);
+      const order = shuffle(q.options.map((_, i) => i));
       return { ...q, options: order.map((i) => q.options[i]), correct_index: order.indexOf(q.correct_index) };
     });
   if (questions.length === 0) throw new Error("Couldn't write the section quiz. Try again.");

@@ -289,7 +289,7 @@ describe("startAttempt end to end (AI mocked)", () => {
 });
 
 describe("gaps and edge cases", () => {
-  it("a missed question from a past-exam weak-concept slot is retried in the next exam", async () => {
+  it("weak concepts from a past exam never pull its questions into this exam", async () => {
     const w = world(1);
     // A past exam with a weak concept (mastery well below 0.7), same student.
     const past = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'Past')").run(w.userId).lastInsertRowid);
@@ -301,11 +301,14 @@ describe("gaps and edge cases", () => {
     const id = startAttempt(w.examId, { size: 10, mode: "tutor", style: "mixed", adaptive: true });
     await ready(id);
     const ids = members(id).map((r) => r.question_id);
-    expect(ids).toContain(pastQ); // reused via the past-topic slot
-    answerQuestion(id, pastQ, 1, "sure");
+    expect(ids).not.toContain(pastQ);
     finishAttempt(id);
+    // Even if old data had it in this exam's attempt and it was missed, it doesn't come back.
+    const old = Number(db.prepare("INSERT INTO attempts (exam_id, mode, status) VALUES (?, 'tutor', 'finished')").run(w.examId).lastInsertRowid);
+    db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, 0)").run(old, pastQ);
+    answerQuestion(old, pastQ, 1, "sure");
     const topicIds = (db.prepare("SELECT id FROM topics WHERE exam_id = ?").all(w.examId) as { id: number }[]).map((t) => t.id);
-    expect(retryQuestions(w.examId, topicIds, 10, { wholeExam: true })).toContain(pastQ);
+    expect(retryQuestions(w.examId, topicIds, 10, { wholeExam: true })).not.toContain(pastQ);
   });
 
   it("starting a second exam while the first is still open does not reuse the first one's questions", async () => {

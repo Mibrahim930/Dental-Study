@@ -4,17 +4,19 @@ import { db, type Question, type Topic } from "./db";
 import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { slideNotesText, topicPages } from "./study";
-import { recordConceptResult, upsertConcept, weakConcepts } from "./memory";
+import { recordConceptResult, upsertConcept } from "./memory";
 import {
   allocate,
   askedStems,
   focusPoints,
+  lecturePageIds,
   retryCases,
   retryQuestions,
   RETRY_SHARE,
   checkedAnswer,
   isValidChoice,
   lastPracticed,
+  shuffle,
   shuffledOrder,
   slideCoverage,
   type Confidence,
@@ -66,7 +68,19 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 - Slides marked ★IMPORTANT were emphasized by the professor: when the topic has any, at least a third of the questions must test them. Also prioritize annotated slides. Do not test trivia like citations or years.
 - Every fact in the question and explanation must be supported by the slides.`;
 
-type AttemptOptions = { size: number; mode: Mode; style: Style; topicIds?: number[]; taskId?: number; adaptive?: boolean };
+type AttemptOptions = {
+  size: number;
+  mode: Mode;
+  style: Style;
+  topicIds?: number[];
+  /** Chosen lectures: only their slides are used, even in topics that also hold slides from other lectures. */
+  documentIds?: number[];
+  taskId?: number;
+  adaptive?: boolean;
+};
+
+/** Slides a practice exam may draw from: null means every slide of each chosen topic. */
+type PageFilter = Set<number> | null;
 
 /** Create an attempt and generate its questions in the background. Returns the attempt id. */
 export function startAttempt(examId: number, opts: AttemptOptions) {
@@ -108,80 +122,80 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
   if (scoped) topics = topics.filter((t) => opts.topicIds!.includes(t.id));
   if (topics.length === 0) throw new Error("This exam has no topics yet. Upload lectures and wait for the topic map.");
   const topicIds = topics.map((t) => t.id);
-  const focus = opts.adaptive ? focusPoints(examId, topicIds) : null;
+  // Chosen lectures: a topic may also hold slides from other lectures; only the chosen lectures' slides are used.
+  const pages: PageFilter = scoped && opts.documentIds?.length ? lecturePageIds(examId, opts.documentIds) : null;
+  const focus = opts.adaptive ? focusPoints(examId, topicIds, pages) : null;
 
   if (opts.style === "caseset") {
     const caseCount = Math.max(1, Math.round(opts.size / 4));
-    const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)), { wholeExam: !scoped });
+    const retried = retryCases(examId, topicIds, Math.max(1, Math.floor(caseCount * RETRY_SHARE)), { wholeExam: !scoped, pageIds: pages });
     const newCases = Math.max(1, caseCount - retried.length);
     savePlan(attemptId, { style: opts.style, cases: newCases + retried.length, retried: retried.flat().length, fresh: newCases, topics: topics.length });
     // Always at least one new case, so even a short exam isn't only retries.
-    const fresh = await buildCaseSets(topics, newCases, focus, { last: lastPracticed(examId), covered: topicsOf(retried.flat()) });
+    const fresh = await buildCaseSets(topics, newCases, focus, { last: lastPracticed(examId), covered: topicsOf(retried.flat()) }, pages);
     // Shuffle the order of cases, but keep each case's questions together and in order.
-    const groups = [...retried, ...fresh].sort(() => Math.random() - 0.5);
+    const groups = shuffle([...retried, ...fresh]);
     return finishGeneration(attemptId, groups.flat(), new Set(retried.flat()));
   }
 
-  const retried = pickRetries(examId, topics, opts.size, { types: styleTypes(opts.style), wholeExam: !scoped });
-  const covered = topicsOf(retried);
-  const uncovered = topics.filter((t) => !covered.has(t.id)).length;
-
-  // With focus on and the whole exam chosen, ~12% of new questions revisit weak concepts from earlier exams (shared memory),
-  // but only when that still leaves room for one question per section of this exam.
-  const weak = opts.adaptive && !scoped ? weakConcepts(examOwner(examId), 5, examId) : [];
-  const pastTopics = weak.length
-    ? (db
-        .prepare(
-          `SELECT DISTINCT t.* FROM topics t JOIN topic_concepts tc ON tc.topic_id = t.id
-           WHERE tc.concept_id IN (${weak.map(() => "?").join(",")}) AND t.exam_id != ? LIMIT 3`,
-        )
-        .all(...weak.map((c) => c.id), examId) as Topic[])
-    : [];
-  const fresh = opts.size - retried.length;
-  const wantedPast = pastTopics.length ? Math.max(1, Math.round(fresh * 0.12)) : 0;
-  const pastCount = fresh - wantedPast >= uncovered ? wantedPast : 0;
+  const retried = pickRetries(examId, topics, opts.size, { types: styleTypes(opts.style), wholeExam: !scoped, pageIds: pages });
   // Every section of the chosen material gets a question; missed questions coming back already cover theirs.
-  const coverage = { last: lastPracticed(examId), covered };
-  const plan = [...allocate(topics, fresh - pastCount, focus, coverage), ...allocate(pastTopics, pastCount, null)];
+  // New questions only ever come from this exam's own topics.
+  const fresh = opts.size - retried.length;
+  const plan = allocate(topics, fresh, focus, { last: lastPracticed(examId), covered: topicsOf(retried) });
   savePlan(attemptId, { style: opts.style, size: opts.size, retried: retried.length, fresh, topics: topics.length });
 
   const created = new Set<number>();
   const failed: unknown[] = [];
-  const worked = new Set<number>();
+  const shortOf = new Set<number>(); // sections that failed or wrote fewer than asked: not used to fill gaps
   const write = async ({ topic, count }: { topic: Topic; count: number }) => {
-    const before = created.size;
+    // Counted per call: other sections are written at the same time, so created.size can't tell what this one delivered.
+    let got = 0;
     try {
       // Reuse questions written earlier that were never answered (abandoned or skipped exams); only write new ones for the rest.
-      const reused = unusedQuestions(topic.id, opts.style, count).filter((id) => !created.has(id));
-      reused.forEach((id) => created.add(id));
-      if (count - reused.length > 0) {
-        for (const id of await generateForTopic(topic, count - reused.length, opts.style, focus?.get(topic.id) ?? [])) created.add(id);
+      for (const id of unusedQuestions(topic.id, opts.style, count, pages)) {
+        if (!created.has(id)) {
+          created.add(id);
+          got++;
+        }
       }
-      // Only sections that delivered everything asked of them are used to fill any shortfall.
-      if (created.size - before >= count) worked.add(topic.id);
+      if (count - got > 0) {
+        for (const id of await generateForTopic(topic, count - got, opts.style, focus?.get(topic.id) ?? [], pages)) {
+          if (!created.has(id)) {
+            created.add(id);
+            got++;
+          }
+        }
+      }
     } catch (err) {
       // One section failing shouldn't sink the exam; it stays unpractised, so it leads the next one.
       failed.push(err);
     }
+    if (got < count) shortOf.add(topic.id);
   };
   await mapLimit(plan, 4, write);
 
-  // Fill any shortfall (a section failed, or the AI wrote fewer than asked) from the sections that worked.
-  const shortfall = opts.size - retried.length - created.size;
-  const working = plan.filter((p) => worked.has(p.topic.id)).map((p) => p.topic);
-  if (shortfall > 0 && working.length) await mapLimit(allocate(working, shortfall, focus), 4, write);
+  // Fill any shortfall (a section failed, or the AI wrote fewer than asked) from the sections that delivered in full,
+  // a few rounds at most, stopping as soon as a round adds nothing.
+  for (let round = 0; round < 3 && created.size < fresh; round++) {
+    const working = plan.map((p) => p.topic).filter((t) => !shortOf.has(t.id));
+    if (working.length === 0) break;
+    const before = created.size;
+    await mapLimit(allocate(working, fresh - created.size, focus), 4, write);
+    if (created.size === before) break;
+  }
 
   if (created.size + retried.length === 0) throw failed[0] instanceof Error ? failed[0] : new Error("No questions could be generated.");
 
   // Interleave topics so the exam doesn't run topic by topic.
-  finishGeneration(attemptId, [...retried, ...created].sort(() => Math.random() - 0.5), new Set(retried));
+  finishGeneration(attemptId, shuffle([...retried, ...created]), new Set(retried));
 }
 
 /**
  * Missed questions to bring back: most recent first, spread over as many sections as possible, capped at
  * RETRY_SHARE of the exam and never so many that a section of the chosen material would be left without a question.
  */
-function pickRetries(examId: number, topics: Topic[], size: number, opts: { types: string[]; wholeExam: boolean }): number[] {
+function pickRetries(examId: number, topics: Topic[], size: number, opts: { types: string[]; wholeExam: boolean; pageIds: PageFilter }): number[] {
   const candidates = retryQuestions(examId, topics.map((t) => t.id), 1000, opts);
   if (candidates.length === 0) return [];
   const topicOf = new Map(
@@ -218,7 +232,20 @@ function topicsOf(questionIds: number[]): Set<number> {
   );
 }
 
-function finishGeneration(attemptId: number, questionIds: number[], retried: Set<number>) {
+function finishGeneration(attemptId: number, allIds: number[], retried: Set<number>) {
+  // A practice exam only ever holds questions from its own exam. Anything else is a bug: drop it and say so in the logs.
+  const examId = (db.prepare("SELECT exam_id FROM attempts WHERE id = ?").get(attemptId) as { exam_id: number }).exam_id;
+  const own = allIds.length
+    ? new Set(
+        (db.prepare(`SELECT id FROM questions WHERE exam_id = ? AND id IN (${allIds.map(() => "?").join(",")})`).all(examId, ...allIds) as { id: number }[]).map(
+          (r) => r.id,
+        ),
+      )
+    : new Set<number>();
+  const questionIds = allIds.filter((id) => own.has(id));
+  if (questionIds.length < allIds.length) {
+    console.warn(`Practice exam ${attemptId}: dropped ${allIds.length - questionIds.length} question(s) from another exam`, allIds.filter((id) => !own.has(id)));
+  }
   if (questionIds.length === 0) throw new Error("No questions could be generated.");
   const insert = db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position, option_order) VALUES (?, ?, ?, ?)");
   db.transaction(() => {
@@ -236,18 +263,58 @@ const styleTypes = (style: Style) => (style === "recall" ? ["recall"] : style ==
  * Questions written earlier but never answered, to use before writing new ones. Questions sitting in an exam that is
  * still open (started in the last day) are left alone, so two exams started together don't share questions.
  */
-function unusedQuestions(topicId: number, style: Style, limit: number): number[] {
+function unusedQuestions(topicId: number, style: Style, limit: number, pages: PageFilter = null): number[] {
   const types = styleTypes(style);
+  const onPages = pages ? `AND q.source_page_id IN (${[...pages].map(() => "?").join(",") || "NULL"})` : "";
   return (
     db
       .prepare(
-        `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.case_id IS NULL AND q.type IN (${types.map(() => "?").join(",")})
+        `SELECT q.id FROM questions q WHERE q.topic_id = ? AND q.flagged = 0 AND q.case_id IS NULL AND q.type IN (${types.map(() => "?").join(",")}) ${onPages}
          AND NOT EXISTS (SELECT 1 FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id WHERE aq.question_id = q.id
            AND (aq.chosen_index IS NOT NULL OR (a.status IN ('generating', 'ready') AND a.started_at > datetime('now', '-1 day'))))
          ORDER BY RANDOM() LIMIT ?`,
       )
-      .all(topicId, ...types, limit) as { id: number }[]
+      .all(topicId, ...types, ...(pages ?? []), limit) as { id: number }[]
   ).map((r) => r.id);
+}
+
+/** The slides of a topic a practice exam may use (all of them, or only those from the chosen lectures). */
+function pagesFor(topic: Topic, pages: PageFilter) {
+  const all = topicPages(topic);
+  return pages ? all.filter((p) => pages.has(p.id)) : all;
+}
+
+/**
+ * Repair for exams started before 2026-10-15: whole-exam practice used to mix in questions from the student's other
+ * exams. Takes those out of exams still in progress if they haven't been answered (answered ones stay as history),
+ * renumbers what's left and shortens a timed exam's clock to match. Safe to run any number of times.
+ */
+export function dropForeignQuestions(): number {
+  const rows = db
+    .prepare(
+      `SELECT aq.attempt_id, aq.question_id FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id JOIN questions q ON q.id = aq.question_id
+       WHERE a.status IN ('generating', 'ready') AND aq.chosen_index IS NULL AND q.exam_id != a.exam_id`,
+    )
+    .all() as { attempt_id: number; question_id: number }[];
+  if (rows.length === 0) return 0;
+  db.transaction(() => {
+    const del = db.prepare("DELETE FROM attempt_questions WHERE attempt_id = ? AND question_id = ?");
+    for (const r of rows) del.run(r.attempt_id, r.question_id);
+    for (const attemptId of new Set(rows.map((r) => r.attempt_id))) {
+      const left = db.prepare("SELECT question_id FROM attempt_questions WHERE attempt_id = ? ORDER BY position").all(attemptId) as { question_id: number }[];
+      const renumber = db.prepare("UPDATE attempt_questions SET position = ? WHERE attempt_id = ? AND question_id = ?");
+      left.forEach((r, i) => renumber.run(i, attemptId, r.question_id));
+      if (left.length === 0) {
+        db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(
+          "This practice exam had no questions left from this exam. Please start a new one.",
+          attemptId,
+        );
+      } else {
+        db.prepare("UPDATE attempts SET time_limit_sec = CASE WHEN mode = 'timed' THEN ? ELSE NULL END WHERE id = ?").run(left.length * SECONDS_PER_QUESTION, attemptId);
+      }
+    }
+  })();
+  return rows.length;
 }
 
 // ---- Board-style case sets: one patient, several questions ----
@@ -300,14 +367,15 @@ async function buildCaseSets(
   caseCount: number,
   focus: Map<number, FocusPoint[]> | null,
   coverage: Parameters<typeof allocate>[3],
+  pages: PageFilter = null,
 ): Promise<number[][]> {
   const groups: number[][] = [];
   let lastError: unknown = null;
   await mapLimit(allocate(topics, caseCount, focus, coverage), 3, async ({ topic, count }) => {
-    const reused = unusedCases(topic.id, count);
+    const reused = unusedCases(topic.id, count, pages);
     groups.push(...reused);
     try {
-      if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [])));
+      if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [], pages)));
     } catch (err) {
       // One section failing shouldn't sink the exam; it stays unpractised, so it leads the next one.
       if (groups.length === 0) lastError = err;
@@ -317,23 +385,30 @@ async function buildCaseSets(
   return groups;
 }
 
-function unusedCases(topicId: number, limit: number): number[][] {
+function unusedCases(topicId: number, limit: number, pages: PageFilter = null): number[][] {
+  // Chosen lectures: every question of the case must come from their slides.
+  const onPages = !pages
+    ? ""
+    : pages.size === 0
+      ? "AND 0"
+      : `AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.case_id = c.id AND (q.source_page_id IS NULL OR q.source_page_id NOT IN (${[...pages].map(() => "?").join(",")})))`;
   const caseIds = (
     db
       .prepare(
         `SELECT c.id FROM cases c WHERE EXISTS (SELECT 1 FROM questions q WHERE q.case_id = c.id AND q.topic_id = ?)
          AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.case_id = c.id AND q.flagged = 1)
          AND NOT EXISTS (SELECT 1 FROM questions q JOIN attempt_questions aq ON aq.question_id = q.id WHERE q.case_id = c.id AND aq.chosen_index IS NOT NULL)
+         ${onPages}
          ORDER BY RANDOM() LIMIT ?`,
       )
-      .all(topicId, limit) as { id: number }[]
+      .all(topicId, ...(pages ?? []), limit) as { id: number }[]
   ).map((r) => r.id);
   return caseIds.map((id) => (db.prepare("SELECT id FROM questions WHERE case_id = ? ORDER BY id").all(id) as { id: number }[]).map((r) => r.id));
 }
 
-async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): Promise<number[][]> {
+async function generateCases(topic: Topic, count: number, focus: FocusPoint[], only: PageFilter = null): Promise<number[][]> {
   const userId = examOwner(topic.exam_id);
-  const pages = topicPages(topic);
+  const pages = pagesFor(topic, only);
   const imageIds = new Set(pages.filter((p) => parseNotes(p)?.case_image_box).map((p) => p.id));
   const concepts = (
     db.prepare("SELECT c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(topic.id) as { name: string }[]
@@ -376,7 +451,7 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): 
     const caseId = Number(insertCase.run(topic.exam_id, c.scenario, box, image).lastInsertRowid);
     groups.push(
       qs.map((q) => {
-        const order = q.options.map((_, i) => i).sort(() => Math.random() - 0.5);
+        const order = shuffle(q.options.map((_, i) => i));
         return Number(
           insertQ.run(
             topic.exam_id,
@@ -398,9 +473,9 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[]): 
   return groups;
 }
 
-async function generateForTopic(topic: Topic, count: number, style: Style, focus: FocusPoint[]): Promise<number[]> {
+async function generateForTopic(topic: Topic, count: number, style: Style, focus: FocusPoint[], only: PageFilter = null): Promise<number[]> {
   const userId = examOwner(topic.exam_id);
-  const pages = topicPages(topic);
+  const pages = pagesFor(topic, only);
   const imageCases = pages.filter((p) => parseNotes(p)?.case_image_box);
   const concepts = (
     db.prepare("SELECT c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(topic.id) as {
@@ -454,7 +529,7 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     const imagePage = q.type === "image" && q.image_page_id != null && imageIds.has(q.image_page_id) ? q.image_page_id : null;
     const type = q.type === "image" && !imagePage ? (q.patient_box ? "case" : "recall") : q.type;
     // Shuffle options so the correct answer isn't biased to one position.
-    const order = q.options.map((_, i) => i).sort(() => Math.random() - 0.5);
+    const order = shuffle(q.options.map((_, i) => i));
     const options = order.map((i) => q.options[i]);
     const correct = order.indexOf(q.correct_index);
     ids.push(

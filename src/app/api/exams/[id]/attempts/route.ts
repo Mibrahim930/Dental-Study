@@ -43,6 +43,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/
     mode: body.mode === "timed" ? "timed" : "tutor",
     style: body.style === "recall" || body.style === "case" || body.style === "caseset" ? body.style : "mixed",
     topicIds,
+    // Chosen lectures: questions come only from their slides (a topic can also hold slides from other lectures).
+    documentIds: scope.kind === "lectures" ? scope.documentIds : undefined,
     adaptive,
   });
   return NextResponse.json({ id });

@@ -20,13 +20,7 @@ export function scopeTopicIds(examId: number, scope: Scope): number[] {
   if (scope.kind === "lectures") {
     if (scope.documentIds.length === 0) return [];
     // A topic belongs to a lecture if any of its slides come from that lecture's PDF.
-    const pageIds = new Set(
-      (
-        db
-          .prepare(`SELECT p.id FROM pages p JOIN documents d ON d.id = p.document_id WHERE d.exam_id = ? AND d.id IN (${scope.documentIds.map(() => "?").join(",")})`)
-          .all(examId, ...scope.documentIds) as { id: number }[]
-      ).map((p) => p.id),
-    );
+    const pageIds = lecturePageIds(examId, scope.documentIds);
     const topics = db.prepare("SELECT id, page_ids FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Pick<Topic, "id" | "page_ids">[];
     return topics.filter((t) => (JSON.parse(t.page_ids) as number[]).some((id) => pageIds.has(id))).map((t) => t.id);
   }
@@ -47,7 +41,10 @@ type Result = {
   concept: string | null;
 };
 
-/** The most recent practice answer to each question asked in this exam's practice exams. */
+/**
+ * The most recent practice answer to each question asked in this exam's practice exams. Only this exam's own
+ * questions count: older exams sometimes mixed in questions from the student's other exams, and those never come back.
+ */
 function latestResults(examId: number): Result[] {
   const rows = db
     .prepare(
@@ -55,7 +52,7 @@ function latestResults(examId: number): Result[] {
               q.stem, q.source_page_id, c.name AS concept
        FROM attempt_questions aq JOIN attempts a ON a.id = aq.attempt_id JOIN questions q ON q.id = aq.question_id
        LEFT JOIN concepts c ON c.id = q.concept_id
-       WHERE a.exam_id = ? AND aq.chosen_index IS NOT NULL AND q.flagged = 0
+       WHERE a.exam_id = ? AND q.exam_id = a.exam_id AND aq.chosen_index IS NOT NULL AND q.flagged = 0
        ORDER BY aq.attempt_id`,
     )
     .all(examId) as Result[];
@@ -65,13 +62,26 @@ function latestResults(examId: number): Result[] {
 }
 
 /**
- * Whether an earlier answer belongs to the material being practised. With `wholeExam`, questions from earlier exams
- * that were mixed in to revisit weak concepts count too, as do questions whose topic was since removed.
+ * Whether an earlier answer belongs to the material being practised. With `wholeExam`, questions whose topic was
+ * since removed count too. With `pageIds` (chosen lectures), only questions written from those slides count.
  */
-const inScope = (examId: number, topicIds: number[], wholeExam = false) => (r: { topic_id: number | null; question_exam_id?: number }) =>
-  topicIds.length === 0 ||
-  (r.topic_id != null && topicIds.includes(r.topic_id)) ||
-  (wholeExam && (r.topic_id == null || (r.question_exam_id != null && r.question_exam_id !== examId)));
+const inScope =
+  (topicIds: number[], wholeExam = false, pageIds: Set<number> | null = null) =>
+  (r: { topic_id: number | null; source_page_id: number | null }) =>
+    (topicIds.length === 0 || (r.topic_id != null && topicIds.includes(r.topic_id)) || (wholeExam && r.topic_id == null)) &&
+    (!pageIds || (r.source_page_id != null && pageIds.has(r.source_page_id)));
+
+/** The slides of the chosen lectures of an exam (lectures of other exams are ignored). */
+export function lecturePageIds(examId: number, documentIds: number[]): Set<number> {
+  if (documentIds.length === 0) return new Set();
+  return new Set(
+    (
+      db
+        .prepare(`SELECT p.id FROM pages p JOIN documents d ON d.id = p.document_id WHERE d.exam_id = ? AND d.id IN (${documentIds.map(() => "?").join(",")})`)
+        .all(examId, ...documentIds) as { id: number }[]
+    ).map((p) => p.id),
+  );
+}
 
 /**
  * Questions to ask again: answered wrong last time and not answered right since. Most recent misses first.
@@ -81,13 +91,13 @@ export function retryQuestions(
   examId: number,
   topicIds: number[],
   limit: number,
-  opts: { types?: string[]; wholeExam?: boolean } = {},
+  opts: { types?: string[]; wholeExam?: boolean; pageIds?: Set<number> | null } = {},
 ): number[] {
   if (limit <= 0) return [];
   const open = inOpenExams();
   return latestResults(examId)
     .filter((r) => r.correct === 0 && r.case_id == null && (!opts.types || opts.types.includes(r.type)) && !open.has(r.question_id))
-    .filter(inScope(examId, topicIds, opts.wholeExam))
+    .filter(inScope(topicIds, opts.wholeExam, opts.pageIds))
     .sort((a, b) => b.attempt_id - a.attempt_id)
     .slice(0, limit)
     .map((r) => r.question_id);
@@ -97,12 +107,17 @@ export function retryQuestions(
  * Missed case-set questions, grouped by case in case order. Only the missed questions come back (each still shows
  * the patient box and scenario); questions of the case answered right don't repeat.
  */
-export function retryCases(examId: number, topicIds: number[], limit: number, opts: { wholeExam?: boolean } = {}): number[][] {
+export function retryCases(
+  examId: number,
+  topicIds: number[],
+  limit: number,
+  opts: { wholeExam?: boolean; pageIds?: Set<number> | null } = {},
+): number[][] {
   if (limit <= 0) return [];
   const open = inOpenExams();
   const missed = latestResults(examId)
     .filter((r) => r.correct === 0 && r.case_id != null && !open.has(r.question_id))
-    .filter(inScope(examId, topicIds, opts.wholeExam))
+    .filter(inScope(topicIds, opts.wholeExam, opts.pageIds))
     .sort((a, b) => b.attempt_id - a.attempt_id);
   const caseIds = [...new Set(missed.map((r) => r.case_id!))].slice(0, limit);
   const missedIds = new Set(missed.map((r) => r.question_id));
@@ -154,9 +169,9 @@ export function isValidChoice(options: string[], correctIndex: number): boolean 
 export type FocusPoint = { concept: string | null; source_page_id: number | null; stem: string; why: "missed" | "unsure" };
 
 /** Weak spots per topic: questions missed, or answered right but marked guessed/unsure, on the latest try. */
-export function focusPoints(examId: number, topicIds: number[]): Map<number, FocusPoint[]> {
+export function focusPoints(examId: number, topicIds: number[], pageIds: Set<number> | null = null): Map<number, FocusPoint[]> {
   const out = new Map<number, FocusPoint[]>();
-  for (const r of latestResults(examId).filter(inScope(examId, topicIds))) {
+  for (const r of latestResults(examId).filter(inScope(topicIds, false, pageIds))) {
     if (r.topic_id == null) continue;
     const why = r.correct === 0 ? "missed" : r.confidence === "guess" || r.confidence === "unsure" ? "unsure" : null;
     if (!why) continue;
@@ -169,7 +184,7 @@ export function focusPoints(examId: number, topicIds: number[]): Map<number, Foc
 
 /** What the student will see come back in the next exam over this scope (for the start form). */
 export function pendingCounts(examId: number, topicIds: number[] = []): { missed: number; unsure: number } {
-  const results = latestResults(examId).filter(inScope(examId, topicIds));
+  const results = latestResults(examId).filter(inScope(topicIds));
   return {
     missed: results.filter((r) => r.correct === 0).length,
     unsure: results.filter((r) => r.correct === 1 && (r.confidence === "guess" || r.confidence === "unsure")).length,
@@ -263,13 +278,18 @@ export function slideCoverage(topicId: number): Map<number, number> {
   return new Map(rows.map((r) => [r.id, r.n]));
 }
 
+/** A shuffled copy (Fisher–Yates): every order is equally likely, unlike sort(() => Math.random() - 0.5). */
+export function shuffle<T>(xs: readonly T[]): T[] {
+  const out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /** A random display order for a retried question's options, so the answer's letter can't be remembered. */
 export function shuffledOrder(questionId: number): number[] {
   const { options } = db.prepare("SELECT options FROM questions WHERE id = ?").get(questionId) as { options: string };
-  const order = (JSON.parse(options) as string[]).map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  return order;
+  return shuffle((JSON.parse(options) as string[]).map((_, i) => i));
 }

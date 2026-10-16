@@ -128,6 +128,15 @@ function miss(examId: number, x: number) {
   db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, 0)").run(a, x);
   answerQuestion(a, x, 1, "sure");
 }
+/** The exams the questions of an attempt come from. */
+const examsOf = (attemptId: number) =>
+  (
+    db.prepare("SELECT DISTINCT q.exam_id FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id WHERE aq.attempt_id = ?").all(attemptId) as {
+      exam_id: number;
+    }[]
+  ).map((r) => r.exam_id);
+
+/** Another exam of the same student, with a weak concept and spare questions (what used to get mixed in). */
 function weakPastWorld(w: ReturnType<typeof world>) {
   const past = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'Past')").run(w.userId).lastInsertRowid);
   const pt = Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, 0, 'Past topic', '', '[]')").run(past).lastInsertRowid);
@@ -194,29 +203,55 @@ describe("1. whole exam, size >= topics: every topic appears", () => {
     expect(e2.topics.size).toBe(10);
   });
 
-  it("past-exam 12% slice with size == topics must not push a topic out", async () => {
-    const w = world(14);
-    weakPastWorld(w);
-    const e = await sitExam(w.examId, { size: 14, adaptive: true });
-    expect(e.status).toBe("ready");
-    const own = new Set(e.rows.map((r) => r.topic_id).filter((t) => w.topicIds.includes(t as number)));
-    expect(e.rows.length).toBe(14);
-    expect(own.size, "topics of this exam in a size-14 exam with a past-exam slice").toBe(14);
+  it("focus on, whole exam, weak concepts in another exam: every question belongs to this exam", async () => {
+    for (const size of [14, 16, 30]) {
+      const w = world(14);
+      weakPastWorld(w);
+      const e = await sitExam(w.examId, { size, adaptive: true });
+      expect(e.status).toBe("ready");
+      expect(e.rows.length, `size ${size}`).toBe(size);
+      expect(e.topics.size).toBe(14);
+      expect(examsOf(e.id), `size ${size}`).toEqual([w.examId]);
+      // The AI was never asked about the other exam's topic.
+      expect(calls.some((c) => c.content.includes("Past topic"))).toBe(false);
+    }
   });
 
-  it("past-exam slice with a little room (size 16, 14 topics)", async () => {
-    const w = world(14);
-    weakPastWorld(w);
-    const e = await sitExam(w.examId, { size: 16, adaptive: true });
-    const own = new Set(e.rows.map((r) => r.topic_id).filter((t) => w.topicIds.includes(t as number)));
-    expect(own.size).toBe(14);
-  });
-
-  it("past-exam slice only applies to whole-exam scope, never to chosen topics", async () => {
+  it("chosen topics with weak concepts elsewhere: only the chosen topics, only this exam", async () => {
     const w = world(5);
     weakPastWorld(w);
     const e = await sitExam(w.examId, { size: 5, adaptive: true, topicIds: w.topicIds });
     expect(new Set(e.rows.map((r) => r.topic_id))).toEqual(new Set(w.topicIds));
+    expect(examsOf(e.id)).toEqual([w.examId]);
+  });
+
+  it("a question from another exam answered wrong in an old practice exam is never retried or counted", async () => {
+    const { pendingCounts, retryQuestions } = await import("@/lib/practicePlan");
+    const w = world(4);
+    const { past, pt } = weakPastWorld(w);
+    // Old live data: whole-exam practice used to mix in a question from another exam.
+    const foreign = q(past, pt, "foreign miss");
+    miss(w.examId, foreign);
+    expect(retryQuestions(w.examId, w.topicIds, 10, { wholeExam: true })).not.toContain(foreign);
+    expect(pendingCounts(w.examId)).toEqual({ missed: 0, unsure: 0 });
+    for (const adaptive of [true, false]) {
+      const e = await sitExam(w.examId, { size: 8, adaptive });
+      expect(e.rows.map((r) => r.question_id)).not.toContain(foreign);
+      expect(examsOf(e.id)).toEqual([w.examId]);
+    }
+  });
+
+  it("safety net: a question from another exam wrongly filed under this exam's topic never reaches the exam", async () => {
+    const w = world(3);
+    const { past } = weakPastWorld(w);
+    // Corrupt row: belongs to the other exam but points at this exam's topic, so it would be "reused".
+    const stray = q(past, w.topicIds[0], "stray");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const e = await sitExam(w.examId, { size: 3 });
+    warn.mockRestore();
+    expect(e.status).toBe("ready");
+    expect(e.rows.map((r) => r.question_id)).not.toContain(stray);
+    expect(examsOf(e.id)).toEqual([w.examId]);
   });
 
   it("total question count equals size when the AI returns enough (various sizes)", async () => {
@@ -227,13 +262,14 @@ describe("1. whole exam, size >= topics: every topic appears", () => {
     }
   });
 
-  it("5. total equals size with history, retries and a past-exam slice", async () => {
+  it("5. total equals size with history, retries and weak concepts in another exam", async () => {
     const w = world(6);
     weakPastWorld(w);
     await sitExam(w.examId, { size: 12, adaptive: true }, { wrong: (r) => r.question_id % 2 === 0 });
     const e = await sitExam(w.examId, { size: 12, adaptive: true }, { wrong: (r) => r.question_id % 3 === 0 });
     expect(e.rows.length).toBe(12);
     expect(new Set(e.rows.map((r) => r.question_id)).size).toBe(12);
+    expect(examsOf(e.id)).toEqual([w.examId]);
   });
 });
 
@@ -370,7 +406,40 @@ describe("3. chosen lectures / chosen topics scope", () => {
     const pagesA = JSON.parse((db.prepare("SELECT page_ids FROM topics WHERE id = ?").get(w.topicIds[0]) as { page_ids: string }).page_ids) as number[];
     const pagesB = JSON.parse((db.prepare("SELECT page_ids FROM topics WHERE id = ?").get(w.topicIds[1]) as { page_ids: string }).page_ids) as number[];
     db.prepare("UPDATE topics SET page_ids = ? WHERE id = ?").run(JSON.stringify([...pagesA, pagesB[0]]), w.topicIds[0]);
-    expect(scopeTopicIds(w.examId, { kind: "lectures", documentIds: [w.docIds[1]] })).toEqual(w.topicIds);
+    const ids = scopeTopicIds(w.examId, { kind: "lectures", documentIds: [w.docIds[1]] });
+    expect(ids).toEqual(w.topicIds);
+    // In scope, but the AI only sees (and questions only come from) the chosen lecture's slides.
+    const id = startAttempt(w.examId, { size: 4, mode: "tutor", style: "mixed", adaptive: false, topicIds: ids, documentIds: [w.docIds[1]] });
+    expect((await ready(id)).status).toBe("ready");
+    const lectureB = new Set([...pagesB]);
+    for (const c of calls) {
+      for (const m of c.content.matchAll(/\[P(\d+)\]/g)) expect(lectureB.has(Number(m[1])), `slide P${m[1]} sent to the AI`).toBe(true);
+    }
+    const sources = (
+      db.prepare("SELECT q.source_page_id FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id WHERE aq.attempt_id = ?").all(id) as {
+        source_page_id: number | null;
+      }[]
+    ).map((r) => r.source_page_id);
+    expect(sources.length).toBeGreaterThan(0);
+    for (const s of sources) expect(lectureB.has(s as number)).toBe(true);
+  });
+
+  it("lecture scope: a missed question from the other lecture's slide in a shared topic is not retried", async () => {
+    const w = world(2, 2);
+    const pagesA = JSON.parse((db.prepare("SELECT page_ids FROM topics WHERE id = ?").get(w.topicIds[0]) as { page_ids: string }).page_ids) as number[];
+    const pagesB = JSON.parse((db.prepare("SELECT page_ids FROM topics WHERE id = ?").get(w.topicIds[1]) as { page_ids: string }).page_ids) as number[];
+    db.prepare("UPDATE topics SET page_ids = ? WHERE id = ?").run(JSON.stringify([...pagesA, pagesB[0]]), w.topicIds[0]);
+    const fromA = q(w.examId, w.topicIds[0], "from lecture A");
+    const fromB = q(w.examId, w.topicIds[0], "from lecture B");
+    db.prepare("UPDATE questions SET source_page_id = ? WHERE id = ?").run(pagesA[0], fromA);
+    db.prepare("UPDATE questions SET source_page_id = ? WHERE id = ?").run(pagesB[0], fromB);
+    miss(w.examId, fromA);
+    miss(w.examId, fromB);
+    const id = startAttempt(w.examId, { size: 5, mode: "tutor", style: "mixed", adaptive: false, topicIds: w.topicIds, documentIds: [w.docIds[1]] });
+    await ready(id);
+    const got = members(id).map((r) => r.question_id);
+    expect(got).toContain(fromB);
+    expect(got).not.toContain(fromA);
   });
 });
 
@@ -456,12 +525,32 @@ describe("edge cases", () => {
     expect(e2.topics.has(w.topicIds[1])).toBe(true);
   });
 
-  // Known gap (see design/HANDOFF.md): backfill still comes up one short here.
-  it.fails("AI returns zero for a topic: the exam still has `size` questions (backfill)", async () => {
+  it("AI returns zero for a topic: the exam still has `size` questions (backfill)", async () => {
     const w = world(6);
     behaviour.returns.set("Topic 2", 0);
     const e1 = await sitExam(w.examId, { size: 12 });
     expect(e1.rows.length).toBe(12);
+    expect(e1.topics.has(w.topicIds[1])).toBe(false);
+  });
+
+  it("backfill: two sections come back short and one throws, the exam is still full", async () => {
+    const w = world(6);
+    behaviour.returns.set("Topic 2", 0);
+    behaviour.returns.set("Topic 4", 1);
+    behaviour.throwsFor.add("Topic 5");
+    const e1 = await sitExam(w.examId, { size: 18 });
+    expect(e1.status).toBe("ready");
+    expect(e1.rows.length).toBe(18);
+    expect(new Set(e1.rows.map((r) => r.question_id)).size).toBe(18);
+  });
+
+  it("backfill stops when every section is short (no endless AI calls)", async () => {
+    const w = world(3);
+    for (const t of ["Topic 1", "Topic 2", "Topic 3"]) behaviour.returns.set(t, 1);
+    const e1 = await sitExam(w.examId, { size: 9 });
+    expect(e1.status).toBe("ready");
+    expect(e1.rows.length).toBe(3);
+    expect(calls.length).toBe(3);
   });
 
   it("AI THROWS for one topic mid-exam: the exam still forms", async () => {
@@ -492,15 +581,14 @@ describe("edge cases", () => {
 });
 
 describe("follow-up: whatever was squeezed out leads the next exam", () => {
-  it("past-exam slice squeezed 2 topics out of a size-14 exam: they are in the next exam", async () => {
+  it("weak concepts in another exam never squeeze a section of this exam out (size 14, 14 topics, twice)", async () => {
     const w = world(14);
     weakPastWorld(w);
-    const e1 = await sitExam(w.examId, { size: 14, adaptive: true });
-    const left = w.topicIds.filter((t) => !e1.rows.some((r) => r.topic_id === t));
-    // Nothing is squeezed out any more; anything that ever is still has to lead the next exam.
-    expect(left.length).toBe(0);
-    const e2 = await sitExam(w.examId, { size: 14, adaptive: true });
-    for (const t of left) expect(e2.topics.has(t)).toBe(true);
+    for (let n = 0; n < 2; n++) {
+      const e = await sitExam(w.examId, { size: 14, adaptive: true });
+      expect(e.topics.size).toBe(14);
+      expect(examsOf(e.id)).toEqual([w.examId]);
+    }
   });
 
   it("retry concentration squeezed topics out: they are in the next exam", async () => {

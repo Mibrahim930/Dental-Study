@@ -178,7 +178,7 @@ describe("B1 case-set retries only bring back missed questions of a case", () =>
 });
 
 describe("B3 past-exam and deleted-topic misses retried for whole-exam", () => {
-  it("whole exam: question with null topic_id and question from another exam are retried; scoped exam: not", () => {
+  it("whole exam: question with null topic_id is retried, one from another exam never is; scoped exam: neither", () => {
     const w = world(2);
     const other = world(1);
     const orphan = q(w.examId, null, "orphan");
@@ -188,7 +188,7 @@ describe("B3 past-exam and deleted-topic misses retried for whole-exam", () => {
     const a = att(w.examId, [orphan, past, here]);
     [orphan, past, here].forEach((x) => answerQuestion(a, x, 1));
     const whole = retryQuestions(w.examId, w.topicIds, 10, { wholeExam: true });
-    expect(new Set(whole)).toEqual(new Set([orphan, past, here]));
+    expect(new Set(whole)).toEqual(new Set([orphan, here]));
     const scoped = retryQuestions(w.examId, [w.topicIds[0]], 10, { wholeExam: false });
     expect(scoped).toEqual([here]);
   });
@@ -217,7 +217,7 @@ describe("B3 past-exam and deleted-topic misses retried for whole-exam", () => {
     expect(retryCases(w.examId, [w.topicIds[0]], 3, { wholeExam: true })).toEqual([[cq]]);
   });
 
-  it("past-exam weak-concept slot: miss in whole-exam attempt comes back (end to end)", async () => {
+  it("old data: a missed question from another exam in a whole-exam attempt does NOT come back (end to end)", async () => {
     const w = world(1);
     const other = world(1);
     // other exam belongs to a different user in helpers; same user needed
@@ -227,7 +227,7 @@ describe("B3 past-exam and deleted-topic misses retried for whole-exam", () => {
     answerQuestion(a, pastQ, 1);
     const id = startAttempt(w.examId, { size: 10, mode: "tutor", style: "mixed", adaptive: false });
     await ready(id);
-    expect(members(id).map((m) => m.question_id)).toContain(pastQ);
+    expect(members(id).map((m) => m.question_id)).not.toContain(pastQ);
   });
 });
 
