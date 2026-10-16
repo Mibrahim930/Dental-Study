@@ -468,4 +468,21 @@
   .prose-study code { @apply rounded bg-muted px-1 py-0.5 text-[0.9em]; }
 
   .shimmer { @apply animate-pulse rounded-2xl bg-muted; }
+
+  /* Student highlights on questions and answers. Butter + its on-colour read in every theme (light and dark). */
+  .hl {
+    background: var(--butter);
+    color: var(--on-butter);
+    border-radius: 4px;
+    padding: 0 1px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    cursor: pointer;
+  }
+}
+
+/* Text being selected (to highlight it). */
+::selection {
+  background: color-mix(in srgb, var(--butter) 70%, var(--foreground) 15%);
+  color: var(--on-butter);
 }

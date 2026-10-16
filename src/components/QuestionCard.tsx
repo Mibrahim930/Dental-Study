@@ -2,7 +2,10 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
-import { optionClasses, type OptionState } from "./ui";
+import { type OptionState } from "./ui";
+import { OptionRow } from "./OptionRow";
+import { Highlightable } from "./Highlightable";
+import { useMarks } from "./useMarks";
 
 export type QuestionData = {
   id: number;
@@ -48,6 +51,7 @@ export function QuestionCard({
   tag,
   belowOptions,
   practice = false,
+  marksKey = null,
 }: {
   q: QuestionData;
   onChoose?: (i: number) => void;
@@ -58,11 +62,26 @@ export function QuestionCard({
   belowOptions?: React.ReactNode;
   /** In a practice exam, a missed question comes back in the next exam; say so under the explanation. */
   practice?: boolean;
+  /** Where the student's highlights and cross-outs on this question are saved (e.g. "attempt:12:345"). */
+  marksKey?: string | null;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
   const [showSource, setShowSource] = useState(false);
   const [flagged, setFlagged] = useState(q.flagged);
+  const [marks, setMarks] = useMarks(marksKey);
+  const hl = (field: string) => ({
+    ranges: marks.hl[field] ?? [],
+    onRanges: (r: typeof marks.hl[string]) => setMarks((m) => ({ ...m, hl: { ...m.hl, [field]: r } })),
+  });
+  const hlProps = (h: ReturnType<typeof hl>) => ({ ranges: h.ranges, onChange: h.onRanges });
+  const toggleCross = (i: number) =>
+    setMarks((m) => ({ ...m, crossed: m.crossed.includes(i) ? m.crossed.filter((x) => x !== i) : [...m.crossed, i].sort() }));
+  const choose = (i: number) => {
+    // Picking a crossed-out option un-crosses it.
+    if (marks.crossed.includes(i)) toggleCross(i);
+    onChoose?.(i);
+  };
 
   async function flag() {
     const note = window.prompt("What's wrong with this question? (optional)") ?? undefined;
@@ -87,7 +106,9 @@ export function QuestionCard({
             </span>
             {tag}
           </div>
-          <p className="text-base leading-normal font-medium">{q.caseInfo.scenario}</p>
+          <p className="text-base leading-normal font-medium">
+            <Highlightable text={q.caseInfo.scenario} {...hlProps(hl("case"))} />
+          </p>
         </section>
       )}
 
@@ -117,26 +138,30 @@ export function QuestionCard({
         {header}
         {tag && !q.caseInfo && <div>{tag}</div>}
         {q.emphasized && <span className="chip cb-coral self-start">★ Emphasized in lecture</span>}
-        <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">{q.stem}</p>
-        {q.options.map((o, i) => {
-          const s = optionClasses(stateOf(i));
-          return (
-            <button
+        <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">
+          <Highlightable text={q.stem} {...hlProps(hl("stem"))} />
+        </p>
+        <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2.5">
+          {q.options.map((o, i) => (
+            <OptionRow
               key={i}
-              disabled={!onChoose}
-              onClick={() => onChoose?.(i)}
-              aria-pressed={!revealed && onChoose ? i === selected : undefined}
-              className={`flex min-h-[58px] items-center gap-3 rounded-[18px] border-2 px-3.5 py-3 text-left transition-colors disabled:cursor-default ${s.row}`}
-            >
-              <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] text-sm font-extrabold ${s.key}`}>
-                {String.fromCharCode(65 + i)}
-              </span>
-              <span className="flex-1 text-base leading-snug font-semibold">{o}</span>
-              {revealed && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
-              {revealed && i === selected && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Your answer</span>}
-            </button>
-          );
-        })}
+              index={i}
+              text={o}
+              state={stateOf(i)}
+              checked={i === selected}
+              onSelect={onChoose ? () => choose(i) : undefined}
+              crossed={marks.crossed.includes(i)}
+              onToggleCross={() => toggleCross(i)}
+              {...hl(`opt${i}`)}
+              chips={
+                <>
+                  {revealed && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+                  {revealed && i === selected && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Your answer</span>}
+                </>
+              }
+            />
+          ))}
+        </div>
         {belowOptions}
       </section>
 

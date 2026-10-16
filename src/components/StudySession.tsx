@@ -4,7 +4,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage } from "./SlideImage";
-import { Icon, ICONS, MasteryChip, optionClasses, Strip, type OptionState } from "./ui";
+import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
+import { OptionRow } from "./OptionRow";
+import { Highlightable } from "./Highlightable";
+import { useMarks } from "./useMarks";
+import type { Range } from "@/lib/marks";
 
 type TopicLite = { id: number; position: number; title: string; emphasized: boolean };
 type ChatMsg = { id?: number; role: "user" | "assistant"; content: string };
@@ -504,28 +508,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           {total} questions over the most important of this section&apos;s {quiz.slides} slides.
         </p>
       )}
-      <p className="px-1 text-[18px] leading-snug font-bold">{q.question}</p>
-      <div className="flex flex-col gap-2">
-        {q.options.map((o, i) => {
-          const s = optionClasses(stateOf(i));
-          return (
-            <button
-              key={i}
-              onClick={() => !answered && setPicked(i)}
-              disabled={answered}
-              aria-pressed={!answered ? i === picked : undefined}
-              className={`flex min-h-[58px] items-center gap-3 rounded-[18px] border-2 px-3.5 py-3 text-left transition-colors disabled:cursor-default ${s.row}`}
-            >
-              <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] text-sm font-extrabold ${s.key}`}>
-                {String.fromCharCode(65 + i)}
-              </span>
-              <span className="flex-1 text-base leading-snug font-semibold">{o}</span>
-              {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
-              {answered && i === chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
-            </button>
-          );
-        })}
-      </div>
+      <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered} chosen={chosen} picked={picked} onPick={setPicked} />
       {saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
       {answered && (
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
@@ -546,6 +529,64 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         </button>
       )}
     </section>
+  );
+}
+
+/** A quiz question's text and options, with the student's highlights and cross-outs (saved per question id). */
+function QuizBody({
+  q,
+  stateOf,
+  answered,
+  chosen,
+  picked,
+  onPick,
+}: {
+  q: QuizQ;
+  stateOf: (i: number) => OptionState;
+  answered: boolean;
+  chosen: number | undefined;
+  picked: number | null;
+  onPick: (i: number) => void;
+}) {
+  const [marks, setMarks] = useMarks(q.id ? `quiz:${q.id}` : null);
+  const setHl = (field: string) => (r: Range[]) => setMarks((m) => ({ ...m, hl: { ...m.hl, [field]: r } }));
+  const toggleCross = (i: number) =>
+    setMarks((m) => ({ ...m, crossed: m.crossed.includes(i) ? m.crossed.filter((x) => x !== i) : [...m.crossed, i].sort() }));
+  return (
+    <>
+      <p className="px-1 text-[18px] leading-snug font-bold">
+        <Highlightable text={q.question} ranges={marks.hl.stem ?? []} onChange={setHl("stem")} />
+      </p>
+      <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2">
+        {q.options.map((o, i) => (
+          <OptionRow
+            key={i}
+            index={i}
+            text={o}
+            state={stateOf(i)}
+            checked={answered ? i === chosen : i === picked}
+            onSelect={
+              answered
+                ? undefined
+                : () => {
+                    if (marks.crossed.includes(i)) toggleCross(i);
+                    onPick(i);
+                  }
+            }
+            crossed={marks.crossed.includes(i)}
+            onToggleCross={() => toggleCross(i)}
+            ranges={marks.hl[`opt${i}`] ?? []}
+            onRanges={setHl(`opt${i}`)}
+            chips={
+              <>
+                {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+                {answered && i === chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
+              </>
+            }
+          />
+        ))}
+      </div>
+    </>
   );
 }
 

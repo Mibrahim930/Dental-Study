@@ -164,6 +164,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         key={q.id}
         q={q}
         practice
+        marksKey={`attempt:${attemptId}:${q.id}`}
         pending={pending[q.id]}
         onChoose={q.chosen_index == null ? choose : undefined}
         belowOptions={confidence}
@@ -429,7 +430,7 @@ function Results({ view }: { view: AttemptView }) {
               </button>
               {open === i && (
                 <div className="flex flex-col gap-2.5 px-1 pt-1 pb-3">
-                  <QuestionCard q={q as QuestionData} practice header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
+                  <QuestionCard q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
                 </div>
               )}
             </div>

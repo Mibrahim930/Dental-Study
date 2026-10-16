@@ -273,6 +273,16 @@ CREATE TABLE IF NOT EXISTS shared_exams (
   UNIQUE(class_id, exam_id)
 );
 
+-- Highlights and crossed-out options a student put on a question, so they follow her between devices.
+-- key: "attempt:<attemptId>:<questionId>" (practice exams) or "quiz:<quiz question id>" (section quizzes). json: lib/marks.ts Marks.
+CREATE TABLE IF NOT EXISTS question_marks (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, key)
+);
+
 -- Every AI call, for the per-user spending tracker.
 CREATE TABLE IF NOT EXISTS ai_usage (
   id INTEGER PRIMARY KEY,
