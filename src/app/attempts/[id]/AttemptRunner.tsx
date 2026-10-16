@@ -21,6 +21,8 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   });
   const [pending, setPending] = useState<Record<number, number>>({});
   const [saving, setSaving] = useState(false);
+  // "Finish" with questions left asks first (one stray tap shouldn't end a timed exam). Shown next to the button used.
+  const [confirmAt, setConfirmAt] = useState<"top" | "bottom" | null>(null);
   const { attempt, questions } = view;
   const finished = attempt.status === "finished";
 
@@ -91,6 +93,25 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     setSaving(false);
   }
 
+  const left = questions.length - answeredCount;
+  const requestFinish = (at: "top" | "bottom") => (left > 0 ? setConfirmAt(at) : void finish());
+  const confirmBox = (
+    <div role="alertdialog" aria-label="Finish the exam?" className="tile cb-butter flex flex-col gap-2.5 rounded-[22px]">
+      <p className="text-[15px] font-bold">
+        {left} question{left === 1 ? "" : "s"} still unanswered. Finish anyway?
+      </p>
+      <p className="text-[13px] font-medium opacity-80">Unanswered questions count as skipped and come back in a later exam.</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="btn-primary btn-sm" onClick={() => void finish()}>
+          Yes, finish
+        </button>
+        <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={() => setConfirmAt(null)}>
+          Keep going
+        </button>
+      </div>
+    </div>
+  );
+
   const locked = q.chosen_index != null;
   const confidence = (
     <div className="mt-1.5 flex flex-col gap-2">
@@ -128,11 +149,12 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         </Link>
         <div className="flex shrink-0 items-center gap-2">
           {attempt.time_limit_sec && <Timer startedAt={attempt.started_at} limit={attempt.time_limit_sec} onExpire={finish} />}
-          <button className="btn-primary btn-sm" onClick={finish}>
+          <button className="btn-primary btn-sm" onClick={() => requestFinish("top")}>
             Finish · {answeredCount}/{questions.length}
           </button>
         </div>
       </div>
+      {confirmAt === "top" && confirmBox}
       <div className="px-1">
         <h1 className="text-[26px] font-extrabold tracking-[-0.03em]">Practice exam · {tutor ? "Tutor" : "Timed"}</h1>
       </div>
@@ -186,9 +208,10 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         {index + 1 < questions.length ? (
           <button className="btn-primary btn-lg" onClick={() => setIndex(index + 1)}>Next question →</button>
         ) : (
-          <button className="btn-primary btn-lg" onClick={finish}>Finish exam</button>
+          <button className="btn-primary btn-lg" onClick={() => requestFinish("bottom")}>Finish exam</button>
         )}
       </div>
+      {confirmAt === "bottom" && confirmBox}
     </div>
   );
 }
