@@ -33,7 +33,15 @@ export async function GET(request: Request) {
   const row = db.prepare("SELECT json, updated_at FROM question_marks WHERE user_id = ? AND key = ?").get(user.id, key) as
     | { json: string; updated_at: string }
     | undefined;
-  return NextResponse.json({ marks: row ? (cleanMarks(JSON.parse(row.json)) ?? emptyMarks()) : null, updated_at: row?.updated_at ?? null });
+  let marks = null;
+  if (row) {
+    try {
+      marks = cleanMarks(JSON.parse(row.json)) ?? emptyMarks();
+    } catch {
+      marks = emptyMarks(); // an unreadable row behaves like no marks (the next save replaces it)
+    }
+  }
+  return NextResponse.json({ marks, updated_at: row?.updated_at ?? null });
 }
 
 /** Save them (empty marks delete the row). */
