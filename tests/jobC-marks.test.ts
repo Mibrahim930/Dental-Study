@@ -96,11 +96,33 @@ describe("/api/marks", () => {
     currentUserId = makeUser();
     const fields = ["stem", "case", ...Array.from({ length: 10 }, (_, f) => `opt${f}`)];
     const ranges = (n: number) => Array.from({ length: n }, (_, i) => [10000 + i * 90, 10000 + i * 90 + 50]);
+    // Every text full (12 × 100 highlights) is still a legitimate save: trimmed to 100 per text, accepted.
     const huge = { hl: Object.fromEntries(fields.map((f) => [f, ranges(500)])), crossed: [] };
-    expect((await put({ key: "quiz:abcdef12", marks: huge })).status).toBe(400);
-    const ok = { hl: { stem: ranges(500) }, crossed: [] };
-    expect((await put({ key: "quiz:abcdef12", marks: ok })).status).toBe(200);
+    expect((await put({ key: "quiz:abcdef12", marks: huge })).status).toBe(200);
     const saved = (await (await get("quiz:abcdef12")).json()).marks;
-    expect(saved.hl.stem).toHaveLength(100);
+    expect(Object.keys(saved.hl)).toHaveLength(12);
+    for (const f of fields) expect(saved.hl[f]).toHaveLength(100);
+  });
+
+  it("marks on a deleted practice exam are forgotten when room is needed", async () => {
+    currentUserId = makeUser();
+    const attemptId = attemptOf(currentUserId);
+    await put({ key: `attempt:${attemptId}:1`, marks: { hl: {}, crossed: [1] } });
+    db.prepare("DELETE FROM attempts WHERE id = ?").run(attemptId);
+    // Simulate a full account, then save one more: the orphan row is pruned to make room.
+    const insert = db.prepare("INSERT INTO question_marks (user_id, key, json) VALUES (?, ?, '{}')");
+    db.transaction(() => {
+      for (let i = 0; i < 19999; i++) insert.run(currentUserId, `quiz:${(0x10000000 + i).toString(16)}`);
+    })();
+    expect((await put({ key: "quiz:ffffffff", marks: { hl: {}, crossed: [2] } })).status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ? AND key LIKE 'attempt:%'").get(currentUserId)).toEqual({ n: 0 });
+    expect((await put({ key: "quiz:fffffffe", marks: { hl: {}, crossed: [2] } })).status).toBe(400);
+  });
+
+  it("addRange / mergeRanges never change the arrays passed in (React state)", () => {
+    const before: [number, number][] = [[0, 5]];
+    const copy = JSON.stringify(before);
+    addRange(before, [3, 9]);
+    expect(JSON.stringify(before)).toBe(copy);
   });
 });

@@ -306,7 +306,8 @@ function Results({ view }: { view: AttemptView }) {
 
   const byTopic = new Map<string, { right: number; total: number }>();
   for (const q of questions) {
-    const k = q.topic ?? "Other";
+    // Questions whose topic no longer exists come from a removed lecture (or a rebuilt topic map).
+    const k = q.topic ?? "Removed lecture";
     const t = byTopic.get(k) ?? { right: 0, total: 0 };
     t.total++;
     if (q.correct) t.right++;

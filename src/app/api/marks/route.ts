@@ -3,6 +3,17 @@ import { db } from "@/lib/db";
 import { cleanMarks, emptyMarks, isEmpty, MARKS_KEY } from "@/lib/marks";
 import { apiUser, unauthorized } from "@/lib/user";
 
+/** Questions with marks one student can keep (thousands of questions; stops runaway scripts). */
+const MAX_ROWS = 20000;
+
+/** Forget marks on practice exams that were deleted (with their exam). */
+function pruneDeleted(userId: number) {
+  db.prepare(
+    `DELETE FROM question_marks WHERE user_id = ? AND key LIKE 'attempt:%'
+     AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id = CAST(substr(question_marks.key, 9, instr(substr(question_marks.key, 9), ':') - 1) AS INTEGER))`,
+  ).run(userId);
+}
+
 /** A key is usable when it's well formed and, for a practice exam, the exam is this student's. */
 function allowed(userId: number, key: unknown): key is string {
   if (typeof key !== "string" || !MARKS_KEY.test(key)) return false;
@@ -38,7 +49,16 @@ export async function PUT(request: Request) {
     db.prepare("DELETE FROM question_marks WHERE user_id = ? AND key = ?").run(user.id, key);
   } else {
     const json = JSON.stringify(marks);
-    if (json.length > 16000) return NextResponse.json({ error: "Too many highlights" }, { status: 400 });
+    // cleanMarks already caps each text at 100 highlights (about 17,000 characters for a full question); this is a backstop.
+    if (json.length > 40000) return NextResponse.json({ error: "Too many highlights" }, { status: 400 });
+    const exists = db.prepare("SELECT 1 FROM question_marks WHERE user_id = ? AND key = ?").get(user.id, key);
+    if (!exists && (db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ?").get(user.id) as { n: number }).n >= MAX_ROWS) {
+      // Make room by forgetting marks on practice exams that no longer exist, then check again.
+      pruneDeleted(user.id);
+      if ((db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ?").get(user.id) as { n: number }).n >= MAX_ROWS) {
+        return NextResponse.json({ error: "Too many highlighted questions" }, { status: 400 });
+      }
+    }
     db.prepare(
       `INSERT INTO question_marks (user_id, key, json) VALUES (?, ?, ?)
        ON CONFLICT(user_id, key) DO UPDATE SET json = excluded.json, updated_at = datetime('now')`,

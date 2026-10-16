@@ -163,6 +163,20 @@ describe("new lecture added to an existing map", () => {
 });
 
 describe("Rebuild (full re-map)", () => {
+  it("Rebuild pressed while an automatic run is going runs right after it (not silently dropped); repeats share one run", async () => {
+    const { examId } = exam();
+    const p = lecture(examId, "L1.pdf", 4);
+    topicMapReply = () => ({ topics: [t("A", p)] });
+    const auto = buildTopicMap(examId);
+    const full = buildTopicMap(examId, "full");
+    const again = buildTopicMap(examId, "full");
+    expect(again).toBe(full);
+    await Promise.all([auto, full]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain(`[P${p[0]}]`); // the full run re-maps every slide
+    expect(status(examId).topic_status).toBe("ready");
+  });
+
   it("keeps topics that mostly match (same id); a changed one gets a fresh lesson and quiz but keeps answers as history", async () => {
     const { examId, userId } = exam();
     const p = lecture(examId, "L1.pdf", 9);

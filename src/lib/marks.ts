@@ -15,7 +15,11 @@ export const isEmpty = (m: Marks) => m.crossed.length === 0 && Object.values(m.h
 
 /** Sorted, non-overlapping ranges: overlapping or touching ones are joined, empty ones dropped. */
 export function mergeRanges(ranges: Range[]): Range[] {
-  const sorted = ranges.filter(([s, e]) => e > s).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  // Copies, so the caller's arrays (e.g. React state) are never changed.
+  const sorted = ranges
+    .filter(([s, e]) => e > s)
+    .map(([s, e]) => [s, e] as Range)
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const out: Range[] = [];
   for (const [s, e] of sorted) {
     const last = out[out.length - 1];

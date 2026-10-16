@@ -242,7 +242,8 @@ function finishGeneration(attemptId: number, allIds: number[], retried: Set<numb
         ),
       )
     : new Set<number>();
-  const questionIds = allIds.filter((id) => own.has(id));
+  // Each question once (first place wins), and only this exam's own.
+  const questionIds = [...new Set(allIds)].filter((id) => own.has(id));
   if (questionIds.length < allIds.length) {
     console.warn(`Practice exam ${attemptId}: dropped ${allIds.length - questionIds.length} question(s) from another exam`, allIds.filter((id) => !own.has(id)));
   }
@@ -310,7 +311,15 @@ export function dropForeignQuestions(): number {
           attemptId,
         );
       } else {
-        db.prepare("UPDATE attempts SET time_limit_sec = CASE WHEN mode = 'timed' THEN ? ELSE NULL END WHERE id = ?").run(left.length * SECONDS_PER_QUESTION, attemptId);
+        // A timed exam already under way keeps at least its usual time for each question still to answer (never
+        // less time left than before per question, never more than it had): the clock never jumps to zero.
+        const a = db
+          .prepare("SELECT mode, time_limit_sec, MAX(0, strftime('%s','now') - strftime('%s', started_at)) AS used FROM attempts WHERE id = ?")
+          .get(attemptId) as { mode: string; time_limit_sec: number | null; used: number };
+        const open = (db.prepare("SELECT COUNT(*) n FROM attempt_questions WHERE attempt_id = ? AND chosen_index IS NULL").get(attemptId) as { n: number }).n;
+        const fair = Math.max(left.length * SECONDS_PER_QUESTION, a.used + open * SECONDS_PER_QUESTION);
+        const limit = a.mode === "timed" ? Math.min(a.time_limit_sec ?? fair, fair) : null;
+        db.prepare("UPDATE attempts SET time_limit_sec = ? WHERE id = ?").run(limit, attemptId);
       }
     }
   })();
@@ -371,8 +380,11 @@ async function buildCaseSets(
 ): Promise<number[][]> {
   const groups: number[][] = [];
   let lastError: unknown = null;
+  // A case's questions can sit in two topics (after a rebuild they follow their slides): never take one case twice.
+  const taken = new Set<number>();
   await mapLimit(allocate(topics, caseCount, focus, coverage), 3, async ({ topic, count }) => {
-    const reused = unusedCases(topic.id, count, pages);
+    const reused = unusedCases(topic.id, count, pages).filter((g) => g.length > 0 && !g.some((q) => taken.has(q)));
+    reused.forEach((g) => g.forEach((q) => taken.add(q)));
     groups.push(...reused);
     try {
       if (count > reused.length) groups.push(...(await generateCases(topic, count - reused.length, focus?.get(topic.id) ?? [], pages)));

@@ -44,7 +44,7 @@ ${RULES}`;
 type PageForMap = PageRow & { filename: string };
 type Mode = "auto" | "full";
 
-const inflight = new Map<number, Promise<void>>();
+const inflight = new Map<number, { p: Promise<void>; mode: Mode }>();
 
 /**
  * Build or update an exam's topic map. Concurrent calls for the same exam share one run.
@@ -54,11 +54,15 @@ const inflight = new Map<number, Promise<void>>();
  *   that topic (and its lesson, quiz, answers and study progress).
  */
 export function buildTopicMap(examId: number, mode: Mode = "auto"): Promise<void> {
-  let p = inflight.get(examId);
-  if (!p) {
-    p = runTopicMap(examId, mode).finally(() => inflight.delete(examId));
-    inflight.set(examId, p);
-  }
+  const running = inflight.get(examId);
+  // Same or weaker request while one runs: share it. A Rebuild asked during an automatic run runs right after it.
+  if (running && (running.mode === "full" || mode === "auto")) return running.p;
+  const p: Promise<void> = (running ? running.p.catch(() => {}) : Promise.resolve())
+    .then(() => runTopicMap(examId, mode))
+    .finally(() => {
+      if (inflight.get(examId)?.p === p) inflight.delete(examId);
+    });
+  inflight.set(examId, { p, mode });
   return p;
 }
 
