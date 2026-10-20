@@ -9,36 +9,63 @@ import { openPdf, renderPage } from "./pdf";
 
 export type { SlideNotes };
 
-/** Save an uploaded PDF, render every page to an image, then process slides in the background. */
+/**
+ * Save an uploaded PDF and start reading it in the background. Only the page count happens here, so the browser gets
+ * its answer within seconds however long the lecture is: the slides are rendered to images and sent to the AI by
+ * processDocument (a 150-slide lecture used to be rendered inside the upload request, which the hosting proxy cut off).
+ */
 export async function addDocument(examId: number, filename: string, bytes: Buffer): Promise<number> {
-  const info = db
-    .prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, ?, 'processing')")
-    .run(examId, filename);
-  const docId = Number(info.lastInsertRowid);
-  const dir = path.join(FILES_DIR, `doc-${docId}`);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "original.pdf"), bytes);
-
+  let count: number;
+  const pdf = openPdf(bytes);
   try {
-    const doc = openPdf(bytes);
-    const count = doc.countPages();
-    const insert = db.prepare(
-      "INSERT INTO pages (document_id, page_number, text, image_path, aspect) VALUES (?, ?, ?, ?, ?)",
-    );
-    for (let i = 0; i < count; i++) {
-      const { jpeg, text, aspect } = renderPage(doc, i);
-      const rel = path.join(`doc-${docId}`, `p${i + 1}.jpg`);
-      fs.writeFileSync(path.join(FILES_DIR, rel), jpeg);
-      insert.run(docId, i + 1, text, rel, aspect);
-    }
-    db.prepare("UPDATE documents SET page_count = ? WHERE id = ?").run(count, docId);
+    count = pdf.countPages();
+  } finally {
+    pdf.destroy();
+  }
+  if (count === 0) throw new Error("This PDF has no pages.");
+
+  const docId = Number(
+    db.prepare("INSERT INTO documents (exam_id, filename, page_count, status) VALUES (?, ?, ?, 'processing')").run(examId, filename, count).lastInsertRowid,
+  );
+  const dir = path.join(FILES_DIR, `doc-${docId}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "original.pdf"), bytes);
   } catch (err) {
-    db.prepare("UPDATE documents SET status = 'error', error = ? WHERE id = ?").run(String(err), docId);
+    // Nothing was saved (e.g. the disk is full): leave no half-made lecture behind.
+    db.prepare("DELETE FROM documents WHERE id = ?").run(docId);
+    fs.rmSync(dir, { recursive: true, force: true });
     throw err;
   }
 
   void processDocument(docId);
   return docId;
+}
+
+/**
+ * Render to images any slides of a lecture that aren't in the database yet: a fresh upload, or one interrupted by a
+ * restart. A page at a time, giving the server a breath between pages so the site stays responsive meanwhile.
+ * Returns false if the lecture was removed while this ran.
+ */
+async function renderMissingPages(doc: DocInfo): Promise<boolean> {
+  const have = new Set((db.prepare("SELECT page_number FROM pages WHERE document_id = ?").all(doc.id) as { page_number: number }[]).map((p) => p.page_number));
+  if (have.size >= doc.page_count) return true;
+  const pdf = openPdf(fs.readFileSync(path.join(FILES_DIR, `doc-${doc.id}`, "original.pdf")));
+  try {
+    const insert = db.prepare("INSERT OR IGNORE INTO pages (document_id, page_number, text, image_path, aspect) VALUES (?, ?, ?, ?, ?)");
+    for (let i = 0; i < doc.page_count; i++) {
+      if (have.has(i + 1)) continue;
+      if (!db.prepare("SELECT 1 FROM documents WHERE id = ?").get(doc.id)) return false; // removed meanwhile
+      const { jpeg, text, aspect } = renderPage(pdf, i);
+      const rel = path.join(`doc-${doc.id}`, `p${i + 1}.jpg`);
+      fs.writeFileSync(path.join(FILES_DIR, rel), jpeg);
+      insert.run(doc.id, i + 1, text, rel, aspect);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    pdf.destroy();
+  }
+  return true;
 }
 
 const running = new Map<number, Promise<void>>();
@@ -57,11 +84,11 @@ export function processDocument(docId: number): Promise<void> {
   return p;
 }
 
-type DocInfo = { id: number; filename: string; exam_id: number; batch_id: string | null; user_id: number | null };
+type DocInfo = { id: number; filename: string; exam_id: number; page_count: number; batch_id: string | null; user_id: number | null };
 
 function docInfo(docId: number): DocInfo | undefined {
   return db
-    .prepare("SELECT d.id, d.filename, d.exam_id, d.batch_id, e.user_id FROM documents d JOIN exams e ON e.id = d.exam_id WHERE d.id = ?")
+    .prepare("SELECT d.id, d.filename, d.exam_id, d.page_count, d.batch_id, e.user_id FROM documents d JOIN exams e ON e.id = d.exam_id WHERE d.id = ?")
     .get(docId) as DocInfo | undefined;
 }
 
@@ -86,6 +113,11 @@ async function runDocument(docId: number) {
   db.prepare("UPDATE documents SET status = 'processing', error = NULL WHERE id = ?").run(docId);
   if (doc.batch_id) return; // a batch is already running; pollBatches() will finish it
 
+  try {
+    if (!(await renderMissingPages(doc))) return;
+  } catch (err) {
+    return failDoc(docId, `Could not read this PDF: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const pages = pendingPages(docId);
   if (creds.provider === "anthropic" && pages.length > 3) {
     try {
