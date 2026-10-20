@@ -7,6 +7,7 @@ import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, upsertConcept, weakConcepts, glossaryText } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, normStem, planQuiz, type Angle } from "./quizPlan";
+import { EXAM_STYLE, EXAM_STYLE_CHECK } from "./examStyle";
 
 export const Lesson = z.object({
   explanation: z
@@ -169,15 +170,15 @@ export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
 const QUIZ_SYSTEM = `You write end-of-section quiz questions for a dental student's guided study session, based strictly on their lecture slides.
 You are given a numbered list of planned questions: each names the slide it must test and its angle. Write exactly one question for each, and set slot to its Q number and source_page_id to that slide.
 - Single best answer, 4 options. Exactly one option is defensibly correct from the slides.
-- Distractors are plausible, of similar length, from the same category as the answer and ideally from the same slides.
-- No "all of the above", "none of the above" or "both A and B". Use "EXCEPT"/"NOT" only when the angle says so.
-- Don't test citations, authors, years or slide numbers.
-- The stem must not contain the answer's key term or give it away.
+- Use "EXCEPT"/"NOT" only when the angle says so. Don't test citations, authors, years or slide numbers.
 - When one slide has several planned questions, each tests a different fact or takes a clearly different angle. Never write the same question twice.
-- The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).`;
+- The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).
+
+${EXAM_STYLE}`;
 
 const JUDGE_SYSTEM = `You check quiz questions written for a dental student against their lecture slides. Be strict but fair.
-For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).`;
+For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
+${EXAM_STYLE_CHECK}`;
 
 type Draft = Omit<QuizQuestion, "id" | "hidden" | "report_note"> & { slot: number };
 

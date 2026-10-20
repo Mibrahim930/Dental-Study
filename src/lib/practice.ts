@@ -24,6 +24,7 @@ import {
 } from "./practicePlan";
 import { credentials } from "./credentials";
 import { examOwner } from "./db";
+import { EXAM_STYLE } from "./examStyle";
 
 export type Style = "mixed" | "recall" | "case" | "caseset";
 export type Mode = "tutor" | "timed";
@@ -61,12 +62,14 @@ const GeneratedQuestions = z.object({
 });
 
 const SYSTEM = `You write board-quality practice questions for a dental student, based strictly on their lecture slides.
-- Single best answer, 5 options, plausible distractors of similar length. No "all/none of the above".
+- Single best answer, 5 options.
 - type=recall: a direct question testing one fact or relationship.
 - type=case: INBDE style. Fill patient_box with a realistic patient (chief complaint, medical history, medications, allergies, dental history, findings), then ask about diagnosis, next step, or treatment.
 - type=image: only for slides marked [IMAGE-CASE]. The student will see only the clinical image from that slide (radiograph/photo), not its text. Write the stem to describe the scenario without giving away the answer.
 - Slides marked ★IMPORTANT were emphasized by the professor: when the topic has any, at least a third of the questions must test them. Also prioritize annotated slides. Do not test trivia like citations or years.
-- Every fact in the question and explanation must be supported by the slides.`;
+- Every fact in the question and explanation must be supported by the slides.
+
+${EXAM_STYLE}`;
 
 type AttemptOptions = {
   size: number;
@@ -365,10 +368,12 @@ const CASE_SYSTEM = `You write INBDE-style case sets for a dental student, based
 Each case is one realistic patient (patient box: age/sex, chief complaint, medical history, medications, allergies, dental history, findings)
 followed by 3-5 single-best-answer questions about that same patient that build on each other, for example:
 diagnosis → what test or finding confirms it → emergency/definitive treatment → prognosis, complication or follow-up.
-- 5 options per question, plausible distractors, no "all/none of the above".
+- 5 options per question.
 - The scenario and patient box must not give away answers. Later questions may reveal what earlier ones asked.
 - If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image.
-- Slides marked ★IMPORTANT were emphasized by the professor: build cases around them first. Also prioritize annotated slides. Every fact must be supported by the slides.`;
+- Slides marked ★IMPORTANT were emphasized by the professor: build cases around them first. Also prioritize annotated slides. Every fact must be supported by the slides.
+
+${EXAM_STYLE}`;
 
 /** New case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
 async function buildCaseSets(

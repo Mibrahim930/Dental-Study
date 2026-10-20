@@ -333,6 +333,8 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  // While "Write new questions" runs, answering is paused so no answer lands on a question that's about to be replaced.
+  const [rewriting, setRewriting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +362,16 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
       {isLast ? "Skip & finish session" : "Skip to next section →"}
     </button>
   );
+  /** After "Write new questions": start the quiz over with the fresh set. */
+  const reload = () => {
+    setQuiz(null);
+    setAnswers({});
+    setPicked(null);
+    setIndex(0);
+    setError("");
+    setSaveError("");
+    setAttempt((a) => a + 1);
+  };
 
   if (error) {
     return (
@@ -478,6 +490,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
           <button className="btn-primary btn-lg" onClick={onNext}>{isLast ? "Finish session" : "Next section →"}</button>
         </div>
+        <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
       </section>
     );
   }
@@ -509,7 +522,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           {total} questions over the most important of this section&apos;s {quiz.slides} slides.
         </p>
       )}
-      <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered} chosen={chosen} picked={picked} onPick={setPicked} />
+      <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered || rewriting} chosen={chosen} picked={picked} onPick={setPicked} />
       {saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
       {answered && (
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
@@ -525,10 +538,11 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
           {index + 1 < total ? "Next question →" : "See my score"}
         </button>
       ) : (
-        <button className="btn-primary btn-lg" disabled={picked == null} onClick={check}>
+        <button className="btn-primary btn-lg" disabled={picked == null || rewriting} onClick={check}>
           Check answer
         </button>
       )}
+      <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
     </section>
   );
 }
@@ -589,6 +603,77 @@ function QuizBody({
         ))}
       </div>
     </>
+  );
+}
+
+/**
+ * "Write new questions": the one way a section's quiz changes. Asks first (it takes a minute or two and costs a
+ * little), then has the server write a fresh 20 (the old ones stay until the new ones are ready), and reloads the quiz.
+ */
+function RegenerateQuiz({
+  sessionId,
+  topicId,
+  onDone,
+  onWorking,
+}: {
+  sessionId: number;
+  topicId: number;
+  onDone: () => void;
+  /** Told when the rewrite starts and stops, so the quiz can lock its answer buttons meanwhile. */
+  onWorking?: (working: boolean) => void;
+}) {
+  const [state, setState] = useState<"idle" | "confirm" | "working" | "error">("idle");
+  const [error, setError] = useState("");
+  useEffect(() => () => onWorking?.(false), [onWorking]);
+
+  async function run() {
+    setState("working");
+    onWorking?.(true);
+    setError("");
+    const res = await fetch(`/api/sessions/${sessionId}/quiz/regenerate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId }),
+    }).catch(() => null);
+    onWorking?.(false);
+    if (res?.ok) return onDone();
+    const json = res ? await res.json().catch(() => ({})) : {};
+    setError((json as { error?: string }).error ?? "Couldn't reach the server. Check your connection and try again.");
+    setState("error");
+  }
+
+  if (state === "idle") {
+    return (
+      <div className="flex justify-end">
+        <button className="btn-ghost px-1 text-[13px]" onClick={() => setState("confirm")}>
+          Write new questions for this section
+        </button>
+      </div>
+    );
+  }
+  if (state === "working") {
+    return (
+      <div className="rounded-[20px] bg-muted px-4 py-3 text-[14px] font-semibold text-muted-foreground" aria-busy>
+        Writing 20 new questions and checking them against your slides… about 1–2 minutes. Keep this page open.
+      </div>
+    );
+  }
+  return (
+    <div role="alertdialog" aria-label="Write new questions?" className="tile cb-butter flex flex-col gap-2.5 rounded-[22px]">
+      <p className="text-[15px] font-bold">Replace this section&apos;s questions with 20 new ones?</p>
+      <p className="text-[13px] font-medium opacity-80">
+        Takes 1–2 minutes and uses a little AI credit. Your answers to the current questions stay in your history but won&apos;t show here any more.
+      </p>
+      {state === "error" && <p className="text-[13px] font-bold">{error}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="btn-primary btn-sm" onClick={run}>
+          {state === "error" ? "Try again" : "Yes, write new questions"}
+        </button>
+        <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={() => setState("idle")}>
+          Keep these
+        </button>
+      </div>
+    </div>
   );
 }
 
