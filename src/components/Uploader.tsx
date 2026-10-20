@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
 /** Largest PDF accepted; keep in step with MAX_UPLOAD_MB in the upload route and proxyClientMaxBodySize in next.config.ts. */
-const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_MB = 125;
 
 /** What to say when the answer didn't come from the site itself (no message in it). */
 function proxyMessage(status: number): string {

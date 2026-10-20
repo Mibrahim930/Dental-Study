@@ -5,7 +5,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3", "mupdf"],
   experimental: {
     // Lecture PDFs are often 10-50 MB; the default 10 MB limit truncated uploads passing through proxy.ts.
-    proxyClientMaxBodySize: "100mb",
+    // 125 MB is about where Railway's edge starts refusing bodies; keep in step with MAX_UPLOAD_MB (upload route, Uploader.tsx).
+    proxyClientMaxBodySize: "125mb",
   },
 };
 

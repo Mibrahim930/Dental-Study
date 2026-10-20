@@ -4,7 +4,7 @@ import { addDocument } from "@/lib/processing";
 import { apiUser, unauthorized } from "@/lib/user";
 
 /** Largest PDF accepted; keep in step with proxyClientMaxBodySize in next.config.ts and MAX_UPLOAD_MB in Uploader.tsx. */
-const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_MB = 125;
 
 export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/upload">) {
   const user = await apiUser();

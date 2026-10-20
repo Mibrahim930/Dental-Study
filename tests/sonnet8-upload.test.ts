@@ -193,10 +193,10 @@ describe("upload route", () => {
     examId = makeExam(u, null).examId;
   });
 
-  it("413 when content-length is over 100 MB", async () => {
-    const res = await post(examId, { headers: { "content-length": String(101 * 1024 * 1024) }, body: "x" });
+  it("413 when content-length is over 125 MB", async () => {
+    const res = await post(examId, { headers: { "content-length": String(126 * 1024 * 1024) }, body: "x" });
     expect(res.status).toBe(413);
-    expect((await res.json()).error).toMatch(/over 100 MB/);
+    expect((await res.json()).error).toMatch(/over 125 MB/);
   });
 
   it("non-numeric content-length does not wrongly 413", async () => {
