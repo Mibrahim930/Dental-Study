@@ -310,7 +310,8 @@ function Lesson({ data }: { data: LessonData }) {
 
       {lesson.connections && (
         <section className="tile cb-lilac rounded-[28px]">
-          <h2 className="mb-1.5 text-[18px] font-extrabold">↺ Connects to earlier exams</h2>
+          <h2 className="text-[18px] font-extrabold">↺ Also in your other lectures</h2>
+          <p className="mb-2 text-[13px] font-semibold opacity-80">Where this topic shows up in lectures you uploaded for other exams. Just for context: quiz and exam questions come only from this topic&apos;s slides.</p>
           <div className="text-[15px] leading-relaxed [&_p]:my-0 [&_strong]:font-extrabold">
             <ReactMarkdown>{lesson.connections}</ReactMarkdown>
           </div>
