@@ -45,7 +45,7 @@ function UndatedRow({ exam, today }: { exam: Undated; today: string }) {
             Date for {exam.name}
           </label>
           <input id={`undated-${exam.id}`} name="exam_date" type="date" min={today} className="input h-[42px] min-w-0 flex-1 sm:w-40" required />
-          <button className="btn-primary btn-sm shrink-0" disabled={pending}>
+          <button className="btn-primary btn-sm shrink-0" disabled={pending} aria-label={`Save the date for ${exam.name}`}>
             {pending ? "Saving…" : "Save"}
           </button>
         </div>

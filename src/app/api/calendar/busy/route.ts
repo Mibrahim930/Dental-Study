@@ -22,9 +22,13 @@ export async function POST(request: Request) {
   const label = (typeof body.label === "string" && body.label.replace(/\s+/g, " ").trim().slice(0, 80)) || "Busy";
   if (!isValidDate(start)) return NextResponse.json({ error: "Pick a start date." }, { status: 400 });
 
-  if (Array.isArray(weekdays) && weekdays.length > 0) {
-    const mask = maskOf(weekdays.map(Number));
-    if (!mask) return NextResponse.json({ error: "Pick at least one day of the week." }, { status: 400 });
+  // A repeat is asked for when weekdays (even an empty list) or an until date is sent.
+  if (Array.isArray(weekdays) || until !== undefined) {
+    const days = Array.isArray(weekdays) ? weekdays : [];
+    if (days.length === 0 || !days.every((d) => typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6)) {
+      return NextResponse.json({ error: "Pick at least one day of the week." }, { status: 400 });
+    }
+    const mask = maskOf(days as number[]);
     if (!isValidDate(until) || until < start) return NextResponse.json({ error: "Pick the date it repeats until (on or after the start)." }, { status: 400 });
     if (until > addDays(start, 731)) return NextResponse.json({ error: "A repeat can run for up to two years. Pick an earlier end date." }, { status: 400 });
     if (!firstOccurrence({ id: 0, start_date: start, end_date: until, label, weekdays: mask })) {

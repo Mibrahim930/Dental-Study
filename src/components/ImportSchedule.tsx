@@ -222,6 +222,7 @@ function PasteOrSnap({ existingKeys, onFound }: { existingKeys: string[]; onFoun
         exams?: FoundExam[];
         yearAssumed?: number | null;
         pdfCut?: boolean;
+        cut?: boolean;
         message?: string | null;
         error?: string;
       } | null;
@@ -235,6 +236,7 @@ function PasteOrSnap({ existingKeys, onFound }: { existingKeys: string[]; onFoun
       }
       const notes: string[] = [];
       if (data.yearAssumed) notes.push(`Dates without a year were read as ${data.yearAssumed}.`);
+      if (data.cut) notes.push(`Only the first ${data.exams.length} are shown. Add those, then read the rest of the schedule.`);
       if (data.pdfCut) notes.push("Only the first 3 pages of the PDF were read. If more exams are further in, add a photo of those pages.");
       notes.push("Nothing is saved until you press Add.");
       onFound({ rows: toRows(data.exams, new Set(existingKeys)), notes, source: "ai" });

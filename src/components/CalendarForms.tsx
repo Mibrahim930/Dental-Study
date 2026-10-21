@@ -95,7 +95,7 @@ function BusyForm({ date, busy, onSubmit }: { date: string; busy: boolean; onSub
         );
       }}
     >
-      <input name="label" className="input" placeholder="What's happening? e.g. Clinic, Spring break" maxLength={80} />
+      <input name="label" className="input" placeholder="e.g. Clinic, Spring break" aria-label="What's happening?" maxLength={80} />
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs text-muted-foreground">
           {repeat ? "Starting" : "From"}
@@ -124,7 +124,7 @@ function BusyForm({ date, busy, onSubmit }: { date: string; busy: boolean; onSub
                     key={d}
                     type="button"
                     aria-pressed={on}
-                    className={`h-9 rounded-xl text-xs font-bold ${on ? "bg-action text-action-foreground" : "bg-card text-foreground hover:bg-muted-strong"}`}
+                    className={`h-11 rounded-xl text-xs font-bold ${on ? "bg-action text-action-foreground" : "bg-card text-foreground hover:bg-muted-strong"}`}
                     onClick={() => setDays((ds) => (on ? ds.filter((x) => x !== i) : [...ds, i].sort()))}
                   >
                     {d}
@@ -153,7 +153,7 @@ export function DeleteBusyButton({ id, label, repeating = false }: { id: number;
   const [pending, setPending] = useState(false);
   return (
     <button
-      className="text-xs text-muted-foreground underline hover:text-danger"
+      className="min-h-8 text-[13px] font-semibold underline underline-offset-2 hover:text-danger"
       disabled={pending}
       onClick={async () => {
         if (!window.confirm(repeating ? `Remove every "${label}" day? To skip just one week, use "skip this week".` : `Remove "${label}"?`)) return;

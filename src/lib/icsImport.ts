@@ -19,9 +19,10 @@ export type IcsEvent = {
 };
 
 export const MAX_ICS_EVENTS = 5000;
+const MAX_DEPTH = 16;
 
-/** Titles that look like an exam or assessment (whole words, so "contest" or "latest" don't count). */
-export const EXAM_WORDS = /\b(exams?|quiz(?:zes)?|midterms?|finals?|tests?|practicals?|osces?|boards?|inbde|nbde|assessments?)\b/i;
+/** Titles that look like an exam or assessment (whole words, so "contest" or "latest" don't count). "Endo Block" is a dental exam. */
+export const EXAM_WORDS = /\b(exams?|quiz(?:zes)?|midterms?|finals?|tests?|practicals?|osces?|boards?|inbde|nbde|assessments?|blocks?)\b/i;
 
 export function guessKind(title: string): ExamKind {
   if (/\b(inbde|nbde|boards?)\b/i.test(title)) return "board";
@@ -143,11 +144,37 @@ export function parseIcs(text: string, timezone: string): { events: IcsEvent[]; 
   let truncated = false;
   const stack: string[] = [];
   let props: Prop[] = [];
+  let ignoredDepth = 0; // BEGINs past MAX_DEPTH aren't tracked, so a hostile file can't make END lookups slow
+  const finish = () => {
+    if (events.length >= MAX_ICS_EVENTS) {
+      truncated = true;
+    } else {
+      const ev = toEvent(props, timezone);
+      if (ev) {
+        const key = `${ev.uid ?? ""}|${ev.name.toLowerCase()}|${ev.date}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          events.push(ev);
+        }
+      }
+    }
+    props = [];
+  };
   for (const line of unfoldLines(String(text ?? ""))) {
     if (!line.trim()) continue;
     const upper = line.toUpperCase();
     if (upper.startsWith("BEGIN:")) {
       const comp = upper.slice(6).trim();
+      // A new event while one is still open (its END:VEVENT is missing): keep the open one.
+      const open = stack.lastIndexOf("VEVENT");
+      if (comp === "VEVENT" && open !== -1) {
+        finish();
+        stack.length = open;
+      }
+      if (stack.length >= MAX_DEPTH) {
+        ignoredDepth++;
+        continue;
+      }
       stack.push(comp);
       if (comp === "VEVENT") props = [];
       continue;
@@ -156,29 +183,21 @@ export function parseIcs(text: string, timezone: string): { events: IcsEvent[]; 
       const comp = upper.slice(4).trim();
       // Tolerate a missing END: pop back to the matching BEGIN if there is one.
       const at = stack.lastIndexOf(comp);
-      if (at === -1) continue;
-      stack.length = at;
-      if (comp === "VEVENT") {
-        if (events.length >= MAX_ICS_EVENTS) {
-          truncated = true;
-          continue;
-        }
-        const ev = toEvent(props, timezone);
-        if (ev) {
-          const key = `${ev.uid ?? ""}|${ev.name.toLowerCase()}|${ev.date}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            events.push(ev);
-          }
-        }
-        props = [];
+      if (at === -1) {
+        if (ignoredDepth > 0) ignoredDepth--;
+        continue;
       }
+      const closesEvent = stack.slice(at).includes("VEVENT");
+      stack.length = at;
+      if (closesEvent) finish();
       continue;
     }
-    if (stack[stack.length - 1] !== "VEVENT") continue; // VTIMEZONE, VALARM inside an event, VTODO…
+    if (ignoredDepth > 0 || stack[stack.length - 1] !== "VEVENT") continue; // VTIMEZONE, VALARM inside an event, VTODO…
     const p = parseProp(line);
     if (p) props.push(p);
   }
+  // A cut-off file (no END:VEVENT / END:VCALENDAR at the end) still gives its last event.
+  if (stack.includes("VEVENT")) finish();
   events.sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
   return { events, truncated };
 }

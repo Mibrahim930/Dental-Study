@@ -109,7 +109,7 @@ export function DayHours({ date, usual, override }: { date: string; usual: numbe
         </span>
         <span className="text-sm text-muted-foreground">(usually {hoursText(usual)})</span>
         <span className="flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
-          <button className="btn-primary btn-sm" disabled={pending}>
+          <button className="btn-primary btn-sm" disabled={pending} aria-label="Save study time for this day">
             {pending ? "Saving…" : "Save"}
           </button>
           {override !== 0 && (
@@ -126,7 +126,11 @@ export function DayHours({ date, usual, override }: { date: string; usual: numbe
       </form>
       {override != null && (
         <p className="text-[13px] text-muted-foreground">
-          {override === 0 ? "Day off: nothing is planned this day." : `Changed for this day (${hoursText(override)} instead of ${hoursText(usual)}).`}
+          {override === 0
+            ? "Day off: nothing is planned this day."
+            : `Changed for this day (${hoursText(override)} instead of ${hoursText(usual)}).${
+                override > usual ? " The extra time is used when your plan needs it; work isn't pulled forward just to fill it." : ""
+              }`}
         </p>
       )}
       {error && (

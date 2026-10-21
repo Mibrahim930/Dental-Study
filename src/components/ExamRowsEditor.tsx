@@ -112,7 +112,7 @@ export function ExamRowsEditor({
           const c = checks.get(r.key)!;
           const unsure = r.confidence === "low";
           return (
-            <li key={r.key} className={`rounded-[20px] p-3 transition-opacity ${r.include ? "bg-muted" : "bg-muted/50 opacity-60"}`}>
+            <li key={r.key} className={`rounded-[20px] p-3 transition-opacity ${r.include ? "bg-muted" : "bg-muted/60 opacity-80"}`}>
               <div className="flex items-start gap-2">
                 {mode === "confirm" && (
                   <button
@@ -131,13 +131,15 @@ export function ExamRowsEditor({
                     className="input col-span-2 h-[42px] min-w-0 bg-card sm:col-span-1"
                     placeholder="Exam name, e.g. Endo Block 2"
                     aria-label={`Exam ${i + 1} name`}
+                    aria-invalid={c.errors.includes("Add a name.") || undefined}
                     value={r.name}
                     maxLength={120}
                     onChange={(e) => update(r.key, { name: e.target.value })}
                   />
                   <input
                     type="date"
-                    className={`input h-[42px] w-full min-w-0 bg-card px-2 ${unsure ? "border-warning" : ""}`}
+                    className={`input col-span-2 h-[42px] w-full min-w-0 bg-card px-2 sm:col-span-1 ${unsure ? "border-warning" : ""}`}
+                    aria-invalid={c.errors.some((m) => /date/i.test(m)) || undefined}
                     aria-label={`Exam ${i + 1} date`}
                     value={r.date}
                     onChange={(e) => update(r.key, { date: e.target.value, confidence: r.confidence === "low" ? "medium" : r.confidence })}
@@ -150,7 +152,7 @@ export function ExamRowsEditor({
                     ))}
                   </select>
                   <input
-                    className="input col-span-2 h-[42px] min-w-0 bg-card sm:col-span-1"
+                    className="input h-[42px] min-w-0 bg-card"
                     placeholder={mode === "manual" && sameCourse ? sameCourse : "Course (optional)"}
                     aria-label={`Exam ${i + 1} course`}
                     value={r.course}
@@ -206,7 +208,9 @@ export function ExamRowsEditor({
         <button type="button" className="btn-primary btn-lg w-full" disabled={saving || n === 0 || hasErrors} onClick={save}>
           {saving ? "Adding…" : n === 0 ? "Add exams" : `Add ${n} ${n === 1 ? "exam" : "exams"}`}
         </button>
-        {hasErrors && <p className="text-sm font-semibold text-danger">Fix the rows marked in red first.</p>}
+        <p className="text-sm font-semibold text-danger empty:hidden" aria-live="polite">
+          {hasErrors ? "Fix the rows marked in red first." : ""}
+        </p>
         {error && (
           <p className="text-sm font-semibold text-danger" role="alert">
             {error}

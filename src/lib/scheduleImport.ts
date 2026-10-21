@@ -54,9 +54,23 @@ Other fields:
 If there are no exams at all, return an empty list.`;
 
 export const MAX_PASTE_CHARS = 30000;
+/** Most exams one read shows (the same cap as one "Add N exams" press). */
+export const MAX_IMPORTED = 60;
+
+/** Error text from the AI provider that the student should see as-is (her key or her billing), not internal errors. */
+export function isKeyProblem(msg: string): boolean {
+  return /x-api-key|api[ _-]?key|authentication|unauthori[sz]ed|permission|\b401\b|\b403\b|credit balance|billing|quota/i.test(msg) && !/SQLITE|\bat \/|node:internal/i.test(msg);
+}
 
 /** One AI call over the pasted text and page images. Logged to ai_usage as "exam schedule import" by generate(). */
-export async function readSchedule(opts: { creds: Credentials; today: string; timezone: string; text: string; images: Uint8Array[]; pdfText?: string }): Promise<{ exams: ImportedExam[]; yearAssumed: number | null }> {
+export async function readSchedule(opts: {
+  creds: Credentials;
+  today: string;
+  timezone: string;
+  text: string;
+  images: Uint8Array[];
+  pdfText?: string;
+}): Promise<{ exams: ImportedExam[]; yearAssumed: number | null; cut: boolean }> {
   const weekday = new Date(`${opts.today}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
   const intro = `Today is ${opts.today} (${weekday}) in the student's time zone (${opts.timezone}).`;
   const parts: Part[] = [{ type: "text", text: intro }];
@@ -74,7 +88,12 @@ export async function readSchedule(opts: { creds: Credentials; today: string; ti
     effort: "low",
     maxTokens: 8000,
   });
-  return { exams: cleanImported(result), yearAssumed: typeof result.year_assumed === "number" && Number.isFinite(result.year_assumed) ? result.year_assumed : null };
+  const exams = cleanImported(result);
+  return {
+    exams,
+    yearAssumed: typeof result.year_assumed === "number" && Number.isFinite(result.year_assumed) ? result.year_assumed : null,
+    cut: exams.length >= MAX_IMPORTED && (result.exams?.length ?? 0) > MAX_IMPORTED,
+  };
 }
 
 /** Make the AI's list safe to show: trimmed names, real dates only (anything else becomes "no date, check it"), known types. */
@@ -94,7 +113,7 @@ export function cleanImported(result: ScheduleResult | null | undefined): Import
       confidence: !dateOk ? "low" : e.confidence === "high" || e.confidence === "medium" ? e.confidence : "low",
       note: !dateOk && rawDate ? `Couldn't read the date ("${String(rawDate).slice(0, 30)}").` : note,
     });
-    if (out.length >= 60) break;
+    if (out.length >= MAX_IMPORTED) break;
   }
   return out;
 }

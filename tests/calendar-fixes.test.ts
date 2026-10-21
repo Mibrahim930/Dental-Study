@@ -53,6 +53,20 @@ describe("ticking a Study task by hand", () => {
     expect(tasksOn(u, today(u), addDays(today(u), 30)).some((t) => t.kind === "learn" && JSON.parse(t.topic_ids)[0] === topicIds[1])).toBe(true);
   });
 
+  it("unticking keeps a topic she opened in a study session before ticking", () => {
+    const u = makeUser();
+    plannerSettings(u);
+    const { topicIds } = makeExam(u, addDays(today(u), 20), [8]);
+    rebuildPlan(u);
+    db.prepare("INSERT INTO topic_study (user_id, topic_id, studied_at) VALUES (?, ?, datetime('now', '-2 days'))").run(u, topicIds[0]);
+    const task = Number(
+      db.prepare("INSERT INTO plan_tasks (user_id, date, kind, topic_ids, minutes, title) VALUES (?, ?, 'learn', ?, 20, 'Study: T')").run(u, today(u), JSON.stringify(topicIds)).lastInsertRowid,
+    );
+    setTaskStatus(u, task, "done");
+    setTaskStatus(u, task, "todo");
+    expect(studied(u, topicIds[0])).toBe(true);
+  });
+
   it("can't mark another student's topic studied, or touch another student's task", () => {
     const a = makeUser();
     const b = makeUser();

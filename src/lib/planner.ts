@@ -299,7 +299,8 @@ export function missedSummary(userId: number): { count: number; yesterdayOnly: b
   const floor = addDays(today, -MISSED_WINDOW_DAYS - 1);
   const since = s.missed_seen_through && s.missed_seen_through > floor ? s.missed_seen_through : floor;
   const rows = db
-    .prepare("SELECT date FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND date > ? AND date < ?")
+    // "Upload lectures for …" is a reminder re-made every day, not study she skipped: it doesn't count.
+    .prepare("SELECT date FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND kind != 'upload' AND date > ? AND date < ?")
     .all(userId, since, today) as { date: string }[];
   return { count: rows.length, yesterdayOnly: rows.length > 0 && rows.every((r) => r.date === yesterday) };
 }
@@ -312,7 +313,7 @@ export function replanFromToday(userId: number): { warnings: PlanWarning[]; topi
   const s = plannerSettings(userId);
   const today = todayIn(s.timezone);
   const missedLearn = db
-    .prepare("SELECT topic_ids FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND kind = 'learn' AND date >= ? AND date < ?")
+    .prepare("SELECT topic_ids FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND kind = 'learn' AND date > ? AND date < ?")
     .all(userId, addDays(today, -MISSED_WINDOW_DAYS - 1), today) as { topic_ids: string }[];
   const warnings = rebuildPlan(userId);
   db.prepare("UPDATE planner_settings SET missed_seen_through = ? WHERE user_id = ?").run(addDays(today, -1), userId);
@@ -350,8 +351,8 @@ export function markTopicStudied(userId: number, topicId: number) {
  * re-plan doesn't schedule it again; unticking takes that back. Missed tasks stay missed (their work is already re-planned).
  */
 export function setTaskStatus(userId: number, taskId: number, status: "todo" | "done") {
-  const task = db.prepare("SELECT kind, topic_ids, status FROM plan_tasks WHERE id = ? AND user_id = ?").get(taskId, userId) as
-    | Pick<PlanTask, "kind" | "topic_ids" | "status">
+  const task = db.prepare("SELECT kind, topic_ids, status, completed_at FROM plan_tasks WHERE id = ? AND user_id = ?").get(taskId, userId) as
+    | (Pick<PlanTask, "kind" | "topic_ids" | "status"> & { completed_at: string | null })
     | undefined;
   if (!task || task.status === "missed") return;
   db.transaction(() => {
@@ -368,7 +369,8 @@ export function setTaskStatus(userId: number, taskId: number, status: "todo" | "
     );
     for (const id of topics) {
       if (status === "done") db.prepare("INSERT OR IGNORE INTO topic_study (user_id, topic_id) VALUES (?, ?)").run(userId, id);
-      else db.prepare("DELETE FROM topic_study WHERE user_id = ? AND topic_id = ?").run(userId, id);
+      // Unticking takes back only what the tick recorded: a topic she opened in a study session earlier stays studied.
+      else if (task.completed_at) db.prepare("DELETE FROM topic_study WHERE user_id = ? AND topic_id = ? AND studied_at >= ?").run(userId, id, task.completed_at);
     }
   })();
 }

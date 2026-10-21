@@ -140,13 +140,15 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           </section>
         )}
 
-        {crunches.map((c) => (
-          <section key={`${c.a.id}-${c.b.id}`} className="tile cb-butter flex flex-col gap-1 rounded-[24px] text-[15px] font-medium">
-            <p>
-              <strong className="font-extrabold">Heads up:</strong> {crunchMessage(c)}
-            </p>
+        {crunches.length > 0 && (
+          <section className="tile cb-butter flex flex-col gap-1 rounded-[24px] text-[15px] font-medium">
+            {crunches.map((c) => (
+              <p key={`${c.a.id}-${c.b.id}`}>
+                <strong className="font-extrabold">Heads up:</strong> {crunchMessage(c)}
+              </p>
+            ))}
           </section>
-        ))}
+        )}
 
         {month == null ? (
           <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">
@@ -283,6 +285,9 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
               <SkipBusyButton id={b.id} date={selected} undo />
             </div>
           ))}
+          {selected >= today && busyOn(selected).length > 0 && (
+            <p className="px-1 text-[13px] text-muted-foreground">Busy day: nothing is planned. Skip or remove the busy entry to study this day.</p>
+          )}
           {selected >= today && busyOn(selected).length === 0 && (
             <DayHours key={`${selected}-${overrides.get(selected) ?? "usual"}`} date={selected} usual={usualMinutes(selected)} override={overrides.get(selected) ?? null} />
           )}

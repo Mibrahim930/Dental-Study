@@ -3,7 +3,7 @@ import { apiUser, unauthorized } from "@/lib/user";
 import { credentials, type Credentials } from "@/lib/credentials";
 import { plannerSettings, todayIn } from "@/lib/planner";
 import { imageToJpeg, openPdf, renderPage, sniffFile } from "@/lib/pdf";
-import { MAX_PASTE_CHARS, readSchedule } from "@/lib/scheduleImport";
+import { isKeyProblem, MAX_PASTE_CHARS, readSchedule } from "@/lib/scheduleImport";
 
 export const maxDuration = 120;
 
@@ -85,18 +85,18 @@ export async function POST(request: Request) {
   }
   const timezone = plannerSettings(user.id).timezone;
   try {
-    const { exams, yearAssumed } = await readSchedule({ creds, today: todayIn(timezone), timezone, text, images, pdfText: pdfText.join("\n\n") });
+    const { exams, yearAssumed, cut } = await readSchedule({ creds, today: todayIn(timezone), timezone, text, images, pdfText: pdfText.join("\n\n") });
     return NextResponse.json({
       exams,
       yearAssumed,
       pdfCut,
+      cut,
       message: exams.length === 0 ? "We couldn't find any exam dates in that. Try a clearer photo or paste the text." : null,
     });
   } catch (err) {
     // Technical detail to the server log; the student sees a plain message (key and billing problems are worth saying).
     console.error("Schedule import failed", err);
     const msg = err instanceof Error ? err.message : String(err);
-    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
-    return fail(keyProblem ? msg : "The AI couldn't read that just now. Try again in a moment, or type the exams in the table.", 502);
+    return fail(isKeyProblem(msg) ? msg :"The AI couldn't read that just now. Try again in a moment, or type the exams in the table.", 502);
   }
 }
