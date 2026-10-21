@@ -67,7 +67,125 @@ export function ImportSchedule({ existingKeys, today }: { existingKeys: string[]
   return (
     <div className="flex flex-col gap-4">
       <PasteOrSnap existingKeys={existingKeys} onFound={show} />
+      <CalendarFile existingKeys={existingKeys} onFound={show} />
     </div>
+  );
+}
+
+type IcsEvent = { name: string; date: string; course: string | null; kind: ExamKind; looksLikeExam: boolean; past: boolean; recurring: boolean };
+
+/** Which events go to the check screen: exam-like upcoming ones by default; the toggles add the rest (unticked unless exam-like). */
+export function icsRows(events: IcsEvent[], opts: { showAll: boolean; includePast: boolean }, existingKeys: Set<string>): DraftRow[] {
+  return events
+    .filter((e) => (opts.showAll || e.looksLikeExam) && (opts.includePast || !e.past))
+    .map((e) => ({
+      key: newRowKey(),
+      include: e.looksLikeExam && !existingKeys.has(duplicateKey(e.name, e.date)),
+      name: e.name,
+      date: e.date,
+      kind: e.kind,
+      course: e.course ?? "",
+      confidence: "high" as const,
+      note: e.recurring ? "Repeats in the school calendar; only the first date is shown." : null,
+    }));
+}
+
+function CalendarFile({ existingKeys, onFound }: { existingKeys: string[]; onFound: (f: Found) => void }) {
+  const [loaded, setLoaded] = useState<{ fileName: string; events: IcsEvent[]; total: number; cut: boolean } | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [includePast, setIncludePast] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+
+  async function load(file: File) {
+    setError("");
+    setLoaded(null);
+    if (input.current) input.current.value = "";
+    if (file.size > MAX_IMPORT_MB * 1024 * 1024) return setError(`That file is over ${MAX_IMPORT_MB} MB.`);
+    const body = new FormData();
+    body.set("file", file);
+    setReading(true);
+    try {
+      const res = await fetch("/api/calendar/import/ics", { method: "POST", body });
+      const data = (await res.json().catch(() => null)) as { events?: IcsEvent[]; total?: number; cut?: boolean; error?: string } | null;
+      if (!res.ok || !data?.events) return setError(data?.error ?? "We couldn't read that calendar file. Try exporting it again.");
+      setLoaded({ fileName: file.name, events: data.events, total: data.total ?? data.events.length, cut: !!data.cut });
+    } catch {
+      setError("Couldn't reach the site. Check your connection and try again.");
+    } finally {
+      setReading(false);
+    }
+  }
+
+  const keys = new Set(existingKeys);
+  const rows = loaded ? icsRows(loaded.events, { showAll, includePast }, keys) : [];
+  const examLike = loaded ? loaded.events.filter((e) => e.looksLikeExam && !e.past).length : 0;
+  const pastCount = loaded ? loaded.events.filter((e) => e.past && (showAll || e.looksLikeExam)).length : 0;
+
+  return (
+    <section className="card flex flex-col gap-4" aria-labelledby="ics-title" aria-busy={reading}>
+      <div className="flex flex-col gap-1">
+        <h2 id="ics-title" className="section-title">
+          Import a calendar file (.ics) from your school
+        </h2>
+        <p className="text-[15px] text-muted-foreground">
+          Canvas, Brightspace, Outlook and Google Calendar can all export one (look for &quot;Export&quot; or &quot;Calendar feed&quot;). Free, no AI.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-secondary btn-sm" disabled={reading} onClick={() => input.current?.click()}>
+          {reading ? "Reading…" : loaded ? "Choose another file" : "Choose a .ics file"}
+        </button>
+        {loaded && <span className="min-w-0 truncate text-sm font-semibold">{loaded.fileName}</span>}
+        <input ref={input} type="file" accept=".ics,text/calendar" hidden onChange={(e) => e.target.files?.[0] && load(e.target.files[0])} />
+      </div>
+      {error && (
+        <p className="text-sm font-semibold text-danger" role="alert">
+          {error}
+        </p>
+      )}
+      {loaded && (
+        <div className="flex flex-col gap-3" aria-live="polite">
+          <p className="text-[15px]">
+            {plural(loaded.total, "event", "events")} in this file; <strong>{plural(examLike, "upcoming one looks", "upcoming ones look")} like {examLike === 1 ? "an exam" : "exams"}</strong>.
+            {loaded.cut ? " Only the most relevant are listed." : ""}
+          </p>
+          <div className="flex flex-col gap-2">
+            <Toggle checked={showAll} onChange={setShowAll} label="Show all events" hint="not only the ones that look like exams" />
+            <Toggle checked={includePast} onChange={setIncludePast} label="Include past events" hint={pastCount ? `${pastCount} in the last year` : "none in this file"} />
+          </div>
+          <button
+            type="button"
+            className="btn-primary btn-lg w-full"
+            disabled={rows.length === 0}
+            onClick={() =>
+              onFound({
+                rows,
+                notes: [
+                  ...(showAll ? ["Events that don't look like exams start unticked."] : []),
+                  "Nothing is saved until you press Add.",
+                ],
+                source: "ics",
+              })
+            }
+          >
+            {rows.length === 0 ? "No exams found. Try \"Show all events\"" : `Check ${plural(rows.length, "event", "events")}`}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-3 rounded-xl bg-muted px-3 py-2.5">
+      <input type="checkbox" className="h-5 w-5 shrink-0 accent-[var(--action)]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="text-[15px] font-semibold">
+        {label} <span className="font-normal text-muted-foreground">({hint})</span>
+      </span>
+    </label>
   );
 }
 
