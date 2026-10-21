@@ -61,6 +61,39 @@ export function examsByDate<T extends { exam_date: string | null }>(exams: T[]):
   return out;
 }
 
+export type Tone = "mint" | "butter" | "coral" | "muted";
+
+/** Readiness colour, same thresholds as MasteryChip: ≥ 80% mint, ≥ 60% butter, below coral; muted while nothing is studied or tested. */
+export function readinessTone(p: { readiness: number; studied: number; mastery: number | null; topics: number } | null | undefined): Tone {
+  if (!p || p.topics === 0 || (p.studied === 0 && p.mastery == null)) return "muted";
+  return p.readiness >= 0.8 ? "mint" : p.readiness >= 0.6 ? "butter" : "coral";
+}
+
+const dayMs = 86400000;
+export const daysApart = (a: string, b: string) => Math.round(Math.abs(Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / dayMs);
+
+/** Upcoming exams that fall within `maxGap` days of the next one (crunch weeks). Neighbouring pairs only, in date order. */
+export function findCrunches<T extends { id: number; name: string; exam_date: string | null }>(exams: T[], today: string, maxGap = 3): { a: T; b: T; days: number }[] {
+  const upcoming = exams.filter((e) => e.exam_date && e.exam_date >= today).sort((x, y) => x.exam_date!.localeCompare(y.exam_date!) || x.id - y.id);
+  const out: { a: T; b: T; days: number }[] = [];
+  for (let i = 1; i < upcoming.length; i++) {
+    const days = daysApart(upcoming[i - 1].exam_date!, upcoming[i].exam_date!);
+    if (days <= maxGap) out.push({ a: upcoming[i - 1], b: upcoming[i], days });
+  }
+  return out;
+}
+
+/** "Heads up: Endo Block and Perio Quiz are 2 days apart — your plan starts both early." */
+export function crunchMessage(c: { a: { name: string }; b: { name: string }; days: number }): string {
+  const gap = c.days === 0 ? "are on the same day" : `are ${c.days} ${c.days === 1 ? "day" : "days"} apart`;
+  return `${c.a.name} and ${c.b.name} ${gap} — your plan starts both early.`;
+}
+
+/** "today", "tomorrow", "in 9 days". */
+export function countdown(days: number): string {
+  return days <= 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
+}
+
 export function formatDay(date: string): string {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 }

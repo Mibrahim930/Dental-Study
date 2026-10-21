@@ -13,39 +13,56 @@ export type ExamProgress = {
 };
 
 export function examProgress(userId: number, examId: number): ExamProgress {
-  const topics = db.prepare("SELECT id FROM topics WHERE exam_id = ?").all(examId) as Pick<Topic, "id">[];
-  if (topics.length === 0) return { mastery: null, studied: 0, readiness: 0, topics: 0 };
+  return examProgressMany(userId, [examId]).get(examId)!;
+}
+
+/** examProgress for several exams in three queries in all (the calendar shows readiness for every upcoming exam). */
+export function examProgressMany(userId: number, examIds: number[]): Map<number, ExamProgress> {
+  const out = new Map<number, ExamProgress>();
+  const ids = [...new Set(examIds)];
+  for (const id of ids) out.set(id, { mastery: null, studied: 0, readiness: 0, topics: 0 });
+  if (ids.length === 0) return out;
+  const marks = ids.map(() => "?").join(",");
+  const topics = db.prepare(`SELECT id, exam_id FROM topics WHERE exam_id IN (${marks}) ORDER BY id`).all(...ids) as Pick<Topic, "id" | "exam_id">[];
+  if (topics.length === 0) return out;
   const studied = new Set(
-    (db.prepare("SELECT topic_id FROM topic_study WHERE user_id = ? AND topic_id IN (SELECT id FROM topics WHERE exam_id = ?)").all(userId, examId) as {
-      topic_id: number;
-    }[]).map((r) => r.topic_id),
+    (db
+      .prepare(`SELECT topic_id FROM topic_study WHERE user_id = ? AND topic_id IN (SELECT id FROM topics WHERE exam_id IN (${marks}))`)
+      .all(userId, ...ids) as { topic_id: number }[]).map((r) => r.topic_id),
   );
   // Every topic's concepts in one query (not one per topic).
   const conceptsOf = new Map<number, ConceptRow[]>();
   for (const r of db
     .prepare(
       `SELECT tc.topic_id, c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id JOIN topics t ON t.id = tc.topic_id
-       WHERE t.exam_id = ? ORDER BY tc.topic_id, tc.concept_id`,
+       WHERE t.exam_id IN (${marks}) ORDER BY tc.topic_id, tc.concept_id`,
     )
-    .all(examId) as (ConceptRow & { topic_id: number })[]) {
+    .all(...ids) as (ConceptRow & { topic_id: number })[]) {
     const list = conceptsOf.get(r.topic_id) ?? [];
     list.push(r);
     conceptsOf.set(r.topic_id, list);
   }
-  const all: number[] = [];
-  let readiness = 0;
-  for (const t of topics) {
-    const ms = (conceptsOf.get(t.id) ?? []).map(mastery).filter((m): m is number => m != null);
-    all.push(...ms);
-    const topicMastery = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
-    if (studied.has(t.id) || topicMastery != null) readiness += topicMastery ?? 0.5;
+  const byExam = new Map<number, Pick<Topic, "id">[]>();
+  for (const t of topics) byExam.set(t.exam_id, [...(byExam.get(t.exam_id) ?? []), t]);
+  for (const [examId, list] of byExam) {
+    const all: number[] = [];
+    let readiness = 0;
+    let studiedCount = 0;
+    for (const t of list) {
+      const ms = (conceptsOf.get(t.id) ?? []).map(mastery).filter((m): m is number => m != null);
+      all.push(...ms);
+      const topicMastery = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
+      if (studied.has(t.id)) studiedCount++;
+      if (studied.has(t.id) || topicMastery != null) readiness += topicMastery ?? 0.5;
+    }
+    out.set(examId, {
+      mastery: all.length ? all.reduce((a, b) => a + b, 0) / all.length : null,
+      studied: studiedCount / list.length,
+      readiness: readiness / list.length,
+      topics: list.length,
+    });
   }
-  return {
-    mastery: all.length ? all.reduce((a, b) => a + b, 0) / all.length : null,
-    studied: studied.size / topics.length,
-    readiness: readiness / topics.length,
-    topics: topics.length,
-  };
+  return out;
 }
 
 /** How this finished practice exam compares with the previous one and the best one for the same exam. */

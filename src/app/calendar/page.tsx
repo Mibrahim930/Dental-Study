@@ -4,7 +4,9 @@ import { headers } from "next/headers";
 import { db, type Exam } from "@/lib/db";
 import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, icsToken, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
-import { examsByDate, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, WEEKDAYS, ymd } from "@/lib/calendar";
+import { countdown, crunchMessage, examsByDate, findCrunches, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, readinessTone, WEEKDAYS, ymd, type Tone } from "@/lib/calendar";
+import { examProgressMany } from "@/lib/readiness";
+import { daysUntil } from "@/lib/format";
 import { TaskList } from "@/components/TaskList";
 import { CalendarForms, DeleteBusyButton, SkipBusyButton } from "@/components/CalendarForms";
 import { busyOn as busyOnDay, isRepeating, loadBusy, repeatLabel, skippedOn } from "@/lib/busy";
@@ -32,17 +34,30 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const from = month != null ? ymd(year, month, 1) : `${year}-01-01`;
   const to = month != null ? ymd(year, month, new Date(Date.UTC(year, month + 1, 0)).getUTCDate()) : `${year}-12-31`;
   // Archived exams are finished with: like the planner, the calendar leaves them out.
-  const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active' ORDER BY exam_date, id").all(user.id) as Exam[];
-  const undated = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NULL AND status = 'active' ORDER BY id").all(user.id) as Exam[];
+  const active = db.prepare("SELECT * FROM exams WHERE user_id = ? AND status = 'active' ORDER BY exam_date, id").all(user.id) as Exam[];
+  const exams = active.filter((e) => e.exam_date);
+  const undated = active.filter((e) => !e.exam_date);
   const busy = loadBusy(user.id);
   const tasks = tasksOn(user.id, from < today ? from : today, to);
   const dayTasks = tasksOn(user.id, selected, selected);
   const warnings = JSON.parse(settings.warnings) as PlanWarning[];
 
+  // Readiness for every upcoming exam, read once (three queries in all), never per day cell.
+  const upcoming = exams.filter((e) => e.exam_date! >= today);
+  const progress = examProgressMany(user.id, upcoming.map((e) => e.id));
+  const toneOf = (e: Exam) => (e.exam_date! >= today ? readinessTone(progress.get(e.id)) : null);
+  const crunches = findCrunches(upcoming, today);
+  const examLabel = (e: Exam) => {
+    const p = progress.get(e.id);
+    return p && p.topics > 0 ? `${e.name} (${Math.round(p.readiness * 100)}% ready)` : e.name;
+  };
+
   const byDate = examsByDate(exams);
   const examsOn = (d: string) => byDate.get(d) ?? [];
   const busyOn = (d: string) => busyOnDay(busy.rows, busy.skips, d);
-  const minutesOn = (d: string) => tasks.filter((t) => t.date === d).reduce((s, t) => s + t.minutes, 0);
+  const minutesByDay = new Map<string, number>();
+  for (const t of tasks) minutesByDay.set(t.date, (minutesByDay.get(t.date) ?? 0) + t.minutes);
+  const minutesOn = (d: string) => minutesByDay.get(d) ?? 0;
 
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
@@ -87,6 +102,45 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
 
         <UndatedExams exams={undated.map((e) => ({ id: e.id, name: e.name, kindLabel: KIND_LABEL[e.kind], course: e.course }))} today={today} />
 
+        {upcoming.length > 0 && (
+          <section aria-labelledby="upcoming-title" className="flex flex-col gap-2">
+            <h2 id="upcoming-title" className="px-1 text-[13px] font-bold text-muted-foreground">
+              Upcoming
+            </h2>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {upcoming.slice(0, 4).map((e) => {
+                const p = progress.get(e.id)!;
+                const tone = readinessTone(p);
+                return (
+                  <li key={e.id}>
+                    <Link href={`/exams/${e.id}`} className="flex min-h-14 items-center gap-3 rounded-[18px] border border-[var(--card-border)] bg-card px-4 py-2.5 hover:bg-muted">
+                      <span className={`h-3 w-3 shrink-0 rounded-[4px] ${KIND_STYLE[e.kind]}`} aria-hidden />
+                      <span className="min-w-0 flex-1 text-[15px]">
+                        <span className="font-extrabold">{e.name}</span>
+                        <span className="text-muted-foreground">
+                          {" · "}
+                          {countdown(daysUntil(e.exam_date, today) ?? 0)}
+                          {" · "}
+                        </span>
+                        <span className="font-bold">{p.topics === 0 ? "no lectures yet" : `${Math.round(p.readiness * 100)}% ready`}</span>
+                      </span>
+                      <ReadinessDot tone={tone} inline />
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {crunches.map((c) => (
+          <section key={`${c.a.id}-${c.b.id}`} className="tile cb-butter flex flex-col gap-1 rounded-[24px] text-[15px] font-medium">
+            <p>
+              <strong className="font-extrabold">Heads up:</strong> {crunchMessage(c)}
+            </p>
+          </section>
+        ))}
+
         {month == null ? (
           <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">
             {MONTHS.map((name, m) => (
@@ -107,7 +161,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                         <Link
                           key={j}
                           href={dayHref(d)}
-                          title={[...dayExams.map((e) => e.name), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
+                          title={[...dayExams.map(examLabel), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
                           aria-label={dayExams.length > 1 ? `${d}: ${dayExams.length} exams` : undefined}
                           className={`relative flex aspect-square items-center justify-center rounded-lg text-[11px] font-semibold ${
                             ex ? `${KIND_STYLE[ex.kind]} font-extrabold` : isBusy ? "bg-stone text-on-stone" : d < today ? "text-subtle hover:bg-muted" : "hover:bg-muted"
@@ -116,6 +170,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                           {Number(d.slice(8))}
                           {study > 0 && !ex && <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-hero" aria-hidden />}
                           {dayExams.length > 1 && <MoreExams n={dayExams.length - 1} />}
+                          {ex && toneOf(ex) && <ReadinessDot tone={toneOf(ex)!} small className="bottom-0 left-0" />}
                         </Link>
                       );
                     })}
@@ -140,16 +195,20 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                     <Link
                       key={j}
                       href={dayHref(d)}
-                      title={[...examsOn(d).map((e) => e.name), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : ""].filter(Boolean).join(" · ")}
+                      title={[...examsOn(d).map(examLabel), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : ""].filter(Boolean).join(" · ")}
                       className={`relative flex min-h-12 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[14px] p-1 text-[15px] font-bold sm:min-h-24 sm:items-start sm:justify-start sm:p-2 ${
                         ex ? KIND_STYLE[ex.kind] : isBusy.length ? "bg-stone text-on-stone" : d < today ? "bg-muted/50 text-subtle hover:bg-muted" : "bg-muted hover:bg-muted-strong"
                       } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
                     >
                       {Number(d.slice(8))}
                       {examsOn(d).length > 1 && <MoreExams n={examsOn(d).length - 1} className="sm:hidden" />}
+                      {ex && toneOf(ex) && <ReadinessDot tone={toneOf(ex)!} className="right-1.5 bottom-1.5" />}
                       <span className="hidden w-full flex-col gap-0.5 sm:flex">
                         {examsOn(d).map((e) => (
-                          <span key={e.id} className="truncate text-[11px] font-extrabold">{e.name}</span>
+                          <span key={e.id} className="flex min-w-0 items-center gap-1 text-[11px] font-extrabold">
+                            {examsOn(d).length > 1 && toneOf(e) && <ReadinessDot tone={toneOf(e)!} inline small />}
+                            <span className="truncate">{e.name}</span>
+                          </span>
                         ))}
                         {isBusy.map((b) => (
                           <span key={b.id} className="truncate text-[11px] font-semibold">{b.label}</span>
@@ -171,6 +230,15 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           ))}
           <span className="flex items-center gap-1"><span className="h-3 w-3 rounded bg-stone" />Busy</span>
           <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-hero" />Study planned</span>
+          <span className="flex basis-full flex-wrap items-center gap-x-3 gap-y-1 sm:basis-auto">
+            <span>Readiness dot:</span>
+            {(["mint", "butter", "coral", "muted"] as Tone[]).map((t) => (
+              <span key={t} className="flex items-center gap-1">
+                <span className={`h-2 w-2 rounded-full ${TONE_BG[t]}`} />
+                {t === "mint" ? "80%+" : t === "butter" ? "60–79%" : t === "coral" ? "under 60%" : "not started"}
+              </span>
+            ))}
+          </span>
         </div>
       </section>
 
@@ -232,6 +300,18 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         </section>
       </aside>
     </div>
+  );
+}
+
+const TONE_BG: Record<Tone, string> = { mint: "bg-mint", butter: "bg-butter", coral: "bg-coral", muted: "bg-muted-strong" };
+
+/** Readiness dot on an exam day: mint ≥ 80%, butter ≥ 60%, coral below, grey while nothing is studied or tested. */
+function ReadinessDot({ tone, inline = false, small = false, className = "" }: { tone: Tone; inline?: boolean; small?: boolean; className?: string }) {
+  return (
+    <span
+      className={`${inline ? "inline-block" : "absolute"} ${small ? "h-1.5 w-1.5 ring-1" : "h-2 w-2 ring-2"} shrink-0 rounded-full ring-card ${TONE_BG[tone]} ${className}`}
+      aria-hidden
+    />
   );
 }
 
