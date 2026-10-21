@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
 import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
@@ -736,6 +736,21 @@ function ReportQuizQuestion({ sessionId, topicId, questionId }: { sessionId: num
   );
 }
 
+/** One chat message. Memoized: while a reply streams in, only the growing bubble re-renders and re-parses its markdown. */
+const Bubble = memo(function Bubble({ role, content }: ChatMsg) {
+  return (
+    <div className={`rounded-[20px] px-4 py-3 text-[15px] leading-relaxed ${role === "user" ? "ml-8 bg-mint font-semibold text-on-mint" : "mr-4 bg-white/10"}`}>
+      {role === "assistant" ? (
+        <div className="[&_a]:text-hero-accent [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
+          <ReactMarkdown>{content || "…"}</ReactMarkdown>
+        </div>
+      ) : (
+        content
+      )}
+    </div>
+  );
+});
+
 function TutorChat({
   sessionId,
   position,
@@ -784,21 +799,37 @@ function TutorChat({
     setInput("");
     setBusy(true);
     setMessages((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "" }]);
-    const res = await fetch(`/api/sessions/${sessionId}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, position }),
-    });
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
+    // The reply streams in a few characters at a time. Chunks are collected and shown at most once per frame, so a long
+    // reply re-renders (and re-parses markdown for) only the growing bubble ~60 times a second, not once per chunk.
     let acc = "";
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      acc += decoder.decode(value, { stream: true });
-      setMessages((m) => [...m.slice(0, -1), { role: "assistant", content: acc }]);
+    let frame = 0;
+    const show = () => {
+      frame = 0;
+      const content = acc;
+      setMessages((m) => [...m.slice(0, -1), { role: "assistant", content }]);
+    };
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, position }),
+      });
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        if (!frame) frame = requestAnimationFrame(show);
+      }
+    } catch {
+      // Connection dropped (offline, or the server went away mid-reply): say so in the bubble instead of hanging.
+      acc += `${acc ? "\n\n" : ""}_(The tutor couldn't be reached. Check your connection and try again.)_`;
+    } finally {
+      if (frame) cancelAnimationFrame(frame);
+      show();
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   return (
@@ -829,18 +860,7 @@ function TutorChat({
             </p>
           )}
           {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`rounded-[20px] px-4 py-3 text-[15px] leading-relaxed ${m.role === "user" ? "ml-8 bg-mint font-semibold text-on-mint" : "mr-4 bg-white/10"}`}
-            >
-              {m.role === "assistant" ? (
-                <div className="[&_a]:text-hero-accent [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
-                  <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
-                </div>
-              ) : (
-                m.content
-              )}
-            </div>
+            <Bubble key={i} role={m.role} content={m.content} />
           ))}
           <div ref={bottom} />
         </div>
