@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db, getExam, type DocumentRow, type Topic } from "@/lib/db";
-import { topicConcepts } from "@/lib/memory";
+import { topicConceptsForExam } from "@/lib/memory";
 import { daysUntil, formatDate, pct } from "@/lib/format";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { Uploader } from "@/components/Uploader";
@@ -11,14 +11,14 @@ import { RemoveLectureButton } from "@/components/RemoveLectureButton";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
 import { plannerSettings } from "@/lib/planner";
-import { pendingCounts } from "@/lib/practicePlan";
+import { pendingCountsByTopic } from "@/lib/practicePlan";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress } from "@/lib/readiness";
 import { DoubleRing, Icon, ICONS, MasteryChip } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-type DocWithProgress = DocumentRow & { done: number; failed: number };
+type DocWithProgress = DocumentRow & { done: number; failed: number; batch_id: string | null };
 
 export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const user = await requireUser();
@@ -50,11 +50,14 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
       document_id: number;
     }[]).map((p) => [p.id, p.document_id]),
   );
+  // Pending counts and concept chips for all topics at once (one pass each, not one query per topic).
+  const pending = pendingCountsByTopic(id);
+  const conceptsByTopic = topicConceptsForExam(id);
   const practiceTopics = topics.map((t) => ({
     id: t.id,
     title: `${t.position + 1}. ${t.title}`,
     lectureIds: [...new Set((JSON.parse(t.page_ids) as number[]).map((p) => pageDoc.get(p)).filter((d): d is number => d != null))],
-    ...pendingCounts(id, [t.id]),
+    ...(pending.get(t.id) ?? { missed: 0, unsure: 0 }),
   }));
 
   // Is every slide in the study plan? Title/agenda slides are left out on purpose; anything else missing shows here.
@@ -81,7 +84,11 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
     }
   }
 
-  const processing = docs.some((d) => d.status === "processing") || exam.topic_status === "building";
+  const reading = docs.filter((d) => d.status === "processing");
+  const processing = reading.length > 0 || exam.topic_status === "building";
+  // A Batch API read can run for up to an hour and its results are collected once a minute, so while that is the only
+  // thing going on the page checks every 20 s. Slide rendering, direct reading and topic-map building move faster: 4 s.
+  const refreshMs = exam.topic_status !== "building" && reading.length > 0 && reading.every((d) => d.batch_id) ? 20000 : 4000;
   const lastPosition = sessions[0]?.current_position ?? 0;
   const started = sessions.length > 0;
   const days = daysUntil(exam.exam_date);
@@ -93,7 +100,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
 
   return (
     <div className="flex flex-col gap-2.5 sm:gap-4">
-      <AutoRefresh active={processing} />
+      <AutoRefresh active={processing} ms={refreshMs} />
       <div className="flex items-center justify-between gap-3 px-1">
         <Link href="/" className="flex items-center gap-1.5 text-[15px] font-bold text-muted-foreground hover:text-foreground">
           <Icon d={ICONS.arrowLeft} size={18} /> All exams
@@ -229,7 +236,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             )}
             <ol className="grid gap-2.5 sm:grid-cols-2">
               {topics.map((t) => {
-                const concepts = topicConcepts(t.id, id);
+                const concepts = conceptsByTopic.get(t.id) ?? [];
                 const isCurrent = started && t.position === lastPosition;
                 return (
                   <li key={t.id}>

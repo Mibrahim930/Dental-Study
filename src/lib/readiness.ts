@@ -20,11 +20,22 @@ export function examProgress(userId: number, examId: number): ExamProgress {
       topic_id: number;
     }[]).map((r) => r.topic_id),
   );
-  const conceptsOf = db.prepare("SELECT c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?");
+  // Every topic's concepts in one query (not one per topic).
+  const conceptsOf = new Map<number, ConceptRow[]>();
+  for (const r of db
+    .prepare(
+      `SELECT tc.topic_id, c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id JOIN topics t ON t.id = tc.topic_id
+       WHERE t.exam_id = ? ORDER BY tc.topic_id, tc.concept_id`,
+    )
+    .all(examId) as (ConceptRow & { topic_id: number })[]) {
+    const list = conceptsOf.get(r.topic_id) ?? [];
+    list.push(r);
+    conceptsOf.set(r.topic_id, list);
+  }
   const all: number[] = [];
   let readiness = 0;
   for (const t of topics) {
-    const ms = (conceptsOf.all(t.id) as ConceptRow[]).map(mastery).filter((m): m is number => m != null);
+    const ms = (conceptsOf.get(t.id) ?? []).map(mastery).filter((m): m is number => m != null);
     all.push(...ms);
     const topicMastery = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
     if (studied.has(t.id) || topicMastery != null) readiness += topicMastery ?? 0.5;

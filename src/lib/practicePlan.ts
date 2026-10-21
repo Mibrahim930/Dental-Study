@@ -192,6 +192,25 @@ export function pendingCounts(examId: number, topicIds: number[] = []): { missed
 }
 
 /**
+ * pendingCounts(examId, [topicId]) for every topic of the exam from a single pass over the latest answers (the exam
+ * page's practice form). Topics with nothing pending are absent; read them as { missed: 0, unsure: 0 }.
+ */
+export function pendingCountsByTopic(examId: number): Map<number, { missed: number; unsure: number }> {
+  const byTopic = new Map<number, { missed: number; unsure: number }>();
+  for (const r of latestResults(examId)) {
+    if (r.topic_id == null) continue; // a single-topic scope never counts questions whose topic was removed
+    const missed = r.correct === 0;
+    const unsure = r.correct === 1 && (r.confidence === "guess" || r.confidence === "unsure");
+    if (!missed && !unsure) continue;
+    const c = byTopic.get(r.topic_id) ?? { missed: 0, unsure: 0 };
+    if (missed) c.missed++;
+    else c.unsure++;
+    byTopic.set(r.topic_id, c);
+  }
+  return byTopic;
+}
+
+/**
  * When each topic of an exam was last practised: the id of the latest practice exam in which a question
  * from it was answered, or that is still open with it (so two exams opened together rotate sections too).
  * Topics never practised are absent; questions skipped in a finished exam don't count.

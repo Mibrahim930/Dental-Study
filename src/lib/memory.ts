@@ -31,14 +31,49 @@ export function topicConcepts(topicId: number, examId: number): TopicConcept[] {
     )
     .all(topicId) as ConceptRow[];
   const earlier = db.prepare(
-    `SELECT DISTINCT e.name FROM exams e JOIN topics t ON t.exam_id = e.id JOIN topic_concepts tc ON tc.topic_id = t.id
-     WHERE tc.concept_id = ? AND e.id != ? AND e.created_at <= (SELECT created_at FROM exams WHERE id = ?)`,
+    `SELECT e.name FROM exams e JOIN topics t ON t.exam_id = e.id JOIN topic_concepts tc ON tc.topic_id = t.id
+     WHERE tc.concept_id = ? AND e.id != ? AND e.created_at <= (SELECT created_at FROM exams WHERE id = ?)
+     GROUP BY e.name ORDER BY MIN(e.id)`,
   );
   return rows.map((c) => ({
     ...c,
     mastery: mastery(c),
     earlier_exams: (earlier.all(c.id, examId, examId) as { name: string }[]).map((r) => r.name),
   }));
+}
+
+/**
+ * topicConcepts for every topic of an exam at once (the exam page's topic map): two queries in all instead of one per
+ * topic plus one per concept. Same rows, same order (concepts by name; earlier exams oldest first). Topics without
+ * concepts are absent from the map.
+ */
+export function topicConceptsForExam(examId: number): Map<number, TopicConcept[]> {
+  const rows = db
+    .prepare(
+      `SELECT tc.topic_id AS _topic_id, c.* FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id JOIN topics t ON t.id = tc.topic_id
+       WHERE t.exam_id = ? ORDER BY tc.topic_id, c.name`,
+    )
+    .all(examId) as (ConceptRow & { _topic_id: number })[];
+  const earlier = new Map<number, string[]>();
+  for (const r of db
+    .prepare(
+      `SELECT tc.concept_id, e.name FROM exams e JOIN topics t ON t.exam_id = e.id JOIN topic_concepts tc ON tc.topic_id = t.id
+       WHERE tc.concept_id IN (SELECT tc2.concept_id FROM topic_concepts tc2 JOIN topics t2 ON t2.id = tc2.topic_id WHERE t2.exam_id = ?)
+         AND e.id != ? AND e.created_at <= (SELECT created_at FROM exams WHERE id = ?)
+       GROUP BY tc.concept_id, e.name ORDER BY tc.concept_id, MIN(e.id)`,
+    )
+    .all(examId, examId, examId) as { concept_id: number; name: string }[]) {
+    const list = earlier.get(r.concept_id) ?? [];
+    list.push(r.name);
+    earlier.set(r.concept_id, list);
+  }
+  const byTopic = new Map<number, TopicConcept[]>();
+  for (const { _topic_id, ...c } of rows) {
+    const list = byTopic.get(_topic_id) ?? [];
+    list.push({ ...c, mastery: mastery(c), earlier_exams: [...(earlier.get(c.id) ?? [])] });
+    byTopic.set(_topic_id, list);
+  }
+  return byTopic;
 }
 
 export function weakConcepts(userId: number, limit = 10, excludeExamId?: number): (ConceptRow & { mastery: number })[] {
