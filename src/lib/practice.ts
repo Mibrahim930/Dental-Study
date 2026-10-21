@@ -121,6 +121,15 @@ const buildQueue = new Map<number, Promise<void>>();
  * - Focus on: weak topics get more of the new questions, aimed at what was missed or answered unsure.
  *   Focus off: new questions are spread evenly over the chosen material.
  */
+/**
+ * How many sections (and case sets) are written at the same time. A 20-topic exam makes about 20 AI calls of 20–40 s
+ * each: 8 at a time is 3 waves instead of 5 (roughly 1–2 minutes instead of 2–3). Higher risks rate limits (429) on
+ * low-tier API keys; a section that fails is caught below and its share is backfilled from the sections that did
+ * deliver, so the exam still has its full size. Case sets are longer calls, so they run fewer at once.
+ */
+const SECTION_CONCURRENCY = 8;
+const CASESET_CONCURRENCY = 6;
+
 async function generateAttempt(attemptId: number, examId: number, opts: AttemptOptions & { adaptive: boolean }) {
   let topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
   const scoped = !!opts.topicIds?.length;
@@ -178,7 +187,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
     }
     if (got < count) shortOf.add(topic.id);
   };
-  await mapLimit(plan, 4, write);
+  await mapLimit(plan, SECTION_CONCURRENCY, write);
 
   // Fill any shortfall (a section failed, or the AI wrote fewer than asked) from the sections that delivered in full,
   // a few rounds at most, stopping as soon as a round adds nothing.
@@ -186,7 +195,7 @@ async function generateAttempt(attemptId: number, examId: number, opts: AttemptO
     const working = plan.map((p) => p.topic).filter((t) => !shortOf.has(t.id));
     if (working.length === 0) break;
     const before = created.size;
-    await mapLimit(allocate(working, fresh - created.size, focus), 4, write);
+    await mapLimit(allocate(working, fresh - created.size, focus), SECTION_CONCURRENCY, write);
     if (created.size === before) break;
   }
 
@@ -389,7 +398,7 @@ async function buildCaseSets(
   let lastError: unknown = null;
   // A case's questions can sit in two topics (after a rebuild they follow their slides): never take one case twice.
   const taken = new Set<number>();
-  await mapLimit(allocate(topics, caseCount, focus, coverage), 3, async ({ topic, count }) => {
+  await mapLimit(allocate(topics, caseCount, focus, coverage), CASESET_CONCURRENCY, async ({ topic, count }) => {
     const reused = unusedCases(topic.id, count, pages).filter((g) => g.length > 0 && !g.some((q) => taken.has(q)));
     reused.forEach((g) => g.forEach((q) => taken.add(q)));
     groups.push(...reused);
