@@ -58,14 +58,15 @@ export function ExamRowsEditor({
     const c: Check = { errors: [], warnings: [], blank };
     if (r.include && !(blank && mode === "manual")) {
       if (!r.name.trim()) c.errors.push("Add a name.");
-      if (!r.date) c.errors.push("Add a date, or untick this one.");
+      if (!r.date) c.errors.push(mode === "confirm" ? "Add a date, or untick this one." : "Add a date.");
       else if (!isValidDate(r.date)) c.errors.push("That date doesn't exist.");
       else {
         if (r.date < today) c.warnings.push("This date has already passed.");
-        if (r.name.trim() && existing.has(duplicateKey(r.name, r.date))) c.warnings.push("Already on your calendar.");
-        else if (r.name.trim() && (seen.get(duplicateKey(r.name, r.date)) ?? 0) > 1) c.warnings.push("Listed twice.");
+        if (r.name.trim() && (seen.get(duplicateKey(r.name, r.date)) ?? 0) > 1) c.warnings.push("Listed twice.");
       }
     }
+    // Shown ticked or not, so she knows why a row arrived unticked.
+    if (r.name.trim() && isValidDate(r.date) && existing.has(duplicateKey(r.name, r.date))) c.warnings.push("Already on your calendar.");
     checks.set(r.key, c);
   }
   const toAdd = rows.filter((r) => r.include && !(checks.get(r.key)!.blank && mode === "manual"));
@@ -109,7 +110,7 @@ export function ExamRowsEditor({
       <ul className="flex flex-col gap-2">
         {rows.map((r, i) => {
           const c = checks.get(r.key)!;
-          const unsure = r.include && r.confidence === "low";
+          const unsure = r.confidence === "low";
           return (
             <li key={r.key} className={`rounded-[20px] p-3 transition-opacity ${r.include ? "bg-muted" : "bg-muted/50 opacity-60"}`}>
               <div className="flex items-start gap-2">
@@ -168,7 +169,7 @@ export function ExamRowsEditor({
                   </button>
                 )}
               </div>
-              {(unsure || (r.include && r.note) || c.errors.length > 0 || c.warnings.length > 0) && (
+              {(unsure || r.note || c.errors.length > 0 || c.warnings.length > 0) && (
                 <div className={`flex flex-wrap items-center gap-1.5 pt-2 text-[13px] ${mode === "confirm" ? "sm:pl-[38px]" : ""}`}>
                   {unsure && <span className="chip cb-butter">⚠ Check this date</span>}
                   {c.errors.map((m) => (
@@ -181,7 +182,7 @@ export function ExamRowsEditor({
                       {m}
                     </span>
                   ))}
-                  {r.include && r.note && <span className="text-muted-foreground">{r.note}</span>}
+                  {r.note && <span className="text-muted-foreground">{r.note}</span>}
                 </div>
               )}
             </li>

@@ -18,7 +18,11 @@ export default async function AddExamsPage() {
       <div className="flex flex-col gap-1.5">
         <h1 className="page-title">Add this term&apos;s exams</h1>
         <p className="text-[15px] text-muted-foreground">
-          One row per exam. Name and date are all you need; the type and course help the calendar and your plan.
+          One row per exam. Name and date are all you need; the type and course help the calendar and your plan.{" "}
+          <Link href="/calendar/import" className="font-semibold text-foreground underline underline-offset-4">
+            Or paste or snap your exam schedule
+          </Link>
+          .
         </p>
       </div>
       <section className="card">

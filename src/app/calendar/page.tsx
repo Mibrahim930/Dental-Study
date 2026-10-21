@@ -81,6 +81,9 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
           <Link href="/calendar/add" className="btn-primary btn-sm">
             <Icon d={ICONS.plus} size={16} /> Add exams
           </Link>
+          <Link href="/calendar/import" className="btn-secondary btn-sm">
+            Paste or snap your schedule
+          </Link>
         </div>
 
         <UndatedExams exams={undated.map((e) => ({ id: e.id, name: e.name, kindLabel: KIND_LABEL[e.kind], course: e.course }))} today={today} />
