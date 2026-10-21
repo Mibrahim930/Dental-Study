@@ -9,6 +9,7 @@ import { TaskList } from "@/components/TaskList";
 import { CalendarForms, DeleteBusyButton } from "@/components/CalendarForms";
 import { CalendarSyncLink, PlannerSettingsForm } from "@/components/PlannerSettingsForm";
 import { UndatedExams } from "@/components/UndatedExams";
+import { Icon, ICONS } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const year = monthParam ? Number(monthParam.slice(0, 4)) : typeof q.year === "string" ? Number(q.year) || Number(today.slice(0, 4)) : Number(today.slice(0, 4));
   const month = monthParam ? Number(monthParam.slice(5, 7)) - 1 : null;
   const selected = typeof q.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.day) ? q.day : month != null ? (today.startsWith(monthParam!) ? today : ymd(year, month, 1)) : today;
+
+  const added = typeof q.added === "string" ? Math.min(99, Math.max(0, Math.floor(Number(q.added)) || 0)) : 0;
 
   const from = month != null ? ymd(year, month, 1) : `${year}-01-01`;
   const to = month != null ? ymd(year, month, new Date(Date.UTC(year, month + 1, 0)).getUTCDate()) : `${year}-12-31`;
@@ -63,6 +66,21 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             <Link href={`?year=${year}`} className={`rounded-md px-3 py-1 ${month == null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Year</Link>
             <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Month</Link>
           </div>
+        </div>
+
+        {added > 0 && (
+          <section role="status" className="tile cb-mint flex flex-col gap-1 rounded-[24px]">
+            <div className="text-[17px] font-extrabold">
+              Added {added} {added === 1 ? "exam" : "exams"}.
+            </div>
+            <p className="text-[15px] font-medium">Each exam gets its own space for lectures; upload them whenever you&apos;re ready.</p>
+          </section>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Link href="/calendar/add" className="btn-primary btn-sm">
+            <Icon d={ICONS.plus} size={16} /> Add exams
+          </Link>
         </div>
 
         <UndatedExams exams={undated.map((e) => ({ id: e.id, name: e.name, kindLabel: KIND_LABEL[e.kind], course: e.course }))} today={today} />

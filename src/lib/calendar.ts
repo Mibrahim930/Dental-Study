@@ -20,6 +20,14 @@ export const KIND_STYLE: Record<ExamKind, string> = {
   other: "cb-stone",
 };
 
+export const EXAM_KINDS = Object.keys(KIND_LABEL) as ExamKind[];
+export const kindOrDefault = (v: unknown): ExamKind => (EXAM_KINDS.includes(v as ExamKind) ? (v as ExamKind) : "block");
+
+/** Same exam? Name (case, spacing and punctuation ignored) on the same date. */
+export function duplicateKey(name: string, date: string | null): string {
+  return `${name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()}|${date ?? ""}`;
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 export const ymd = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
