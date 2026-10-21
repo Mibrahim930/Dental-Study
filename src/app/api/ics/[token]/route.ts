@@ -1,6 +1,7 @@
 import { db, type Exam } from "@/lib/db";
 import { addDays, tasksOn, userToday } from "@/lib/planner";
-import { compactDate, icsBody, icsEscape } from "@/lib/ics";
+import { compactDate, ICS_DAYS, icsBody, icsEscape } from "@/lib/ics";
+import { daysOf, firstOccurrence, isRepeating, loadBusy } from "@/lib/busy";
 
 // Calendar subscription feed (Google / Apple Calendar). The secret token in the URL identifies the user.
 export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]">) {
@@ -11,7 +12,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
 
   // Archived exams are finished with: they leave the feed like they leave the plan.
   const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active'").all(userId) as Exam[];
-  const busy = db.prepare("SELECT * FROM busy_days WHERE user_id = ?").all(userId) as { id: number; start_date: string; end_date: string; label: string }[];
+  const busy = loadBusy(userId);
   const today = userToday(userId);
   const tasks = tasksOn(userId, addDays(today, -14), addDays(today, 180));
 
@@ -30,7 +31,27 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
     );
   };
   for (const e of exams) allDay(`exam-${e.id}`, e.exam_date!, e.exam_date!, `📝 ${e.name}`, e.course ?? "");
-  for (const b of busy) allDay(`busy-${b.id}`, b.start_date, b.end_date, `⛔ ${b.label}`);
+  for (const b of busy.rows) {
+    if (!isRepeating(b)) {
+      allDay(`busy-${b.id}`, b.start_date, b.end_date, `⛔ ${b.label}`);
+      continue;
+    }
+    // A weekly repeat is one repeating event: first real occurrence, BYDAY, UNTIL (a DATE, like DTSTART), skipped weeks as EXDATE.
+    const first = firstOccurrence(b);
+    if (!first) continue;
+    const skipped = [...busy.skips].filter((k) => k.startsWith(`${b.id}|`)).map((k) => compactDate(k.split("|")[1])).sort();
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:busy-${b.id}@dental-study`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${compactDate(first)}`,
+      `DTEND;VALUE=DATE:${compactDate(addDays(first, 1))}`,
+      `RRULE:FREQ=WEEKLY;BYDAY=${daysOf(b.weekdays).map((d) => ICS_DAYS[d]).join(",")};UNTIL=${compactDate(b.end_date)}`,
+      ...(skipped.length ? [`EXDATE;VALUE=DATE:${skipped.join(",")}`] : []),
+      `SUMMARY:${icsEscape(`⛔ ${b.label}`)}`,
+      "END:VEVENT",
+    );
+  }
   const byDay = new Map<string, typeof tasks>();
   for (const t of tasks) byDay.set(t.date, [...(byDay.get(t.date) ?? []), t]);
   for (const [day, list] of byDay) {

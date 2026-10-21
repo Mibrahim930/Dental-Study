@@ -6,14 +6,13 @@ import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, icsToken, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
 import { examsByDate, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, WEEKDAYS, ymd } from "@/lib/calendar";
 import { TaskList } from "@/components/TaskList";
-import { CalendarForms, DeleteBusyButton } from "@/components/CalendarForms";
+import { CalendarForms, DeleteBusyButton, SkipBusyButton } from "@/components/CalendarForms";
+import { busyOn as busyOnDay, isRepeating, loadBusy, repeatLabel, skippedOn } from "@/lib/busy";
 import { CalendarSyncLink, PlannerSettingsForm } from "@/components/PlannerSettingsForm";
 import { UndatedExams } from "@/components/UndatedExams";
 import { Icon, ICONS } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
-
-type Busy = { id: number; start_date: string; end_date: string; label: string };
 
 export default async function CalendarPage(props: PageProps<"/calendar">) {
   const user = await requireUser();
@@ -35,14 +34,14 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   // Archived exams are finished with: like the planner, the calendar leaves them out.
   const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active' ORDER BY exam_date, id").all(user.id) as Exam[];
   const undated = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NULL AND status = 'active' ORDER BY id").all(user.id) as Exam[];
-  const busy = db.prepare("SELECT * FROM busy_days WHERE user_id = ? ORDER BY start_date").all(user.id) as Busy[];
+  const busy = loadBusy(user.id);
   const tasks = tasksOn(user.id, from < today ? from : today, to);
   const dayTasks = tasksOn(user.id, selected, selected);
   const warnings = JSON.parse(settings.warnings) as PlanWarning[];
 
   const byDate = examsByDate(exams);
   const examsOn = (d: string) => byDate.get(d) ?? [];
-  const busyOn = (d: string) => busy.filter((b) => d >= b.start_date && d <= b.end_date);
+  const busyOn = (d: string) => busyOnDay(busy.rows, busy.skips, d);
   const minutesOn = (d: string) => tasks.filter((t) => t.date === d).reduce((s, t) => s + t.minutes, 0);
 
   const h = await headers();
@@ -183,10 +182,29 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
               {KIND_LABEL[e.kind]}: {e.name} →
             </Link>
           ))}
-          {busyOn(selected).map((b) => (
-            <div key={b.id} className="flex items-center justify-between rounded-[20px] bg-stone px-4 py-3 text-[15px] font-semibold text-on-stone">
-              <span>{b.label}{b.start_date !== b.end_date ? ` (${b.start_date.slice(5)} to ${b.end_date.slice(5)})` : ""}</span>
-              <DeleteBusyButton id={b.id} />
+          {busyOn(selected).map((b) =>
+            isRepeating(b) ? (
+              <div key={b.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[20px] bg-stone px-4 py-3 text-[15px] font-semibold text-on-stone">
+                <span className="min-w-0">
+                  {b.label} ({repeatLabel(b.weekdays)})
+                  <span className="block text-xs font-medium opacity-80">until {formatDay(b.end_date)}</span>
+                </span>
+                <span className="flex items-center gap-3">
+                  {selected >= today && <SkipBusyButton id={b.id} date={selected} />}
+                  <DeleteBusyButton id={b.id} label={b.label} repeating />
+                </span>
+              </div>
+            ) : (
+              <div key={b.id} className="flex items-center justify-between gap-3 rounded-[20px] bg-stone px-4 py-3 text-[15px] font-semibold text-on-stone">
+                <span className="min-w-0">{b.label}{b.start_date !== b.end_date ? ` (${b.start_date.slice(5)} to ${b.end_date.slice(5)})` : ""}</span>
+                <DeleteBusyButton id={b.id} label={b.label} />
+              </div>
+            ),
+          )}
+          {skippedOn(busy.rows, busy.skips, selected).map((b) => (
+            <div key={`skip-${b.id}`} className="flex items-center justify-between gap-3 rounded-[20px] border-2 border-dashed border-muted-strong px-4 py-2.5 text-sm font-semibold text-muted-foreground">
+              <span className="min-w-0">{b.label} skipped this week</span>
+              <SkipBusyButton id={b.id} date={selected} undo />
             </div>
           ))}
           <TaskList tasks={dayTasks} empty={selected < today ? "No study tasks this day." : "No study planned this day."} />

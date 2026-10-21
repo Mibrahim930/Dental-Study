@@ -206,12 +206,21 @@ CREATE TABLE IF NOT EXISTS review_cards (
 );
 
 -- Calendar: days the student can't study (clinic, travel, holidays). Inclusive range.
+-- weekdays set = repeats every week on those days (bit 0 = Monday … bit 6 = Sunday) from start_date until end_date.
 CREATE TABLE IF NOT EXISTS busy_days (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   start_date TEXT NOT NULL,
   end_date TEXT NOT NULL,
-  label TEXT NOT NULL DEFAULT 'Busy'
+  label TEXT NOT NULL DEFAULT 'Busy',
+  weekdays INTEGER
+);
+
+-- Single weeks taken out of a repeating busy day ("skip this week").
+CREATE TABLE IF NOT EXISTS busy_skips (
+  busy_id INTEGER NOT NULL REFERENCES busy_days(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  PRIMARY KEY (busy_id, date)
 );
 
 -- Study planner settings, one row per user.
@@ -348,6 +357,8 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE session_checks ADD COLUMN check_index INTEGER");
     db.exec("ALTER TABLE session_checks ADD COLUMN chosen INTEGER");
   }
+  const busyCols = columns(db, "busy_days");
+  if (busyCols.length && !busyCols.includes("weekdays")) db.exec("ALTER TABLE busy_days ADD COLUMN weekdays INTEGER");
   if (!columns(db, "glossary").includes("user_id")) {
     db.exec(`
       CREATE TABLE glossary_new (user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, abbr TEXT NOT NULL COLLATE NOCASE, meaning TEXT NOT NULL, UNIQUE(user_id, abbr));

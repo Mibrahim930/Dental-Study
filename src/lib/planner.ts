@@ -10,6 +10,7 @@
 // Future to-do tasks are thrown away and rebuilt whenever something changes; finished tasks are kept.
 import crypto from "crypto";
 import { db, type Exam, type Topic } from "./db";
+import { busyOn, loadBusy } from "./busy";
 
 export type PlanTask = {
   id: number;
@@ -113,11 +114,9 @@ export function rebuildPlan(userId: number): PlanWarning[] {
 
   // Capacity per day (minutes), from today to the day before the last exam.
   const lastDay = addDays(exams[exams.length - 1].exam_date!, -1);
-  const busy = db.prepare("SELECT start_date, end_date FROM busy_days WHERE user_id = ? AND end_date >= ?").all(userId, today) as {
-    start_date: string;
-    end_date: string;
-  }[];
-  const isBusy = (d: string) => busy.some((b) => d >= b.start_date && d <= b.end_date);
+  // One-off ranges and weekly repeats (minus skipped weeks), decided by the same helper the calendar and feed use.
+  const busy = loadBusy(userId, today);
+  const isBusy = (d: string) => busyOn(busy.rows, busy.skips, d).length > 0;
   const doneToday = (db.prepare("SELECT COALESCE(SUM(minutes), 0) m FROM plan_tasks WHERE user_id = ? AND date = ? AND status = 'done'").get(userId, today) as {
     m: number;
   }).m;
