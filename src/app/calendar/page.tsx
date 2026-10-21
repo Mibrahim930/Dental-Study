@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { db, type Exam } from "@/lib/db";
 import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, icsToken, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
-import { formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, WEEKDAYS, ymd } from "@/lib/calendar";
+import { examsByDate, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, WEEKDAYS, ymd } from "@/lib/calendar";
 import { TaskList } from "@/components/TaskList";
 import { CalendarForms, DeleteBusyButton } from "@/components/CalendarForms";
 import { CalendarSyncLink, PlannerSettingsForm } from "@/components/PlannerSettingsForm";
@@ -28,13 +28,15 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
 
   const from = month != null ? ymd(year, month, 1) : `${year}-01-01`;
   const to = month != null ? ymd(year, month, new Date(Date.UTC(year, month + 1, 0)).getUTCDate()) : `${year}-12-31`;
-  const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL ORDER BY exam_date").all(user.id) as Exam[];
+  // Archived exams are finished with: like the planner, the calendar leaves them out.
+  const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active' ORDER BY exam_date, id").all(user.id) as Exam[];
   const busy = db.prepare("SELECT * FROM busy_days WHERE user_id = ? ORDER BY start_date").all(user.id) as Busy[];
   const tasks = tasksOn(user.id, from < today ? from : today, to);
   const dayTasks = tasksOn(user.id, selected, selected);
   const warnings = JSON.parse(settings.warnings) as PlanWarning[];
 
-  const examsOn = (d: string) => exams.filter((e) => e.exam_date === d);
+  const byDate = examsByDate(exams);
+  const examsOn = (d: string) => byDate.get(d) ?? [];
   const busyOn = (d: string) => busy.filter((b) => d >= b.start_date && d <= b.end_date);
   const minutesOn = (d: string) => tasks.filter((t) => t.date === d).reduce((s, t) => s + t.minutes, 0);
 
@@ -73,20 +75,23 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                   <div key={i} className="grid grid-cols-7 gap-0.5">
                     {week.map((d, j) => {
                       if (!d) return <div key={j} />;
-                      const ex = examsOn(d)[0];
+                      const dayExams = examsOn(d);
+                      const ex = dayExams[0];
                       const isBusy = busyOn(d).length > 0;
                       const study = minutesOn(d);
                       return (
                         <Link
                           key={j}
                           href={dayHref(d)}
-                          title={[...examsOn(d).map((e) => e.name), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
+                          title={[...dayExams.map((e) => e.name), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
+                          aria-label={dayExams.length > 1 ? `${d}: ${dayExams.length} exams` : undefined}
                           className={`relative flex aspect-square items-center justify-center rounded-lg text-[11px] font-semibold ${
                             ex ? `${KIND_STYLE[ex.kind]} font-extrabold` : isBusy ? "bg-stone text-on-stone" : d < today ? "text-subtle hover:bg-muted" : "hover:bg-muted"
                           } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
                         >
                           {Number(d.slice(8))}
                           {study > 0 && !ex && <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-hero" aria-hidden />}
+                          {dayExams.length > 1 && <MoreExams n={dayExams.length - 1} />}
                         </Link>
                       );
                     })}
@@ -117,6 +122,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                       } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
                     >
                       {Number(d.slice(8))}
+                      {examsOn(d).length > 1 && <MoreExams n={examsOn(d).length - 1} className="sm:hidden" />}
                       <span className="hidden w-full flex-col gap-0.5 sm:flex">
                         {examsOn(d).map((e) => (
                           <span key={e.id} className="truncate text-[11px] font-extrabold">{e.name}</span>
@@ -183,5 +189,17 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
         </section>
       </aside>
     </div>
+  );
+}
+
+/** "+1" in the corner of a day with more than one exam (the cell's colour is the first exam's). */
+function MoreExams({ n, className = "" }: { n: number; className?: string }) {
+  return (
+    <span
+      className={`absolute top-0 right-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-[8px] leading-none font-extrabold text-background ${className}`}
+      aria-hidden
+    >
+      +{n}
+    </span>
   );
 }

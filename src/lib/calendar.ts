@@ -32,6 +32,18 @@ export function monthWeeks(year: number, month: number): (string | null)[][] {
   return Array.from({ length: cells.length / 7 }, (_, w) => cells.slice(w * 7, w * 7 + 7));
 }
 
+/** Exams grouped by their date (dateless ones left out), keeping the given order within a day. */
+export function examsByDate<T extends { exam_date: string | null }>(exams: T[]): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const e of exams) {
+    if (!e.exam_date) continue;
+    const list = out.get(e.exam_date) ?? [];
+    list.push(e);
+    out.set(e.exam_date, list);
+  }
+  return out;
+}
+
 export function formatDay(date: string): string {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 }

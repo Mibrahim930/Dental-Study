@@ -277,13 +277,32 @@ export function markTopicStudied(userId: number, topicId: number) {
   ).run(userId, topicId);
 }
 
+/**
+ * Tick a task on or off by hand. Ticking a "Study: …" task counts its topic as studied (like opening it), so the next
+ * re-plan doesn't schedule it again; unticking takes that back. Missed tasks stay missed (their work is already re-planned).
+ */
 export function setTaskStatus(userId: number, taskId: number, status: "todo" | "done") {
-  db.prepare("UPDATE plan_tasks SET status = ?, completed_at = CASE WHEN ? = 'done' THEN datetime('now') END WHERE id = ? AND user_id = ?").run(
-    status,
-    status,
-    taskId,
-    userId,
-  );
+  const task = db.prepare("SELECT kind, topic_ids, status FROM plan_tasks WHERE id = ? AND user_id = ?").get(taskId, userId) as
+    | Pick<PlanTask, "kind" | "topic_ids" | "status">
+    | undefined;
+  if (!task || task.status === "missed") return;
+  db.transaction(() => {
+    db.prepare("UPDATE plan_tasks SET status = ?, completed_at = CASE WHEN ? = 'done' THEN datetime('now') END WHERE id = ? AND user_id = ?").run(
+      status,
+      status,
+      taskId,
+      userId,
+    );
+    if (task.kind !== "learn") return;
+    // Only this student's own topics (a forged task row can't touch someone else's).
+    const topics = (JSON.parse(task.topic_ids) as number[]).filter(
+      (id) => !!db.prepare("SELECT 1 FROM topics t JOIN exams e ON e.id = t.exam_id WHERE t.id = ? AND e.user_id = ?").get(id, userId),
+    );
+    for (const id of topics) {
+      if (status === "done") db.prepare("INSERT OR IGNORE INTO topic_study (user_id, topic_id) VALUES (?, ?)").run(userId, id);
+      else db.prepare("DELETE FROM topic_study WHERE user_id = ? AND topic_id = ?").run(userId, id);
+    }
+  })();
 }
 
 export function tasksOn(userId: number, from: string, to: string): (PlanTask & { exam_name: string | null })[] {

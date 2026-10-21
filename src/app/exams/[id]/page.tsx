@@ -10,7 +10,7 @@ import { ActionButton } from "@/components/ActionButton";
 import { RemoveLectureButton } from "@/components/RemoveLectureButton";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
-import { plannerSettings } from "@/lib/planner";
+import { plannerSettings, todayIn } from "@/lib/planner";
 import { pendingCountsByTopic } from "@/lib/practicePlan";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress } from "@/lib/readiness";
@@ -91,10 +91,10 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const refreshMs = exam.topic_status !== "building" && reading.length > 0 && reading.every((d) => d.batch_id) ? 20000 : 4000;
   const lastPosition = sessions[0]?.current_position ?? 0;
   const started = sessions.length > 0;
-  const days = daysUntil(exam.exam_date);
+  const tz = plannerSettings(user.id).timezone;
+  const days = daysUntil(exam.exam_date, todayIn(tz));
   const totalPages = docs.reduce((a, d) => a + d.page_count, 0);
   const progress = examProgress(user.id, id);
-  const tz = plannerSettings(user.id).timezone;
   const current = topics[lastPosition];
   const notes = sessions.filter((s) => s.summary);
 

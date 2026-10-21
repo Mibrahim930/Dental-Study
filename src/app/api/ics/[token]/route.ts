@@ -1,5 +1,6 @@
 import { db, type Exam } from "@/lib/db";
 import { addDays, tasksOn, userToday } from "@/lib/planner";
+import { compactDate, icsBody, icsEscape } from "@/lib/ics";
 
 // Calendar subscription feed (Google / Apple Calendar). The secret token in the URL identifies the user.
 export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]">) {
@@ -8,13 +9,12 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
   if (!row || token.length < 20) return new Response("Not found", { status: 404 });
   const userId = row.user_id;
 
-  const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL").all(userId) as Exam[];
+  // Archived exams are finished with: they leave the feed like they leave the plan.
+  const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active'").all(userId) as Exam[];
   const busy = db.prepare("SELECT * FROM busy_days WHERE user_id = ?").all(userId) as { id: number; start_date: string; end_date: string; label: string }[];
   const today = userToday(userId);
   const tasks = tasksOn(userId, addDays(today, -14), addDays(today, 180));
 
-  const compact = (d: string) => d.replaceAll("-", "");
-  const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lolos Study Buddy//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Lolo's Study Buddy", "METHOD:PUBLISH"];
   const allDay = (uid: string, start: string, endInclusive: string, summary: string, description = "") => {
@@ -22,10 +22,10 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
       "BEGIN:VEVENT",
       `UID:${uid}@dental-study`,
       `DTSTAMP:${stamp}`,
-      `DTSTART;VALUE=DATE:${compact(start)}`,
-      `DTEND;VALUE=DATE:${compact(addDays(endInclusive, 1))}`,
-      `SUMMARY:${esc(summary)}`,
-      ...(description ? [`DESCRIPTION:${esc(description)}`] : []),
+      `DTSTART;VALUE=DATE:${compactDate(start)}`,
+      `DTEND;VALUE=DATE:${compactDate(addDays(endInclusive, 1))}`,
+      `SUMMARY:${icsEscape(summary)}`,
+      ...(description ? [`DESCRIPTION:${icsEscape(description)}`] : []),
       "END:VEVENT",
     );
   };
@@ -38,7 +38,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/ics/[token]
     allDay(`plan-${day}`, day, day, `📚 Study plan (${Math.round(minutes / 6) / 10} h)`, list.map((t) => `${t.status === "done" ? "✓" : "•"} ${t.title} (${t.minutes} min)`).join("\n"));
   }
   lines.push("END:VCALENDAR");
-  return new Response(lines.join("\r\n"), {
+  return new Response(icsBody(lines), {
     headers: { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "no-cache" },
   });
 }

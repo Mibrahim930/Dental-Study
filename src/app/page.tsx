@@ -26,12 +26,13 @@ export default async function Home() {
        GROUP BY e.id ORDER BY COALESCE(e.exam_date, '9999') ASC, e.id DESC`,
     )
     .all(user.id) as ExamWithCounts[];
-  const isPast = (e: Exam) => e.status === "archived" || (daysUntil(e.exam_date) ?? 0) < 0;
-  const upcoming = exams.filter((e) => !isPast(e));
-  const past = exams.filter(isPast);
   ensurePlanFresh(user.id);
   const settings = plannerSettings(user.id);
+  // Countdowns use the student's own day (planner time zone), not the server's UTC clock.
   const today = todayIn(settings.timezone);
+  const isPast = (e: Exam) => e.status === "archived" || (daysUntil(e.exam_date, today) ?? 0) < 0;
+  const upcoming = exams.filter((e) => !isPast(e));
+  const past = exams.filter(isPast);
   const todayTasks = tasksOn(user.id, today, today) as TaskItem[];
   const warnings = JSON.parse(settings.warnings) as PlanWarning[];
   const due = countDue(user.id);
@@ -41,7 +42,7 @@ export default async function Home() {
   const minutesLeft = todayTasks.filter((t) => t.status === "todo").reduce((s, t) => s + t.minutes, 0);
   const nextTask = todayTasks.find((t) => t.status === "todo");
   const next = upcoming.find((e) => e.exam_date);
-  const nextDays = next ? daysUntil(next.exam_date) : null;
+  const nextDays = next ? daysUntil(next.exam_date, today) : null;
   const progress = next ? examProgress(user.id, next.id) : null;
   const name = firstName(user.email);
   const hello = `${greeting(settings.timezone)}${name ? ` ${name}` : ""},`;
@@ -154,7 +155,7 @@ export default async function Home() {
             <div className="card text-[15px] text-muted-foreground">No upcoming exams. Create one to start uploading lectures.</div>
           )}
           {upcoming.map((e) => (
-            <ExamBlock key={e.id} exam={e} />
+            <ExamBlock key={e.id} exam={e} today={today} />
           ))}
           {past.length > 0 && (
             <details className="group">
@@ -164,7 +165,7 @@ export default async function Home() {
               <p className="px-2 pt-3 text-sm text-muted-foreground">Their lectures, scores and review cards stay in memory and feed into new exams.</p>
               <div className="mt-2.5 flex flex-col gap-2.5 opacity-80">
                 {past.map((e) => (
-                  <ExamBlock key={e.id} exam={e} />
+                  <ExamBlock key={e.id} exam={e} today={today} />
                 ))}
               </div>
             </details>
@@ -284,8 +285,8 @@ function Welcome({ hello }: { hello: string }) {
   );
 }
 
-function ExamBlock({ exam }: { exam: ExamWithCounts }) {
-  const days = daysUntil(exam.exam_date);
+function ExamBlock({ exam, today }: { exam: ExamWithCounts; today: string }) {
+  const days = daysUntil(exam.exam_date, today);
   const processing = exam.pages > 0 && exam.done_pages < exam.pages;
   return (
     <Link href={`/exams/${exam.id}`} className={`flex flex-col gap-3.5 rounded-[28px] px-[22px] py-5 transition-transform active:scale-[.99] ${KIND_STYLE[exam.kind]}`}>
