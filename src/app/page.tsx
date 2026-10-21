@@ -5,7 +5,8 @@ import { weakConcepts } from "@/lib/memory";
 import { daysUntil, formatDate } from "@/lib/format";
 import { createExam } from "./actions";
 import { requireUser } from "@/lib/user";
-import { ensurePlanFresh, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
+import { ensurePlanFresh, missedSummary, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
+import { MissedBanner } from "@/components/PlanAdjust";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress, firstName } from "@/lib/readiness";
 import { PlanWarnings } from "@/components/PlanWarnings";
@@ -35,6 +36,7 @@ export default async function Home() {
   const past = exams.filter(isPast);
   const todayTasks = tasksOn(user.id, today, today) as TaskItem[];
   const warnings = JSON.parse(settings.warnings) as PlanWarning[];
+  const missed = missedSummary(user.id);
   const due = countDue(user.id);
   const weak = weakConcepts(user.id, 6);
 
@@ -135,6 +137,11 @@ export default async function Home() {
                   {minutesLeft > 0 && <span className="chip bg-muted text-foreground">{formatMinutes(minutesLeft)} left</span>}
                 </div>
                 <Strip total={todayTasks.length} filled={doneToday} className="px-1 pb-2" />
+                {missed.count > 0 && (
+                  <div className="pb-2">
+                    <MissedBanner count={missed.count} yesterdayOnly={missed.yesterdayOnly} />
+                  </div>
+                )}
                 <TaskList tasks={todayTasks} empty="Nothing planned today. Enjoy the break, or get ahead from the calendar." />
                 {warnings.length > 0 && (
                   <div className="mt-2 flex flex-col gap-2">

@@ -3,7 +3,8 @@ import { PlanWarnings } from "@/components/PlanWarnings";
 import { headers } from "next/headers";
 import { db, type Exam } from "@/lib/db";
 import { requireUser } from "@/lib/user";
-import { ensurePlanFresh, icsToken, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
+import { dayOverrides, ensurePlanFresh, icsToken, missedSummary, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
+import { DayHours, MissedBanner } from "@/components/PlanAdjust";
 import { countdown, crunchMessage, examsByDate, findCrunches, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, readinessTone, WEEKDAYS, ymd, type Tone } from "@/lib/calendar";
 import { examProgressMany } from "@/lib/readiness";
 import { daysUntil } from "@/lib/format";
@@ -58,6 +59,10 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const minutesByDay = new Map<string, number>();
   for (const t of tasks) minutesByDay.set(t.date, (minutesByDay.get(t.date) ?? 0) + t.minutes);
   const minutesOn = (d: string) => minutesByDay.get(d) ?? 0;
+  const overrides = dayOverrides(user.id, today);
+  const weekdayMinutes = JSON.parse(settings.weekday_minutes) as number[];
+  const usualMinutes = (d: string) => weekdayMinutes[(new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7] ?? 0;
+  const missed = missedSummary(user.id);
 
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
@@ -81,6 +86,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Month</Link>
           </div>
         </div>
+
+        <MissedBanner count={missed.count} yesterdayOnly={missed.yesterdayOnly} />
 
         {added > 0 && (
           <section role="status" className="tile cb-mint flex flex-col gap-1 rounded-[24px]">
@@ -195,7 +202,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                     <Link
                       key={j}
                       href={dayHref(d)}
-                      title={[...examsOn(d).map(examLabel), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : ""].filter(Boolean).join(" · ")}
+                      title={[...examsOn(d).map(examLabel), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : "", overrides.has(d) ? (overrides.get(d) === 0 ? "day off" : `${Math.round((overrides.get(d)! / 60) * 100) / 100} h set for this day`) : ""].filter(Boolean).join(" · ")}
                       className={`relative flex min-h-12 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[14px] p-1 text-[15px] font-bold sm:min-h-24 sm:items-start sm:justify-start sm:p-2 ${
                         ex ? KIND_STYLE[ex.kind] : isBusy.length ? "bg-stone text-on-stone" : d < today ? "bg-muted/50 text-subtle hover:bg-muted" : "bg-muted hover:bg-muted-strong"
                       } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
@@ -214,6 +221,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                           <span key={b.id} className="truncate text-[11px] font-semibold">{b.label}</span>
                         ))}
                         {study > 0 && <span className={`text-[11px] font-bold ${ex ? "opacity-80" : "text-primary"}`}>{Math.round(study / 6) / 10} h study</span>}
+                        {overrides.get(d) === 0 && isBusy.length === 0 && <span className="text-[11px] font-semibold text-muted-foreground">Day off</span>}
                       </span>
                       {study > 0 && !ex && <span className="h-1.5 w-1.5 rounded-full bg-hero sm:hidden" aria-hidden />}
                     </Link>
@@ -275,6 +283,9 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
               <SkipBusyButton id={b.id} date={selected} undo />
             </div>
           ))}
+          {selected >= today && busyOn(selected).length === 0 && (
+            <DayHours key={`${selected}-${overrides.get(selected) ?? "usual"}`} date={selected} usual={usualMinutes(selected)} override={overrides.get(selected) ?? null} />
+          )}
           <TaskList tasks={dayTasks} empty={selected < today ? "No study tasks this day." : "No study planned this day."} />
           <CalendarForms date={selected >= today ? selected : today} />
         </section>

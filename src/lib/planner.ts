@@ -32,6 +32,7 @@ export type PlannerSettings = {
   ics_token: string | null;
   warnings: string;
   rebuilt_on: string | null;
+  missed_seen_through: string | null;
 };
 
 /** An exam whose work doesn't all fit before it. Newer warnings also say what was left out and the extra time per day that would cover it. */
@@ -117,6 +118,8 @@ export function rebuildPlan(userId: number): PlanWarning[] {
   // One-off ranges and weekly repeats (minus skipped weeks), decided by the same helper the calendar and feed use.
   const busy = loadBusy(userId, today);
   const isBusy = (d: string) => busyOn(busy.rows, busy.skips, d).length > 0;
+  // "Study time this day" overrides (0 = day off) replace the weekday's usual hours; a busy day still wins.
+  const overrides = dayOverrides(userId, today);
   const doneToday = (db.prepare("SELECT COALESCE(SUM(minutes), 0) m FROM plan_tasks WHERE user_id = ? AND date = ? AND status = 'done'").get(userId, today) as {
     m: number;
   }).m;
@@ -124,7 +127,7 @@ export function rebuildPlan(userId: number): PlanWarning[] {
   const cap = new Map<string, number>();
   for (let d = today; d <= lastDay; d = addDays(d, 1)) {
     days.push(d);
-    let minutes = isBusy(d) ? 0 : (weekdayMinutes[weekday(d)] ?? 0);
+    let minutes = isBusy(d) ? 0 : (overrides.get(d) ?? weekdayMinutes[weekday(d)] ?? 0);
     if (d === today) minutes = Math.max(0, minutes - doneToday);
     cap.set(d, minutes);
   }
@@ -257,6 +260,72 @@ export function rebuildPlan(userId: number): PlanWarning[] {
     for (const t of out) insert.run(userId, t.date, t.exam_id, t.kind, t.topic_ids, t.minutes, t.title);
   })();
   return finish(warnings);
+}
+
+// ---- Per-day study time ----
+
+export const MAX_DAY_MINUTES = 16 * 60;
+
+/** Days with their own study time, from `from` on (date → minutes). */
+export function dayOverrides(userId: number, from: string): Map<string, number> {
+  return new Map(
+    (db.prepare("SELECT date, minutes FROM day_overrides WHERE user_id = ? AND date >= ?").all(userId, from) as { date: string; minutes: number }[]).map((r) => [
+      r.date,
+      r.minutes,
+    ]),
+  );
+}
+
+/** Set (or with null, clear) one day's study time, then re-plan. Minutes are clamped to 0–16 h. */
+export function setDayOverride(userId: number, date: string, minutes: number | null): PlanWarning[] {
+  if (minutes == null) db.prepare("DELETE FROM day_overrides WHERE user_id = ? AND date = ?").run(userId, date);
+  else {
+    const m = Math.min(MAX_DAY_MINUTES, Math.max(0, Math.round(minutes)));
+    db.prepare("INSERT INTO day_overrides (user_id, date, minutes) VALUES (?, ?, ?) ON CONFLICT(user_id, date) DO UPDATE SET minutes = excluded.minutes").run(userId, date, m);
+  }
+  return rebuildPlan(userId);
+}
+
+// ---- Missed tasks and "Re-plan from today" ----
+
+const MISSED_WINDOW_DAYS = 7;
+
+/** Missed tasks from the last week that she hasn't re-planned yet: how many, and whether they were all yesterday. */
+export function missedSummary(userId: number): { count: number; yesterdayOnly: boolean } {
+  const s = plannerSettings(userId);
+  const today = todayIn(s.timezone);
+  const yesterday = addDays(today, -1);
+  // Only the last week, and nothing up to the day she last pressed "Re-plan from today".
+  const floor = addDays(today, -MISSED_WINDOW_DAYS - 1);
+  const since = s.missed_seen_through && s.missed_seen_through > floor ? s.missed_seen_through : floor;
+  const rows = db
+    .prepare("SELECT date FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND date > ? AND date < ?")
+    .all(userId, since, today) as { date: string }[];
+  return { count: rows.length, yesterdayOnly: rows.length > 0 && rows.every((r) => r.date === yesterday) };
+}
+
+/**
+ * "Re-plan from today": rebuild now (missed topics go back into the coming days), mark the missed tasks as dealt with so
+ * the note goes away, and say what came back.
+ */
+export function replanFromToday(userId: number): { warnings: PlanWarning[]; topicsBack: number; message: string } {
+  const s = plannerSettings(userId);
+  const today = todayIn(s.timezone);
+  const missedLearn = db
+    .prepare("SELECT topic_ids FROM plan_tasks WHERE user_id = ? AND status = 'missed' AND kind = 'learn' AND date >= ? AND date < ?")
+    .all(userId, addDays(today, -MISSED_WINDOW_DAYS - 1), today) as { topic_ids: string }[];
+  const warnings = rebuildPlan(userId);
+  db.prepare("UPDATE planner_settings SET missed_seen_through = ? WHERE user_id = ?").run(addDays(today, -1), userId);
+  const missedTopics = new Set(missedLearn.flatMap((t) => JSON.parse(t.topic_ids) as number[]));
+  const planned = new Set(
+    (db.prepare("SELECT topic_ids FROM plan_tasks WHERE user_id = ? AND status = 'todo' AND kind = 'learn' AND date >= ?").all(userId, today) as { topic_ids: string }[]).flatMap(
+      (t) => JSON.parse(t.topic_ids) as number[],
+    ),
+  );
+  const topicsBack = [...missedTopics].filter((id) => planned.has(id)).length;
+  const back = topicsBack ? `${topicsBack} missed ${topicsBack === 1 ? "topic is" : "topics are"} back in your plan.` : "Your plan now starts from today.";
+  const tight = warnings.length ? ` Not everything fits before ${warnings.map((w) => w.examName).join(" and ")}; the note on the calendar says what to do.` : "";
+  return { warnings, topicsBack, message: `Done. ${back}${tight}` };
 }
 
 /** Rebuild once a day (missed tasks roll forward) — call from pages the student visits. */

@@ -32,6 +32,9 @@ describe("calendar release database upgrade", () => {
     });
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
     expect(tables).toContain("busy_skips");
+    expect(tables).toContain("day_overrides");
+    const plannerCols = (db.prepare("PRAGMA table_info(planner_settings)").all() as { name: string }[]).map((c) => c.name);
+    expect(plannerCols).toContain("missed_seen_through");
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 });

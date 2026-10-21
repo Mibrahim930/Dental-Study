@@ -231,7 +231,16 @@ CREATE TABLE IF NOT EXISTS planner_settings (
   timezone TEXT NOT NULL DEFAULT 'America/New_York',
   ics_token TEXT,
   warnings TEXT NOT NULL DEFAULT '[]',             -- JSON: exams the plan couldn't fully fit
-  rebuilt_on TEXT
+  rebuilt_on TEXT,
+  missed_seen_through TEXT                         -- "Re-plan from today" pressed: missed tasks up to this date are dealt with
+);
+
+-- Study time for one particular day, instead of the usual for that weekday (0 = day off).
+CREATE TABLE IF NOT EXISTS day_overrides (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  minutes INTEGER NOT NULL,
+  PRIMARY KEY (user_id, date)
 );
 
 -- Topics the student has worked through in a study session (drives the planner).
@@ -359,6 +368,8 @@ function migrate(db: Database.Database) {
   }
   const busyCols = columns(db, "busy_days");
   if (busyCols.length && !busyCols.includes("weekdays")) db.exec("ALTER TABLE busy_days ADD COLUMN weekdays INTEGER");
+  const plannerCols = columns(db, "planner_settings");
+  if (plannerCols.length && !plannerCols.includes("missed_seen_through")) db.exec("ALTER TABLE planner_settings ADD COLUMN missed_seen_through TEXT");
   if (!columns(db, "glossary").includes("user_id")) {
     db.exec(`
       CREATE TABLE glossary_new (user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, abbr TEXT NOT NULL COLLATE NOCASE, meaning TEXT NOT NULL, UNIQUE(user_id, abbr));
