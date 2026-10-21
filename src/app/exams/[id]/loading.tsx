@@ -6,17 +6,18 @@ export default function Loading() {
         Loading the exam…
       </span>
       <div className="flex items-center justify-between gap-3 px-1">
-        <div className="shimmer h-6 w-24" />
-        <div className="shimmer h-[38px] w-24 rounded-xl" />
+        <div className="shimmer h-6 w-24 bg-muted-strong" />
+        <div className="shimmer h-[38px] w-24 rounded-xl bg-muted-strong" />
       </div>
 
-      <section className="flex flex-col gap-5 rounded-[32px] bg-muted p-6 sm:flex-row sm:items-center sm:justify-between sm:rounded-[36px] sm:p-8">
+      {/* bg-card: the page background is the muted colour, so a muted block would vanish in light themes. */}
+      <section className="flex flex-col gap-5 rounded-[32px] border border-[var(--card-border)] bg-card p-6 sm:flex-row sm:items-center sm:justify-between sm:rounded-[36px] sm:p-8">
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-          <div className="shimmer h-4 w-28 bg-muted-strong" />
-          <div className="shimmer h-10 w-3/4 bg-muted-strong sm:h-12" />
-          <div className="shimmer h-4 w-40 bg-muted-strong" />
+          <div className="shimmer h-4 w-28" />
+          <div className="shimmer h-10 w-3/4 sm:h-12" />
+          <div className="shimmer h-4 w-40" />
         </div>
-        <div className="shimmer h-28 w-28 shrink-0 rounded-full bg-muted-strong" />
+        <div className="shimmer h-28 w-28 shrink-0 rounded-full" />
       </section>
 
       <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">

@@ -7,8 +7,8 @@ export default function Loading() {
       </span>
       <section className="min-w-0 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="shimmer h-10 w-48" />
-          <div className="shimmer h-9 w-32 rounded-lg" />
+          <div className="shimmer h-10 w-48 bg-muted-strong" />
+          <div className="shimmer h-9 w-32 rounded-lg bg-muted-strong" />
         </div>
         <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">
           {Array.from({ length: 12 }, (_, i) => (

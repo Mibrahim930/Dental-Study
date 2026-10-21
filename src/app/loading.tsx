@@ -21,9 +21,10 @@ export default function Loading() {
           <div className="shimmer h-[54px] w-full rounded-[18px] bg-white/15" />
         </section>
         <div className="grid grid-cols-3 gap-2.5 lg:grid-cols-1 lg:gap-4">
-          <div className="tile shimmer h-28 rounded-[26px]" />
-          <div className="tile shimmer h-28 rounded-[26px]" />
-          <div className="tile shimmer h-28 rounded-[26px]" />
+          {/* bg-card: the page background is the muted colour, so plain shimmers would vanish in light themes. */}
+          <div className="tile shimmer h-28 rounded-[26px] bg-card" />
+          <div className="tile shimmer h-28 rounded-[26px] bg-card" />
+          <div className="tile shimmer h-28 rounded-[26px] bg-card" />
         </div>
       </div>
       <div className="grid gap-2.5 sm:gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -33,8 +34,8 @@ export default function Loading() {
             <div className="shimmer h-14 w-full" />
             <div className="shimmer h-14 w-full" />
           </section>
-          <div className="shimmer h-[118px] w-full rounded-[28px]" />
-          <div className="shimmer h-[118px] w-full rounded-[28px]" />
+          <div className="shimmer h-[118px] w-full rounded-[28px] bg-card" />
+          <div className="shimmer h-[118px] w-full rounded-[28px] bg-card" />
         </div>
         <aside className="card flex flex-col gap-3">
           <div className="shimmer h-7 w-32" />

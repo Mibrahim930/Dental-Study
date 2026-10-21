@@ -6,15 +6,15 @@ export default function Loading() {
         Loading the practice exam…
       </span>
       <div className="flex items-center justify-between gap-2 px-1">
-        <div className="shimmer h-6 w-36" />
-        <div className="shimmer h-[38px] w-28 rounded-xl" />
+        <div className="shimmer h-6 w-36 bg-muted-strong" />
+        <div className="shimmer h-[38px] w-28 rounded-xl bg-muted-strong" />
       </div>
       <div className="px-1">
-        <div className="shimmer h-8 w-64 max-w-full" />
+        <div className="shimmer h-8 w-64 max-w-full bg-muted-strong" />
       </div>
       <div className="flex flex-wrap gap-1.5 px-1">
         {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
-          <div key={i} className="shimmer h-9 w-9 rounded-[11px]" />
+          <div key={i} className="shimmer h-9 w-9 rounded-[11px] bg-muted-strong" />
         ))}
       </div>
       <section className="card flex flex-col gap-3">
@@ -26,8 +26,8 @@ export default function Loading() {
         ))}
       </section>
       <div className="grid grid-cols-[1fr_2fr] gap-2">
-        <div className="shimmer h-[54px] rounded-[18px]" />
-        <div className="shimmer h-[54px] rounded-[18px]" />
+        <div className="shimmer h-[54px] rounded-[18px] bg-muted-strong" />
+        <div className="shimmer h-[54px] rounded-[18px] bg-muted-strong" />
       </div>
     </div>
   );

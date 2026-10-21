@@ -6,10 +6,10 @@ export default function Loading() {
         Opening your study session…
       </span>
       <div className="flex items-center justify-between gap-3 px-1">
-        <div className="shimmer h-6 w-40" />
-        <div className="shimmer h-[38px] w-28 rounded-xl" />
+        <div className="shimmer h-6 w-40 bg-muted-strong" />
+        <div className="shimmer h-[38px] w-28 rounded-xl bg-muted-strong" />
       </div>
-      <div className="shimmer h-2 w-full rounded-full lg:hidden" />
+      <div className="shimmer h-2 w-full rounded-full lg:hidden bg-muted-strong" />
 
       <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,1fr)_380px]">
         <div className="card hidden flex-col gap-2 p-2.5 lg:flex">
@@ -30,8 +30,8 @@ export default function Loading() {
             <div className="shimmer h-40 w-full" />
           </section>
           <div className="grid grid-cols-[1fr_2fr] gap-2">
-            <div className="shimmer h-[54px] rounded-[18px]" />
-            <div className="shimmer h-[54px] rounded-[18px]" />
+            <div className="shimmer h-[54px] rounded-[18px] bg-muted-strong" />
+            <div className="shimmer h-[54px] rounded-[18px] bg-muted-strong" />
           </div>
         </div>
 

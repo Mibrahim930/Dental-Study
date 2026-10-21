@@ -822,6 +822,7 @@ function TutorChat({
         acc += decoder.decode(value, { stream: true });
         if (!frame) frame = requestAnimationFrame(show);
       }
+      acc += decoder.decode(); // any bytes held back from a character split across the last chunk
     } catch {
       // Connection dropped (offline, or the server went away mid-reply): say so in the bubble instead of hanging.
       acc += `${acc ? "\n\n" : ""}_(The tutor couldn't be reached. Check your connection and try again.)_`;
