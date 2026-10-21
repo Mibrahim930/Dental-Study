@@ -9,6 +9,10 @@ export async function register() {
       const { dropForeignQuestions } = await import("./lib/practice");
       const n = dropForeignQuestions();
       if (n) console.log(`Removed ${n} unanswered question(s) from other exams out of practice exams in progress`);
+      // Questions written before pictures were enforced: give them their slide's picture, or take them out.
+      const { repairPictureQuestions } = await import("./lib/questionImage");
+      const fixed = repairPictureQuestions();
+      if (fixed) console.log(`Repaired ${fixed} question(s) that mentioned a picture without showing one`);
     } catch (err) {
       console.error("Cleaning other exams' questions out of open practice exams failed", err);
     }

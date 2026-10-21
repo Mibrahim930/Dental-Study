@@ -8,6 +8,7 @@ import { recentSummaries, searchLibrary, topicConcepts, upsertConcept, weakConce
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, normStem, planQuiz, type Angle } from "./quizPlan";
 import { EXAM_STYLE, EXAM_STYLE_CHECK } from "./examStyle";
+import { markPictures, mentionsPicture, pictureFor, PICTURE_RULES } from "./questionImage";
 
 export const Lesson = z.object({
   explanation: z
@@ -41,6 +42,10 @@ const SectionQuiz = z.object({
       correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
       explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
       source_page_id: z.number().describe("The [P…] id of the slide this question tests"),
+      image_page_id: z
+        .number()
+        .nullable()
+        .describe("Only when the question refers to a picture: the [P…] id of a slide marked [IMAGE] or [IMAGE-CASE] whose picture the student will see. Otherwise null"),
       concept: z.string().describe("The concept tested; use one of the listed concept names when one fits"),
     }),
   ),
@@ -66,6 +71,8 @@ export type QuizQuestion = {
   explanation: string;
   concept: string;
   source_page_id?: number | null;
+  /** Slide whose picture is shown with the question (cropped to the clinical image when the notes marked one). */
+  image_page_id?: number | null;
   kind?: Angle;
   /** Reported by the student: not shown again in this copy of the exam. */
   hidden?: boolean;
@@ -173,11 +180,13 @@ You are given a numbered list of planned questions: each names the slide it must
 - Use "EXCEPT"/"NOT" only when the angle says so. Don't test citations, authors, years or slide numbers.
 - When one slide has several planned questions, each tests a different fact or takes a clearly different angle. Never write the same question twice.
 - The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).
+- ${PICTURE_RULES}
 
 ${EXAM_STYLE}`;
 
 const JUDGE_SYSTEM = `You check quiz questions written for a dental student against their lecture slides. Be strict but fair.
 For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
+A question marked "picture shown: slide P" shows the student that slide's picture (the whole slide unless the notes mark a clinical-image crop): mark it ok = false if the answer is printed on that slide in a way the student would simply read off.
 ${EXAM_STYLE_CHECK}`;
 
 type Draft = Omit<QuizQuestion, "id" | "hidden" | "report_note"> & { slot: number };
@@ -196,7 +205,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const creds = credentials(userId);
   const concepts = topicConcepts(topic.id, topic.exam_id);
   const pages = topicPages(topic);
-  const notes = slideNotesText(pages);
+  const notes = markPictures(slideNotesText(pages), pages);
   const valid = new Set(pages.map((p) => p.id));
   const slots = planQuiz(
     pages.map((p) => {
@@ -236,7 +245,21 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       // The question must test one of this topic's slides (any slide works when the topic has none).
       const page = valid.size === 0 ? null : valid.has(q.source_page_id) ? q.source_page_id : null;
       if (valid.size > 0 && page == null) continue;
-      drafts.push({ slot, question: q.question, options: q.options, correct_index: correct, explanation: q.explanation, concept: q.concept, source_page_id: page, kind: slots[slot].angle });
+      // A question that talks about a picture must have one to show (the slide it names, or the slide it tests).
+      const wantsPicture = q.image_page_id != null || mentionsPicture(q.question);
+      const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page) : null;
+      if (wantsPicture && !picture) continue;
+      drafts.push({
+        slot,
+        question: q.question,
+        options: q.options,
+        correct_index: correct,
+        explanation: q.explanation,
+        concept: q.concept,
+        source_page_id: page,
+        image_page_id: picture?.page_id ?? null,
+        kind: slots[slot].angle,
+      });
     }
     return drafts;
   };
@@ -257,7 +280,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
             (d, i) =>
               `${i + 1}. ${d.question}\n${d.options.map((o, k) => `   ${String.fromCharCode(65 + k)}. ${o}`).join("\n")}\n   Keyed answer: ${String.fromCharCode(65 + d.correct_index)}${
                 d.source_page_id != null ? ` (slide P${d.source_page_id})` : ""
-              }`,
+              }${d.image_page_id != null ? ` (picture shown: slide P${d.image_page_id})` : ""}`,
           )
           .join("\n\n")}`,
       });

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SlideImage } from "./SlideImage";
+import { SlideImage, type CropBox } from "./SlideImage";
 import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
@@ -31,6 +31,8 @@ type QuizQ = {
   correct_index: number;
   explanation: string;
   concept: string;
+  /** The picture the question is about, if any: shown cropped to the clinical image until answered, then whole. */
+  image?: { page_id: number; aspect: number; crop: CropBox | null } | null;
   /** Reported earlier: skipped. Its place in the list (and the answer numbering) stays. */
   hidden?: boolean;
 };
@@ -569,6 +571,11 @@ function QuizBody({
     setMarks((m) => ({ ...m, crossed: m.crossed.includes(i) ? m.crossed.filter((x) => x !== i) : [...m.crossed, i].sort() }));
   return (
     <>
+      {q.image && (
+        <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
+          <SlideImage pageId={q.image.page_id} aspect={q.image.aspect} crop={answered ? null : q.image.crop} alt="Picture for this question" />
+        </figure>
+      )}
       <p className="px-1 text-[18px] leading-snug font-bold">
         <Highlightable text={q.question} ranges={marks.hl.stem ?? []} onChange={setHl("stem")} />
       </p>

@@ -25,6 +25,7 @@ import {
 import { credentials } from "./credentials";
 import { examOwner } from "./db";
 import { EXAM_STYLE } from "./examStyle";
+import { markPictures, mentionsPicture, pictureFor, pictureOf, PICTURE_RULES } from "./questionImage";
 
 export type Style = "mixed" | "recall" | "case" | "caseset";
 export type Mode = "tutor" | "timed";
@@ -37,7 +38,7 @@ const GeneratedQuestions = z.object({
       image_page_id: z
         .number()
         .nullable()
-        .describe("For type=image: the ID of the [IMAGE-CASE] slide whose clinical image the question shows. Otherwise null"),
+        .describe("For a question about a picture: the ID of a slide marked [IMAGE] or [IMAGE-CASE] whose picture the student will see. Otherwise null"),
       patient_box: z
         .object({
           patient: z.string().describe("Age, sex"),
@@ -65,7 +66,8 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 - Single best answer, 5 options.
 - type=recall: a direct question testing one fact or relationship.
 - type=case: INBDE style. Fill patient_box with a realistic patient (chief complaint, medical history, medications, allergies, dental history, findings), then ask about diagnosis, next step, or treatment.
-- type=image: only for slides marked [IMAGE-CASE]. The student will see only the clinical image from that slide (radiograph/photo), not its text. Write the stem to describe the scenario without giving away the answer.
+- type=image: a question about a picture (radiograph, clinical photo, diagram). Set image_page_id to the slide whose picture the student sees, and write the stem to describe the scenario without giving away the answer.
+- ${PICTURE_RULES}
 - Slides marked ★IMPORTANT were emphasized by the professor: when the topic has any, at least a third of the questions must test them. Also prioritize annotated slides. Do not test trivia like citations or years.
 - Every fact in the question and explanation must be supported by the slides.
 
@@ -493,7 +495,8 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[], o
 async function generateForTopic(topic: Topic, count: number, style: Style, focus: FocusPoint[], only: PageFilter = null): Promise<number[]> {
   const userId = examOwner(topic.exam_id);
   const pages = pagesFor(topic, only);
-  const imageCases = pages.filter((p) => parseNotes(p)?.case_image_box);
+  // Slides with a picture the student can be shown (a clinical-image crop, or the whole slide).
+  const withPictures = pages.filter((p) => pictureOf(p));
   const concepts = (
     db.prepare("SELECT c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(topic.id) as {
       name: string;
@@ -504,12 +507,10 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     style === "recall"
       ? `all ${count} type=recall`
       : style === "case"
-        ? `mostly type=case${imageCases.length ? ", plus type=image where an [IMAGE-CASE] slide fits" : ""}, at most 1 recall`
-        : `a mix: about 60% recall, 25% case${imageCases.length ? ", 15% image" : ""}`;
+        ? `mostly type=case${withPictures.length ? ", plus type=image where a slide marked [IMAGE] or [IMAGE-CASE] fits" : ""}, at most 1 recall`
+        : `a mix: about 60% recall, 25% case${withPictures.length ? ", 15% image" : ""}`;
 
-  const notes = markCoverage(slideNotesText(pages), topic.id).replace(/\[P(\d+)\]/g, (m, id) =>
-    imageCases.some((p) => p.id === Number(id)) ? `${m} [IMAGE-CASE]` : m,
-  );
+  const notes = markCoverage(markPictures(slideNotesText(pages), pages), topic.id);
   const asked = askedStems(topic.id);
 
   const out = await generate({
@@ -527,7 +528,6 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
   });
 
   const valid = new Set(pages.map((p) => p.id));
-  const imageIds = new Set(imageCases.map((p) => p.id));
   const insert = db.prepare(
     `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -543,7 +543,11 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     if (!isValidChoice(q.options, q.correct_index)) continue;
     if (seen.has(norm(q.stem))) continue;
     seen.add(norm(q.stem));
-    const imagePage = q.type === "image" && q.image_page_id != null && imageIds.has(q.image_page_id) ? q.image_page_id : null;
+    // A question about a picture must have one to show: the slide it names, else the slide it was written from.
+    const wantsPicture = q.type === "image" || q.image_page_id != null || mentionsPicture(q.stem);
+    const picture = wantsPicture ? pictureFor(pages, q.image_page_id, valid.has(q.source_page_id) ? q.source_page_id : null) : null;
+    if (wantsPicture && !picture) continue;
+    const imagePage = picture?.page_id ?? null;
     const type = q.type === "image" && !imagePage ? (q.patient_box ? "case" : "recall") : q.type;
     // Shuffle options so the correct answer isn't biased to one position.
     const order = shuffle(q.options.map((_, i) => i));

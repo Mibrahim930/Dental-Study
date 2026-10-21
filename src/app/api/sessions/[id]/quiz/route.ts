@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
 import { getSectionQuiz } from "@/lib/study";
+import { pictureForIds } from "@/lib/questionImage";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
 
@@ -19,7 +20,12 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
   if (!topic) return notFound();
 
   try {
-    const questions = await getSectionQuiz(topic);
+    // Each question carries its picture (if it has one) the way practice-exam questions do: cropped before the answer, whole slide after.
+    const questions = (await getSectionQuiz(topic)).map((q) => {
+      const image = q.image_page_id != null ? pictureForIds(q.image_page_id, null) : null;
+      // A picture question whose slide is gone (lecture removed) has nothing to show: skip it like a reported one.
+      return { ...q, image, hidden: q.hidden || (q.image_page_id != null && !image) || undefined };
+    });
     const answered = Object.fromEntries(
       (
         db
