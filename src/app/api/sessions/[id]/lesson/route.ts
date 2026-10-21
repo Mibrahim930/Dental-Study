@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
-import { getLesson, topicPages } from "@/lib/study";
+import { getLesson, getSectionQuiz, quizIsCurrent, topicPages } from "@/lib/study";
 import { parseNotes } from "@/lib/processing";
 import { markTopicStudied } from "@/lib/planner";
 import { topicConcepts } from "@/lib/memory";
@@ -24,6 +24,13 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
   if (!prefetch) {
     db.prepare("UPDATE study_sessions SET current_position = ? WHERE id = ?").run(position, sessionId);
     markTopicStudied(user.id, topic.id);
+    // Start writing this topic's section quiz now, alongside the lesson, instead of after it (saves ~30 s on a first
+    // open). The quiz request the page sends once the lesson shows joins this same run (getSectionQuiz shares one
+    // generation per topic). Only for the topic she actually opened, never for a prefetch: a cached quiz costs nothing,
+    // and the next topic's quiz isn't written until she goes there.
+    if (!quizIsCurrent(topic)) {
+      void getSectionQuiz(topic).catch((err) => console.error(`Section quiz for topic ${topic.id} (started with the lesson) failed`, err));
+    }
   }
 
   try {
