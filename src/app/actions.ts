@@ -1,9 +1,10 @@
 "use server";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
+import { refresh, revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/user";
 import { rebuildPlan } from "@/lib/planner";
+import { isValidDate } from "@/lib/calendar";
 import type { ExamKind } from "@/lib/db";
 import { themeOf } from "@/lib/themes";
 
@@ -43,6 +44,23 @@ export async function updateExam(id: number, formData: FormData) {
   );
   rebuildPlan(user.id);
   revalidatePath(`/exams/${id}`);
+}
+
+/**
+ * Give a dateless exam its date from the calendar's "Exams without a date" list (same update and re-plan as updateExam,
+ * date only). Used with useActionState: returns an error message, or null when saved.
+ */
+export async function setExamDate(_prev: { error: string } | null, formData: FormData): Promise<{ error: string } | null> {
+  const user = await requireUser();
+  const id = Number(formData.get("id"));
+  const date = String(formData.get("exam_date") ?? "").trim();
+  if (!isValidDate(date)) return { error: "Pick a date first." };
+  const changed = db.prepare("UPDATE exams SET exam_date = ? WHERE id = ? AND user_id = ?").run(date, id, user.id).changes;
+  if (!changed) return { error: "That exam couldn't be found. Reload the page and try again." };
+  rebuildPlan(user.id);
+  revalidatePath("/");
+  refresh();
+  return null;
 }
 
 export async function setArchived(id: number, archived: boolean) {

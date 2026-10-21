@@ -8,6 +8,7 @@ import { examsByDate, formatDay, KIND_LABEL, KIND_STYLE, MONTHS, monthWeeks, WEE
 import { TaskList } from "@/components/TaskList";
 import { CalendarForms, DeleteBusyButton } from "@/components/CalendarForms";
 import { CalendarSyncLink, PlannerSettingsForm } from "@/components/PlannerSettingsForm";
+import { UndatedExams } from "@/components/UndatedExams";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const to = month != null ? ymd(year, month, new Date(Date.UTC(year, month + 1, 0)).getUTCDate()) : `${year}-12-31`;
   // Archived exams are finished with: like the planner, the calendar leaves them out.
   const exams = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NOT NULL AND status = 'active' ORDER BY exam_date, id").all(user.id) as Exam[];
+  const undated = db.prepare("SELECT * FROM exams WHERE user_id = ? AND exam_date IS NULL AND status = 'active' ORDER BY id").all(user.id) as Exam[];
   const busy = db.prepare("SELECT * FROM busy_days WHERE user_id = ? ORDER BY start_date").all(user.id) as Busy[];
   const tasks = tasksOn(user.id, from < today ? from : today, to);
   const dayTasks = tasksOn(user.id, selected, selected);
@@ -62,6 +64,8 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Month</Link>
           </div>
         </div>
+
+        <UndatedExams exams={undated.map((e) => ({ id: e.id, name: e.name, kindLabel: KIND_LABEL[e.kind], course: e.course }))} today={today} />
 
         {month == null ? (
           <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">

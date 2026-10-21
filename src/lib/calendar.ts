@@ -32,6 +32,15 @@ export function monthWeeks(year: number, month: number): (string | null)[][] {
   return Array.from({ length: cells.length / 7 }, (_, w) => cells.slice(w * 7, w * 7 + 7));
 }
 
+/** A real calendar date written YYYY-MM-DD between 2000 and 2100 (so 2026-02-30 or 0026-11-04 don't pass). */
+export function isValidDate(s: unknown): s is string {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const y = Number(s.slice(0, 4));
+  if (y < 2000 || y > 2100) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
 /** Exams grouped by their date (dateless ones left out), keeping the given order within a day. */
 export function examsByDate<T extends { exam_date: string | null }>(exams: T[]): Map<string, T[]> {
   const out = new Map<string, T[]>();
