@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type QuizOut = { slot: number; question: string; options: string[]; correct_index: number; correct_answer: string; explanation: string; source_page_id: number; image_page_id: number | null; concept: string };
 let quizWriter: (slots: { n: number; page: number }[]) => QuizOut[] = () => [];
 let practiceWriter: (content: string) => unknown[] = () => [];
+/** Question texts the mocked checking pass says need a picture. */
+let judgePicture: (question: string) => boolean = () => false;
 const systems: Record<string, string> = {};
 vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
@@ -14,8 +16,8 @@ vi.mock("@/lib/ai", async (orig) => ({
       return { questions: quizWriter(slots) };
     }
     if (opts.purpose === "section quiz check") {
-      const n = (opts.content.match(/^\d+\. /gm) ?? []).length;
-      return { verdicts: Array.from({ length: n }, (_, i) => ({ n: i + 1, ok: true, reason: "" })) };
+      const stems = [...opts.content.matchAll(/^\d+\. (.*)$/gm)].map((m) => m[1]);
+      return { verdicts: stems.map((t, i) => ({ n: i + 1, ok: true, picture: judgePicture(t), reason: "" })) };
     }
     if (opts.purpose === "practice questions") return { questions: practiceWriter(opts.content) };
     throw new Error("unexpected " + opts.purpose);
@@ -34,7 +36,7 @@ vi.mock("@/lib/user", async (orig) => ({
 import { db, type Topic } from "@/lib/db";
 import { getSectionQuiz, type QuizQuestion } from "@/lib/study";
 import { startAttempt } from "@/lib/practice";
-import { markPictures, mentionsPicture, pictureFor, repairPictureQuestions } from "@/lib/questionImage";
+import { markPictures, mentionsPicture, pictureFor, pictureForIds, repairPictureQuestions, slideNumberIn } from "@/lib/questionImage";
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { makeUser } from "./helpers";
@@ -87,6 +89,7 @@ const q = (slot: number, page: number, text: string, image: number | null): Quiz
 beforeEach(() => {
   quizWriter = () => [];
   practiceWriter = () => [];
+  judgePicture = () => false;
 });
 
 describe("helpers", () => {
@@ -103,6 +106,17 @@ describe("helpers", () => {
       "On the X-ray shown, which tooth?",
       "In the figure, what is marked?",
       "Identify the structure in this diagram.",
+      // The two stems a student reported showing up without their picture.
+      "In the slide's diagram, which tooth surfaces are labeled 'gp' and distinguished from the dotted occlusal line?",
+      "On slide 32's diagram, the planes on adjacent teeth are drawn to show what?",
+      "Which structure is labeled 'gp'?",
+      "What does the dotted line represent?",
+      "Identify the structure marked X.",
+      "What is the radiolucency indicated by the arrow?",
+      "The shaded area on the tooth represents what?",
+      "The structure circled in red is?",
+      "On this slide, which rest seat is shown?",
+      "Refer to the figure. Which structure is labeled A?",
     ])
       expect(mentionsPicture(t), t).toBe(true);
     // Ordinary text questions that merely use the words: these must keep their place.
@@ -116,8 +130,14 @@ describe("helpers", () => {
       "The apical constriction lies how far from the radiographic apex?",
       "A periapical radiograph will typically demonstrate which finding in asymptomatic apical periodontitis?",
       "Which figure best approximates the prevalence of TMJ clicking?",
+      "Chronic periodontitis is marked by attachment loss. Which is true?",
+      "The tooth marked as the abutment must have what?",
+      "A patient has a red line along the gingival margin. What is it?",
     ])
       expect(mentionsPicture(t), t).toBe(false);
+    expect(slideNumberIn("On slide 32's diagram, what is drawn?")).toBe(32);
+    expect(slideNumberIn("See slide #7.")).toBe(7);
+    expect(slideNumberIn("In the slide's diagram")).toBeNull();
   });
 
   it("picks the named slide's picture, else the source slide's, else none; crops only when the notes marked one", () => {
@@ -127,27 +147,45 @@ describe("helpers", () => {
     expect(pictureFor(pages, null, w.photo)).toEqual({ page_id: w.photo, aspect: 1.5, crop: null });
     expect(pictureFor(pages, w.plain, w.plain)).toBeNull();
     expect(pictureFor(pages, 999999, null)).toBeNull();
+    // Given the question text, a question that needs a picture gets the whole slide when none is marked...
+    expect(pictureFor(pages, null, w.plain, "Based on the image below, which canal is widest?")).toEqual({ page_id: w.plain, aspect: 1.5, crop: null });
+    expect(pictureFor(pages, 999999, null, "Based on the image below")).toBeNull();
+    // ...and the slide the text names by number wins over the slide the question was written from.
+    const numbered = db.prepare(`SELECT id, aspect, notes_json, page_number FROM pages WHERE id IN (${[w.plain, w.photo, w.cropped].join(",")})`).all() as never[];
+    expect(pictureFor(numbered, null, w.plain, "On slide 2's radiograph, where is the lesion?")).toEqual({ page_id: w.photo, aspect: 1.5, crop: null });
+    expect(pictureFor(numbered, null, w.plain, "On slide 9's radiograph, where is the lesion?")).toEqual({ page_id: w.plain, aspect: 1.5, crop: null });
+    // A stored image_page_id is always shown, whole when the notes marked nothing.
+    expect(pictureForIds(w.plain, null)).toEqual({ page_id: w.plain, aspect: 1.5, crop: null });
+    expect(pictureForIds(w.cropped, null)?.crop).not.toBeNull();
+    expect(pictureForIds(null, w.plain)).toBeNull();
     const marked = markPictures(`[P${w.plain}] a\n[P${w.photo}] b\n[P${w.cropped}] c`, pages);
     expect(marked).toBe(`[P${w.plain}] a\n[P${w.photo}] [IMAGE] b\n[P${w.cropped}] [IMAGE-CASE] c`);
   });
 });
 
 describe("section quiz", () => {
-  it("keeps the picture the writer named, falls back to the tested slide's picture, and drops picture talk with no picture", async () => {
+  it("keeps the picture the writer named, falls back to the tested slide's picture, and shows the whole slide for picture talk with no marked picture", async () => {
     const w = world();
     currentUserId = w.userId;
     quizWriter = (slots) =>
       slots.map((s, i) => {
         if (i === 0) return q(s.n, w.cropped, "In the clinical photo shown, what is the swelling?", w.cropped); // named
         if (i === 1) return q(s.n, w.photo, "What does the radiograph show at tooth #19?", null); // falls back to its slide
-        if (i === 2) return q(s.n, w.plain, "Based on the image below, which canal is widest?", null); // nothing to show
+        if (i === 2) return q(s.n, w.plain, "Based on the image below, which canal is widest?", null); // no marked picture: the whole slide
+        if (i === 3) return q(s.n, w.plain, "In the slide's diagram, which surfaces are labeled 'gp'?", null); // the reported wording
+        if (i === 4) return q(s.n, w.plain, "On slide 2's diagram, the planes are drawn to show what?", null); // names slide 2
+        if (i === 5) return q(s.n, 999999, "On slide 9's diagram, what is drawn?", null); // not one of the topic's slides
         return q(s.n, s.page, `Plain question ${s.n}`, null);
       });
     const quiz = await getSectionQuiz(w.topic());
     const byText = (t: string) => quiz.find((x) => x.question.startsWith(t));
     expect(byText("In the clinical photo")?.image_page_id).toBe(w.cropped);
     expect(byText("What does the radiograph")?.image_page_id).toBe(w.photo);
-    expect(byText("Based on the image below")).toBeUndefined();
+    expect(byText("Based on the image below")?.image_page_id).toBe(w.plain);
+    expect(byText("In the slide's diagram")?.image_page_id).toBe(w.plain);
+    expect(byText("On slide 2's diagram")?.image_page_id).toBe(w.photo);
+    expect(byText("On slide 9's diagram")).toBeUndefined();
+    expect(systems["section quiz check"]).toContain("picture = true");
     expect(quiz.filter((x) => x.question.startsWith("Plain")).every((x) => x.image_page_id == null)).toBe(true);
     expect(systems["section quiz"]).toContain("[IMAGE-CASE]");
     expect(systems["section quiz check"]).toContain("picture shown");
@@ -158,7 +196,23 @@ describe("section quiz", () => {
     const shown = json.questions.find((x) => x.question.startsWith("In the clinical photo"))!;
     expect(shown.image).toEqual({ page_id: w.cropped, aspect: 1.5, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 } });
     expect(json.questions.find((x) => x.question.startsWith("What does the radiograph"))!.image).toEqual({ page_id: w.photo, aspect: 1.5, crop: null });
+    expect(json.questions.find((x) => x.question.startsWith("Based on the image below"))!.image).toEqual({ page_id: w.plain, aspect: 1.5, crop: null });
     expect(json.questions.find((x) => x.question.startsWith("Plain"))!.image).toBeNull();
+  });
+
+  it("the checking pass catches picture wording the detector misses: the question gets its slide's picture or goes", async () => {
+    const w = world();
+    quizWriter = (slots) =>
+      slots.map((s, i) => {
+        if (i === 0) return q(s.n, w.photo, "Which tooth has the lesion?", null); // reads as text, but the checker says it needs the picture
+        if (i === 1) return q(s.n, w.plain, "Which surfaces carry the rest?", null); // same, on a slide with no marked picture
+        return q(s.n, s.page, `Plain question ${s.n}`, null);
+      });
+    judgePicture = (t) => t.startsWith("Which tooth has") || t.startsWith("Which surfaces carry");
+    const quiz = await getSectionQuiz(w.topic());
+    expect(quiz.find((x) => x.question.startsWith("Which tooth has"))?.image_page_id).toBe(w.photo);
+    expect(quiz.find((x) => x.question.startsWith("Which surfaces carry"))?.image_page_id).toBe(w.plain);
+    expect(quiz.filter((x) => x.question.startsWith("Plain")).every((x) => x.image_page_id == null)).toBe(true);
   });
 
   it("a class copy points the picture at the copy's own slide", async () => {
@@ -179,7 +233,7 @@ describe("section quiz", () => {
 });
 
 describe("practice exam", () => {
-  it("attaches a picture to picture questions (named or inferred) and drops the ones it can't show", async () => {
+  it("attaches a picture to picture questions (named or inferred), the whole slide when none is marked", async () => {
     const w = world();
     practiceWriter = () => [
       { type: "image", image_page_id: w.cropped, patient_box: null, stem: "Look at the clinical image. What is the diagnosis?", options: ["a", "b", "c", "d", "e"], correct_index: 0, correct_answer: "a", explanation: "e", source_page_id: w.cropped, concept: "C" },
@@ -194,10 +248,11 @@ describe("practice exam", () => {
       await new Promise((r) => setTimeout(r, 20));
     }
     const rows = db.prepare("SELECT stem, type, image_page_id FROM questions WHERE exam_id = ? ORDER BY id").all(w.examId) as { stem: string; type: string; image_page_id: number | null }[];
-    expect(rows.map((r) => r.stem.slice(0, 12))).toEqual(["Look at the ", "On the radio", "What is the "]);
+    expect(rows.map((r) => r.stem.slice(0, 12))).toEqual(["Look at the ", "On the radio", "In the pictu", "What is the "]);
     expect(rows[0]).toMatchObject({ type: "image", image_page_id: w.cropped });
     expect(rows[1]).toMatchObject({ type: "recall", image_page_id: w.photo });
-    expect(rows[2]).toMatchObject({ type: "recall", image_page_id: null });
+    expect(rows[2]).toMatchObject({ type: "recall", image_page_id: w.plain });
+    expect(rows[3]).toMatchObject({ type: "recall", image_page_id: null });
     expect(systems["practice questions"]).toContain("[IMAGE]");
   });
 });
@@ -210,6 +265,8 @@ describe("repairing questions written before pictures were enforced", () => {
     const gone = Number(insQ.run(w.examId, w.topicId, "In the image below, what is seen?", w.plain).lastInsertRowid);
     const retired = Number(insQ.run(w.examId, w.topicId, "The photograph depicts which lesion?", w.plain).lastInsertRowid);
     const fine = Number(insQ.run(w.examId, w.topicId, "What is the most common irrigant?", w.plain).lastInsertRowid);
+    const reported = Number(insQ.run(w.examId, w.topicId, "In the slide's diagram, which tooth surfaces are labeled 'gp'?", w.photo).lastInsertRowid);
+    const bySlideNumber = Number(insQ.run(w.examId, w.topicId, "On slide 1's diagram, the planes are drawn to show what?", w.photo).lastInsertRowid);
     const attemptId = Number(db.prepare("INSERT INTO attempts (exam_id, mode, status) VALUES (?, 'tutor', 'finished')").run(w.examId).lastInsertRowid);
     db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position, chosen_index, correct) VALUES (?, ?, 0, 0, 1)").run(attemptId, retired);
     const quiz: QuizQuestion[] = [
@@ -219,12 +276,14 @@ describe("repairing questions written before pictures were enforced", () => {
     ];
     db.prepare("UPDATE topics SET checks_json = ?, checks_version = 2 WHERE id = ?").run(JSON.stringify(quiz), w.topicId);
 
-    expect(repairPictureQuestions()).toBe(5);
+    expect(repairPictureQuestions()).toBe(7);
     const row = (id: number) => db.prepare("SELECT image_page_id, flagged FROM questions WHERE id = ?").get(id) as { image_page_id: number | null; flagged: number } | undefined;
     expect(row(fixable)).toEqual({ image_page_id: w.photo, flagged: 0 });
     expect(row(gone)).toBeUndefined();
     expect(row(retired)).toEqual({ image_page_id: null, flagged: 1 });
     expect(row(fine)).toEqual({ image_page_id: null, flagged: 0 });
+    expect(row(reported)).toEqual({ image_page_id: w.photo, flagged: 0 });
+    expect(row(bySlideNumber)).toEqual({ image_page_id: w.plain, flagged: 0 }); // slide 1 is named, so it is shown whole
     const after = JSON.parse(w.topic().checks_json!) as QuizQuestion[];
     expect(after[0]).toMatchObject({ image_page_id: w.photo });
     expect(after[1]).toMatchObject({ hidden: true, report_note: "No picture to show" });

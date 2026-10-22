@@ -56,6 +56,9 @@ const QuizCheck = z.object({
     z.object({
       n: z.number().describe("The question number"),
       ok: z.boolean().describe("True only if the keyed answer is stated or directly implied by the slides, no other option is also correct, and it doesn't repeat an earlier question"),
+      picture: z
+        .boolean()
+        .describe("True if answering needs something the student must see: a picture, radiograph, diagram, chart, a slide named as such, or anything labeled, drawn, circled or pointed at"),
       reason: z.string().describe("One short line"),
     }),
   ),
@@ -187,6 +190,7 @@ ${EXAM_STYLE}`;
 const JUDGE_SYSTEM = `You check quiz questions written for a dental student against their lecture slides. Be strict but fair.
 For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
 A question marked "picture shown: slide P" shows the student that slide's picture (the whole slide unless the notes mark a clinical-image crop): mark it ok = false if the answer is printed on that slide in a way the student would simply read off.
+Also say, for every question, whether answering it needs something the student has to see (picture = true): a picture, radiograph, diagram, chart or graph, a slide referred to as such ("on slide 12", "the slide's diagram"), or anything labeled, drawn, circled, shaded or pointed at. A question with no "picture shown" that needs one will be given its slide's picture or dropped, so be honest rather than lenient.
 ${EXAM_STYLE_CHECK}`;
 
 type Draft = Omit<QuizQuestion, "id" | "hidden" | "report_note"> & { slot: number };
@@ -247,7 +251,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       if (valid.size > 0 && page == null) continue;
       // A question that talks about a picture must have one to show (the slide it names, or the slide it tests).
       const wantsPicture = q.image_page_id != null || mentionsPicture(q.question);
-      const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page) : null;
+      const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page, q.question) : null;
       if (wantsPicture && !picture) continue;
       drafts.push({
         slot,
@@ -264,7 +268,11 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
     return drafts;
   };
 
-  /** Drop what the checking pass rejects. If the check itself fails, keep everything rather than lose the quiz. */
+  /**
+   * Drop what the checking pass rejects. The checker also says which questions need a picture: one that has none
+   * (its wording slipped past mentionsPicture) gets its slide's picture, or goes. If the check itself fails, keep
+   * everything rather than lose the quiz.
+   */
   const check = async (drafts: Draft[]): Promise<Draft[]> => {
     if (!judge || drafts.length === 0) return drafts;
     try {
@@ -285,7 +293,17 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
           .join("\n\n")}`,
       });
       const rejected = new Set(out.verdicts.filter((v) => v.ok === false).map((v) => v.n - 1));
-      return drafts.filter((_, i) => !rejected.has(i));
+      const needsPicture = new Set(out.verdicts.filter((v) => v.picture === true).map((v) => v.n - 1));
+      const out2: Draft[] = [];
+      for (const [i, d] of drafts.entries()) {
+        if (rejected.has(i)) continue;
+        if (d.image_page_id == null && needsPicture.has(i)) {
+          const picture = pictureFor(pages, null, d.source_page_id, d.question);
+          if (!picture) continue;
+          out2.push({ ...d, image_page_id: picture.page_id });
+        } else out2.push(d);
+      }
+      return out2;
     } catch (err) {
       console.error(`Section quiz check failed for topic ${topic.id}; keeping the questions`, err);
       return drafts;
