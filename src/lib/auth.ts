@@ -42,20 +42,34 @@ export function gateOk(token: string | undefined): boolean {
 
 // ---- Sessions ----
 
-export function sessionToken(userId: number): string {
-  const payload = `${userId}.${Date.now()}`;
+/**
+ * Signed sign-in cookie: `userId.issuedAt.epoch.signature`. The epoch is the user's `session_epoch` at sign-in; a
+ * password change bumps it, so cookies issued before (other phones, a shared laptop) stop matching and are signed out.
+ * Cookies from before epochs existed have no epoch part and count as epoch 0, so nobody is signed out by the upgrade.
+ */
+export function sessionToken(userId: number, epoch = 0): string {
+  const payload = `${userId}.${Date.now()}.${epoch}`;
   return `${payload}.${sign(`session:${payload}`)}`;
 }
 
-/** The user id in a session cookie, if the signature is valid. */
-export function sessionUserId(token: string | undefined): number | null {
+/** The user id and epoch in a session cookie, if the signature is valid. */
+export function sessionParts(token: string | undefined): { userId: number; epoch: number } | null {
   if (!token) return null;
   const i = token.lastIndexOf(".");
   if (i < 0) return null;
   const payload = token.slice(0, i);
   if (!safeEqual(token.slice(i + 1), sign(`session:${payload}`))) return null;
-  const id = Number(payload.split(".")[0]);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  const [idPart, , epochPart] = payload.split(".");
+  const userId = Number(idPart);
+  if (!Number.isInteger(userId) || userId <= 0) return null;
+  const epoch = epochPart === undefined ? 0 : Number(epochPart);
+  if (!Number.isInteger(epoch) || epoch < 0) return null;
+  return { userId, epoch };
+}
+
+/** The user id in a session cookie, if the signature is valid. (Epoch is checked against the database in currentUser.) */
+export function sessionUserId(token: string | undefined): number | null {
+  return sessionParts(token)?.userId ?? null;
 }
 
 // ---- Passwords ----

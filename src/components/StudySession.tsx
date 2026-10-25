@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
+import { toast } from "./Toaster";
 import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
@@ -53,6 +54,7 @@ export function StudySession(props: {
   const [attempt, setAttempt] = useState(0);
   const [visited, setVisited] = useState<Set<number>>(new Set([props.initialPosition]));
   const [ending, setEnding] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
   const [chatOpen, setChatOpen] = useState(false);
   const closeChat = useCallback(() => setChatOpen(false), []);
@@ -83,21 +85,37 @@ export function StudySession(props: {
   };
 
   async function endSession() {
+    if (ending) return;
     setEnding(true);
-    const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-    const json = await res.json();
-    setEndSummary(json.summary ?? null);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+      if (!res.ok) throw new Error(String(res.status));
+      const json = await res.json();
+      setEndSummary(json.summary ?? null);
+    } catch {
+      // Offline, or the server didn't answer: the "Saving…" overlay must not stay up forever. Answers are already saved one by one.
+      setEnding(false);
+      toast("Couldn't save the session notes. Check your connection and press End session again.", "error");
+    }
   }
 
   async function practiceCovered() {
+    if (starting) return;
     const topicIds = topics.filter((t) => visited.has(t.position)).map((t) => t.id);
-    const res = await fetch(`/api/exams/${examId}/attempts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 3)), mode: "tutor", style: "mixed", topicIds }),
-    });
-    const { id } = await res.json();
-    router.push(`/attempts/${id}`);
+    setStarting(true);
+    try {
+      const res = await fetch(`/api/exams/${examId}/attempts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 3)), mode: "tutor", style: "mixed", topicIds }),
+      });
+      const json = (await res.json().catch(() => null)) as { id?: number; error?: string } | null;
+      if (!res.ok || !json?.id) throw new Error(typeof json?.error === "string" ? json.error : "");
+      router.push(`/attempts/${json.id}`);
+    } catch (err) {
+      setStarting(false);
+      toast(err instanceof Error && err.message ? err.message : "Couldn't start the practice exam. Check your connection and try again.", "error");
+    }
   }
 
   const topic = topics[position];
@@ -133,7 +151,9 @@ export function StudySession(props: {
               Want to lock it in? Take a short practice exam on the {visited.size} topic{visited.size === 1 ? "" : "s"} you covered.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <button className="btn-primary btn-lg flex-1" onClick={practiceCovered}>Practice these topics</button>
+              <button className="btn-primary btn-lg flex-1" disabled={starting} onClick={practiceCovered}>
+                {starting ? "Starting…" : "Practice these topics"}
+              </button>
               <Link className="btn-secondary btn-lg" href={`/exams/${examId}`}>Not now</Link>
             </div>
           </div>
@@ -262,7 +282,7 @@ function Lesson({ data }: { data: LessonData }) {
             {lesson.slides.map((s) => (
               <figure key={s.page_id} className="flex flex-col gap-2">
                 <button onClick={() => setZoom(s.page_id)} className="group relative block w-full overflow-hidden rounded-[22px] bg-slide p-1.5" aria-label={`Zoom: ${s.caption}`}>
-                  <SlideImage pageId={s.page_id} alt={s.caption} />
+                  <SlideImage pageId={s.page_id} aspect={data.aspects?.[s.page_id]} alt={s.caption} />
                   <span className="absolute right-3 bottom-3 flex h-9 w-9 items-center justify-center rounded-xl bg-black/50 text-white opacity-90 group-hover:opacity-100">
                     <Icon d={ICONS.zoom} size={18} />
                   </span>
@@ -276,7 +296,7 @@ function Lesson({ data }: { data: LessonData }) {
       {zoom != null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4" onClick={() => setZoom(null)}>
           <div className="w-full max-w-5xl">
-            <SlideImage pageId={zoom} alt="Slide" />
+            <SlideImage pageId={zoom} aspect={data.aspects?.[zoom]} alt="Slide" />
           </div>
         </div>
       )}
@@ -337,6 +357,17 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
   const [attempt, setAttempt] = useState(0);
   // While "Write new questions" runs, answering is paused so no answer lands on a question that's about to be replaced.
   const [rewriting, setRewriting] = useState(false);
+  // After "Next question →" on a phone the student would otherwise land on the bottom of the next question: when the
+  // question changes by her own tap (not on load), the quiz scrolls back to its top and focus moves to its heading.
+  const box = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLDivElement>(null);
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) return;
+    moved.current = false;
+    box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    heading.current?.focus({ preventScroll: true });
+  }, [index]);
 
   useEffect(() => {
     let cancelled = false;
@@ -441,6 +472,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
 
   const goTo = (i: number) => {
     setPicked(null);
+    moved.current = true;
     setIndex(i);
   };
 
@@ -464,10 +496,10 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     const missed = shown.filter((x) => answers[x.at] != null && answers[x.at] !== x.q.correct_index).map((x) => x.q);
     const good = done > 0 && right / done >= 0.8;
     return (
-      <section className={`tile flex flex-col gap-4 rounded-[28px] ${good ? "cb-mint" : "bg-card"}`}>
+      <section ref={box} className={`tile scroll-mt-3 flex flex-col gap-4 rounded-[28px] ${good ? "cb-mint" : "bg-card"}`}>
         {strip}
         <div>
-          <div className="text-[13px] font-bold opacity-75">Section quiz</div>
+          <div ref={heading} tabIndex={-1} className="text-[13px] font-bold opacity-75 outline-none">Section quiz</div>
           <div className="text-[30px] leading-tight font-extrabold tracking-[-0.03em]">
             {good ? `Topic ${position + 1}, done.` : done === 0 ? "No questions answered." : "Worth another look."}
           </div>
@@ -504,9 +536,9 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     answered ? (i === q.correct_index ? "correct" : i === chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
 
   return (
-    <section className="card flex flex-col gap-3.5">
+    <section ref={box} className="card scroll-mt-3 flex flex-col gap-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[13px] font-bold text-muted-foreground">
+        <div ref={heading} tabIndex={-1} className="text-[13px] font-bold text-muted-foreground outline-none">
           Section quiz · {index + 1} of {total}
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -814,15 +846,21 @@ function TutorChat({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, position }),
       });
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      while (reader) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        if (!frame) frame = requestAnimationFrame(show);
+      if (!res.ok) {
+        // A plain answer instead of a stream (signed out, key problem, server error): show its message, not raw JSON.
+        const json = (await res.json().catch(() => null)) as { error?: string } | null;
+        acc = `_(${typeof json?.error === "string" && json.error ? json.error : "The tutor couldn't answer right now. Try again in a moment."})_`;
+      } else {
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        while (reader) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          if (!frame) frame = requestAnimationFrame(show);
+        }
+        acc += decoder.decode(); // any bytes held back from a character split across the last chunk
       }
-      acc += decoder.decode(); // any bytes held back from a character split across the last chunk
     } catch {
       // Connection dropped (offline, or the server went away mid-reply): say so in the bubble instead of hanging.
       acc += `${acc ? "\n\n" : ""}_(The tutor couldn't be reached. Check your connection and try again.)_`;

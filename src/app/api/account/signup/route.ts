@@ -19,6 +19,6 @@ export async function POST(request: Request) {
   );
   if (isFirst) claimLegacyData(id);
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, sessionToken(id), cookieOptions());
+  res.cookies.set(SESSION_COOKIE, sessionToken(id, 0), cookieOptions());
   return res;
 }

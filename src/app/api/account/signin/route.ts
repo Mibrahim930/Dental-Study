@@ -9,6 +9,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Wrong email or password." }, { status: 401 });
   }
   const res = NextResponse.json({ ok: true, hasKey: !!user.api_key_enc, mustChangePassword: !!user.must_change_password });
-  res.cookies.set(SESSION_COOKIE, sessionToken(user.id), cookieOptions());
+  res.cookies.set(SESSION_COOKIE, sessionToken(user.id, user.session_epoch ?? 0), cookieOptions());
   return res;
 }

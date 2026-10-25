@@ -37,39 +37,84 @@ export default function ReviewPage() {
   const [index, setIndex] = useState(0);
   const [chosen, setChosen] = useState<number | null>(null);
   const [done, setDone] = useState(0);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/review?limit=0")
-      .then((r) => r.json())
-      .then((j) => setDue(j.due));
-  }, []);
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((j) => !cancelled && setDue(j.due))
+      .catch(() => !cancelled && setError("Couldn't load your review. Check your connection and try again."));
+    return () => {
+      cancelled = true;
+    };
+  }, [reload]);
 
   async function start(minutes: number) {
-    // About one minute per card.
-    const res = await fetch(`/api/review?limit=${minutes}`);
-    const j = await res.json();
-    setCards(j.cards);
-    setIndex(0);
-    setChosen(null);
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      // About one minute per card.
+      const res = await fetch(`/api/review?limit=${minutes}`);
+      const j = (await res.json().catch(() => null)) as { cards?: Card[] } | null;
+      if (!res.ok || !j?.cards) throw new Error(String(res.status));
+      setCards(j.cards);
+      setIndex(0);
+      setChosen(null);
+    } catch {
+      setError("Couldn't load your review questions. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function rate(correct: boolean, confidence: "hard" | "good" | "easy") {
+    if (busy) return;
     const card = cards![index];
-    await fetch(`/api/review/${card.card_id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ correct, confidence }),
-    });
-    setDone((d) => d + 1);
-    setChosen(null);
-    setIndex((i) => i + 1);
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/review/${card.card_id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correct, confidence }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setDone((d) => d + 1);
+      setChosen(null);
+      setIndex((i) => i + 1);
+    } catch {
+      // Stay on this card: the rating wasn't recorded, so moving on would lose it from the schedule.
+      setError("That rating didn't save. Check your connection and tap it again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!cards) {
     return (
       <div className="mx-auto flex max-w-xl flex-col gap-2.5 sm:gap-4">
         <h1 className="page-title px-1">Daily review</h1>
-        {due == null ? (
+        {error ? (
+          <section className="tile cb-coral flex flex-wrap items-center justify-between gap-3 rounded-[28px]" role="alert">
+            <span className="text-[15px] font-semibold">{error}</span>
+            <button
+              className="btn-primary btn-sm"
+              onClick={() => {
+                setError("");
+                setReload((n) => n + 1);
+              }}
+            >
+              Try again
+            </button>
+          </section>
+        ) : due == null ? (
           <div className="card flex flex-col gap-3" aria-busy>
             <div className="shimmer h-6 w-1/2" />
             <div className="shimmer h-12 w-full" />
@@ -92,7 +137,7 @@ export default function ReviewPage() {
             <p className="text-[15px] text-hero-muted">How much time do you have?</p>
             <div className="grid grid-cols-3 gap-2">
               {BUDGETS.map((m) => (
-                <button key={m} className="btn-hero btn-lg px-2 whitespace-nowrap" onClick={() => start(m)}>
+                <button key={m} className="btn-hero btn-lg px-2 whitespace-nowrap" disabled={busy} onClick={() => start(m)}>
                   {m} min
                 </button>
               ))}
@@ -118,9 +163,8 @@ export default function ReviewPage() {
               onClick={() => {
                 setCards(null);
                 setDue(null);
-                fetch("/api/review?limit=0")
-                  .then((r) => r.json())
-                  .then((j) => setDue(j.due));
+                setError("");
+                setReload((n) => n + 1);
               }}
             >
               Review more
@@ -170,7 +214,12 @@ export default function ReviewPage() {
                     ["easy", "Easy", "cb-mint"],
                   ] as const
                 ).map(([value, label, cls]) => (
-                  <button key={value} className={`flex min-h-16 flex-col items-center justify-center rounded-[18px] transition-transform active:scale-[.97] ${cls}`} onClick={() => rate(true, value)}>
+                  <button
+                    key={value}
+                    className={`flex min-h-16 flex-col items-center justify-center rounded-[18px] transition-transform active:scale-[.97] disabled:opacity-60 ${cls}`}
+                    disabled={busy}
+                    onClick={() => rate(true, value)}
+                  >
                     <span className="text-base font-extrabold">{label}</span>
                     {c.next && <span className="text-[12px] font-semibold opacity-80">{when(c.next[value])}</span>}
                   </button>
@@ -178,9 +227,14 @@ export default function ReviewPage() {
               </div>
             </>
           ) : (
-            <button className="btn-primary btn-lg" onClick={() => rate(false, "good")}>
+            <button className="btn-primary btn-lg" disabled={busy} onClick={() => rate(false, "good")}>
               Next · you&apos;ll see this again soon
             </button>
+          )}
+          {error && (
+            <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
+              {error}
+            </p>
           )}
         </section>
       )}

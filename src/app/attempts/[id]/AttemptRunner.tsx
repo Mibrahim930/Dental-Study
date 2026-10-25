@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AttemptView } from "@/lib/attemptView";
 import { QuestionCard, type QuestionData } from "@/components/QuestionCard";
 import type { Confidence } from "@/lib/practicePlan";
 import { DoubleRing, Icon, ICONS } from "@/components/ui";
+import { toast } from "@/components/Toaster";
 
 const CONFIDENCE_CHOICES: [Confidence, string, string][] = [
   ["guess", "Guessed", "bg-lilac text-on-lilac"],
@@ -21,14 +22,36 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   });
   const [pending, setPending] = useState<Record<number, number>>({});
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [finishing, setFinishing] = useState(false);
   // "Finish" with questions left asks first (one stray tap shouldn't end a timed exam). Shown next to the button used.
   const [confirmAt, setConfirmAt] = useState<"top" | "bottom" | null>(null);
   const { attempt, questions } = view;
   const finished = attempt.status === "finished";
 
+  // Moving to another question by her own tap scrolls back to the top (on a phone she'd otherwise land on the bottom
+  // of the next question) and puts focus on "Question N of M", so a screen reader announces where she is.
+  const questionTop = useRef<HTMLSpanElement>(null);
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) return;
+    moved.current = false;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    questionTop.current?.focus({ preventScroll: true });
+  }, [index]);
+  function goto(i: number) {
+    moved.current = true;
+    setSaveError("");
+    setIndex(i);
+  }
+
   const refresh = useCallback(async () => {
-    const res = await fetch(`/api/attempts/${attemptId}`);
-    if (res.ok) setView(await res.json());
+    try {
+      const res = await fetch(`/api/attempts/${attemptId}`);
+      if (res.ok) setView(await res.json());
+    } catch {
+      // Offline for a moment: the next poll tries again.
+    }
   }, [attemptId]);
 
   // Poll while questions are being written.
@@ -39,9 +62,19 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   }, [attempt.status, refresh]);
 
   const finish = useCallback(async () => {
-    const res = await fetch(`/api/attempts/${attemptId}/finish`, { method: "POST" });
-    setView(await res.json());
-    window.scrollTo({ top: 0 });
+    setFinishing(true);
+    try {
+      const res = await fetch(`/api/attempts/${attemptId}/finish`, { method: "POST" });
+      const json = (await res.json().catch(() => null)) as AttemptView | null;
+      if (!res.ok || !json?.attempt) throw new Error(String(res.status));
+      setView(json);
+      window.scrollTo({ top: 0 });
+    } catch {
+      // The exam is still open on the server; nothing is lost. (When the timer ran out, the server has already stopped the clock.)
+      toast("Couldn't finish the exam. Check your connection and press Finish again.", "error");
+    } finally {
+      setFinishing(false);
+    }
   }, [attemptId]);
 
   if (attempt.status === "generating") return <Writing view={view} />;
@@ -82,15 +115,24 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
 
   async function lockIn(confidence: Confidence) {
     const chosen = pending[q.id];
-    if (chosen == null || q.chosen_index != null) return;
+    if (chosen == null || q.chosen_index != null || saving) return;
     setSaving(true);
-    const res = await fetch(`/api/attempts/${attemptId}/answer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ questionId: q.id, chosen, confidence }),
-    });
-    setView(await res.json());
-    setSaving(false);
+    setSaveError("");
+    try {
+      const res = await fetch(`/api/attempts/${attemptId}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ questionId: q.id, chosen, confidence }),
+      });
+      const json = (await res.json().catch(() => null)) as (AttemptView & { error?: string }) | null;
+      if (!res.ok || !json?.attempt) throw new Error(typeof json?.error === "string" ? json.error : "");
+      setView(json);
+    } catch (err) {
+      // Not saved: the picked option stays so she can tap a confidence button again once she's back online.
+      setSaveError(err instanceof Error && err.message ? err.message : "Your answer didn't save. Check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const left = questions.length - answeredCount;
@@ -102,8 +144,8 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
       </p>
       <p className="text-[13px] font-medium opacity-80">Unanswered questions count as skipped and come back in a later exam.</p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-primary btn-sm" onClick={() => void finish()}>
-          Yes, finish
+        <button type="button" className="btn-primary btn-sm" disabled={finishing} onClick={() => void finish()}>
+          {finishing ? "Finishing…" : "Yes, finish"}
         </button>
         <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={() => setConfirmAt(null)}>
           Keep going
@@ -137,6 +179,11 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
           );
         })}
       </div>
+      {saveError && (
+        <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
+          {saveError}
+        </p>
+      )}
     </div>
   );
 
@@ -149,7 +196,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         </Link>
         <div className="flex shrink-0 items-center gap-2">
           {attempt.time_limit_sec && <Timer startedAt={attempt.started_at} limit={attempt.time_limit_sec} onExpire={finish} />}
-          <button className="btn-primary btn-sm" onClick={() => requestFinish("top")}>
+          <button className="btn-primary btn-sm" disabled={finishing} onClick={() => requestFinish("top")}>
             Finish · {answeredCount}/{questions.length}
           </button>
         </div>
@@ -164,7 +211,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
           <button
             key={x.id}
             role="listitem"
-            onClick={() => setIndex(i)}
+            onClick={() => goto(i)}
             aria-current={i === index ? "step" : undefined}
             aria-label={`Question ${i + 1}${x.chosen_index == null ? "" : tutor ? (x.correct ? ", right" : ", wrong") : ", answered"}`}
             className={`h-9 w-9 rounded-[11px] text-[13px] font-extrabold transition-colors ${
@@ -193,7 +240,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         tag={current.retry ? <span className="chip bg-on-lilac text-lilac">↺ Missed last time</span> : undefined}
         header={
           <div className="flex items-center justify-between px-1 text-[13px] font-bold text-muted-foreground">
-            <span>
+            <span ref={questionTop} tabIndex={-1} className="outline-none">
               Question {index + 1} of {questions.length}
             </span>
             {q.type !== "recall" && !q.caseInfo && <span className="chip cb-sky">{q.type === "case" ? "Case" : "Image"}</span>}
@@ -202,13 +249,13 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
       />
 
       <div className="grid grid-cols-[1fr_2fr] gap-2">
-        <button className="btn-secondary btn-lg bg-card" disabled={index === 0} onClick={() => setIndex(index - 1)}>
+        <button className="btn-secondary btn-lg bg-card" disabled={index === 0} onClick={() => goto(index - 1)}>
           ← Back
         </button>
         {index + 1 < questions.length ? (
-          <button className="btn-primary btn-lg" onClick={() => setIndex(index + 1)}>Next question →</button>
+          <button className="btn-primary btn-lg" onClick={() => goto(index + 1)}>Next question →</button>
         ) : (
-          <button className="btn-primary btn-lg" onClick={() => requestFinish("bottom")}>Finish exam</button>
+          <button className="btn-primary btn-lg" disabled={finishing} onClick={() => requestFinish("bottom")}>Finish exam</button>
         )}
       </div>
       {confirmAt === "bottom" && confirmBox}
@@ -327,13 +374,19 @@ function Results({ view }: { view: AttemptView }) {
     const topicIds = [...new Set(missed.map((q) => q.topic_id).filter((t): t is number => t != null))];
     if (topicIds.length === 0) return;
     setStarting(true);
-    const res = await fetch(`/api/exams/${attempt.exam_id}/attempts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 4)), mode: "tutor", style: "mixed", scope: { kind: "topics", topicIds } }),
-    });
-    const { id } = await res.json();
-    router.push(`/attempts/${id}`);
+    try {
+      const res = await fetch(`/api/exams/${attempt.exam_id}/attempts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 4)), mode: "tutor", style: "mixed", scope: { kind: "topics", topicIds } }),
+      });
+      const json = (await res.json().catch(() => null)) as { id?: number; error?: string } | null;
+      if (!res.ok || !json?.id) throw new Error(typeof json?.error === "string" ? json.error : "");
+      router.push(`/attempts/${json.id}`);
+    } catch (err) {
+      setStarting(false);
+      toast(err instanceof Error && err.message ? err.message : "Couldn't start the practice exam. Check your connection and try again.", "error");
+    }
   }
 
   return (

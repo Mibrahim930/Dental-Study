@@ -12,14 +12,22 @@ export default function ChangePasswordPage() {
     e.preventDefault();
     setBusy(true);
     setError("");
-    const res = await fetch("/api/account/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ current, next }),
-    });
-    const json = await res.json();
+    let json: { error?: string; hasKey?: boolean } = {};
+    let ok = false;
+    try {
+      const res = await fetch("/api/account/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current, next }),
+      });
+      ok = res.ok;
+      json = await res.json();
+    } catch {
+      json = { error: "Couldn't reach the site. Check your connection and try again." };
+    }
     setBusy(false);
-    if (!res.ok) return setError(json.error ?? "Couldn't change your password.");
+    if (!ok) return setError(json.error ?? "Couldn't change your password.");
+    // Other phones and laptops signed in to this account are now signed out; this device stays signed in.
     window.location.assign(json.hasKey ? "/" : "/setup");
   }
 
@@ -29,7 +37,10 @@ export default function ChangePasswordPage() {
       <form onSubmit={submit} className="card space-y-4">
         <div>
           <h1 className="section-title">Choose a new password</h1>
-          <p className="mt-1 text-sm text-muted-foreground">If an admin reset your password, enter the temporary one they gave you as your current password.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            If an admin reset your password, enter the temporary one they gave you as your current password. Changing it signs out any other phone or laptop
+            using this account.
+          </p>
         </div>
         <div>
           <label className="label" htmlFor="current">Current (or temporary) password</label>

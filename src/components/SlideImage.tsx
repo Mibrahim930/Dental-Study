@@ -8,7 +8,17 @@ export type CropBox = { x: number; y: number; width: number; height: number };
 export function SlideImage({ pageId, alt, aspect, crop }: { pageId: number; alt: string; aspect?: number; crop?: CropBox | null }) {
   const src = `/api/pages/${pageId}/image`;
   if (!crop || !aspect) {
-    return <img src={src} alt={alt} className="w-full rounded-lg border border-border bg-card" loading="lazy" />;
+    // The slide's width/height ratio reserves its space before the picture arrives, so the text under it doesn't jump.
+    return (
+      <img
+        src={src}
+        alt={alt}
+        className="w-full rounded-lg border border-border bg-card"
+        style={aspect ? { aspectRatio: String(aspect) } : undefined}
+        loading="lazy"
+        decoding="async"
+      />
+    );
   }
   const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
   const x = clamp(crop.x), y = clamp(crop.y);

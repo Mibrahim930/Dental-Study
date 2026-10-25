@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Icon, ICONS } from "./ui";
+import { toast } from "./Toaster";
 
 export type TaskItem = {
   id: number;
@@ -18,11 +19,20 @@ export type TaskItem = {
 function useStartTask() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  async function start(taskId: number) {
+  /** Resolves to false when the task couldn't be opened (the button is re-enabled and a message shown). */
+  async function start(taskId: number): Promise<boolean> {
     setBusy(true);
-    const res = await fetch(`/api/planner/tasks/${taskId}/start`, { method: "POST" });
-    const { url } = await res.json();
-    router.push(url);
+    try {
+      const res = await fetch(`/api/planner/tasks/${taskId}/start`, { method: "POST" });
+      const json = (await res.json().catch(() => null)) as { url?: string; error?: string } | null;
+      if (!res.ok || !json?.url) throw new Error(typeof json?.error === "string" ? json.error : "");
+      router.push(json.url);
+      return true;
+    } catch (err) {
+      setBusy(false);
+      toast(err instanceof Error && err.message ? err.message : "Couldn't open that task. Check your connection and try again.", "error");
+      return false;
+    }
   }
   return { busy, start };
 }
@@ -45,13 +55,19 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
 
   async function toggle(t: TaskItem) {
     setBusy(t.id);
-    await fetch(`/api/planner/tasks/${t.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: t.status === "done" ? "todo" : "done" }),
-    });
-    setBusy(null);
-    router.refresh();
+    try {
+      const res = await fetch(`/api/planner/tasks/${t.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: t.status === "done" ? "todo" : "done" }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      router.refresh();
+    } catch {
+      toast("Couldn't update that task. Check your connection and try again.", "error");
+    } finally {
+      setBusy(null);
+    }
   }
 
   if (tasks.length === 0) return <p className="px-1 py-2 text-[15px] text-muted-foreground">{empty}</p>;
@@ -93,9 +109,9 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
               <button
                 className="btn-primary btn-sm"
                 disabled={busy === t.id}
-                onClick={() => {
+                onClick={async () => {
                   setBusy(t.id);
-                  void start(t.id);
+                  if (!(await start(t.id))) setBusy(null);
                 }}
               >
                 {busy === t.id ? "…" : "Start"}

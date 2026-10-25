@@ -6,6 +6,7 @@ import { type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
+import { toast } from "./Toaster";
 
 export type QuestionData = {
   id: number;
@@ -24,7 +25,7 @@ export type QuestionData = {
   caseInfo?: { number: number; index: number; size: number; scenario: string } | null;
   correct_index?: number;
   explanation?: string;
-  source?: { page_id: number; filename: string | null; page_number: number | null } | null;
+  source?: { page_id: number; filename: string | null; page_number: number | null; aspect?: number | null } | null;
 };
 
 const BOX_LABELS: Record<string, string> = {
@@ -85,12 +86,18 @@ export function QuestionCard({
 
   async function flag() {
     const note = window.prompt("What's wrong with this question? (optional)") ?? undefined;
-    await fetch(`/api/questions/${q.id}/flag`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note }),
-    });
-    setFlagged(true);
+    try {
+      const res = await fetch(`/api/questions/${q.id}/flag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setFlagged(true);
+    } catch {
+      // Only say "Reported" when the report actually arrived.
+      toast("The report didn't go through. Check your connection and try again.", "error");
+    }
   }
 
   const stateOf = (i: number): OptionState =>
@@ -193,7 +200,7 @@ export function QuestionCard({
           {q.concept && <div className="mt-2 text-[13px] text-hero-muted">Concept: {q.concept}</div>}
           {showSource && q.source && (
             <div className="mt-3 overflow-hidden rounded-[18px] bg-slide p-1.5">
-              <SlideImage pageId={q.source.page_id} alt="Source slide" />
+              <SlideImage pageId={q.source.page_id} aspect={q.source.aspect ?? undefined} alt="Source slide" />
             </div>
           )}
         </section>

@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "./Toaster";
 
 /** Button that POSTs to an API route, then refreshes the page. */
 export function ActionButton({ url, label, className = "btn-secondary" }: { url: string; label: string; className?: string }) {
@@ -13,9 +14,15 @@ export function ActionButton({ url, label, className = "btn-secondary" }: { url:
       disabled={busy}
       onClick={async () => {
         setBusy(true);
-        await fetch(url, { method: "POST" });
-        setBusy(false);
-        router.refresh();
+        try {
+          const res = await fetch(url, { method: "POST" });
+          if (!res.ok) throw new Error(String(res.status));
+          router.refresh();
+        } catch {
+          toast("That didn't go through. Check your connection and try again.", "error");
+        } finally {
+          setBusy(false);
+        }
       }}
     >
       {busy ? "…" : label}

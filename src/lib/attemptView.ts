@@ -28,6 +28,7 @@ type Row = {
   source_filename: string | null;
   source_page_number: number | null;
   source_emphasized: number | null;
+  source_aspect: number | null;
 };
 
 /** The attempt as the student may see it: answers are only revealed when allowed. */
@@ -52,7 +53,7 @@ export function attemptView(attemptId: number) {
   const rows = db
     .prepare(
       `SELECT aq.question_id, aq.position, aq.chosen_index, aq.correct, aq.confidence, aq.option_order, q.*, t.title AS topic_title, c.name AS concept_name,
-              d.filename AS source_filename, sp.page_number AS source_page_number, sp.emphasized AS source_emphasized
+              d.filename AS source_filename, sp.page_number AS source_page_number, sp.emphasized AS source_emphasized, sp.aspect AS source_aspect
        , cs.scenario
        FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id
        LEFT JOIN cases cs ON cs.id = q.case_id
@@ -114,7 +115,7 @@ export function attemptView(attemptId: number) {
             correct: r.correct === 1,
             explanation: r.explanation,
             source: r.source_page_id
-              ? { page_id: r.source_page_id, filename: r.source_filename, page_number: r.source_page_number }
+              ? { page_id: r.source_page_id, filename: r.source_filename, page_number: r.source_page_number, aspect: r.source_aspect }
               : null,
           }
         : {}),

@@ -1,14 +1,27 @@
 import { cookies } from "next/headers";
 import { notFound as notFoundPage, redirect } from "next/navigation";
 import { db, type User } from "./db";
-import { SESSION_COOKIE, sessionUserId } from "./auth";
+import { SESSION_COOKIE, sessionParts } from "./auth";
 
 export { credentials, claimLegacyData, type Credentials, type Provider } from "./credentials";
 
 export async function currentUser(): Promise<User | null> {
-  const id = sessionUserId((await cookies()).get(SESSION_COOKIE)?.value);
-  if (!id) return null;
-  return (db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User | undefined) ?? null;
+  return userForSession((await cookies()).get(SESSION_COOKIE)?.value);
+}
+
+/** The user a session cookie belongs to, or null if it was forged or issued before the user's last password change. */
+export function userForSession(token: string | undefined): User | null {
+  const parts = sessionParts(token);
+  if (!parts) return null;
+  const user = (db.prepare("SELECT * FROM users WHERE id = ?").get(parts.userId) as User | undefined) ?? null;
+  if (!user || (user.session_epoch ?? 0) !== parts.epoch) return null;
+  return user;
+}
+
+/** Signs every other device out of this account: cookies issued so far no longer match. Returns the new epoch. */
+export function revokeSessions(userId: number): number {
+  db.prepare("UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?").run(userId);
+  return (db.prepare("SELECT session_epoch FROM users WHERE id = ?").get(userId) as { session_epoch: number }).session_epoch;
 }
 
 /** For pages: the signed-in user with an API key set up, or a redirect to sign-in / key setup. */

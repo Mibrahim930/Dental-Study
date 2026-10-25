@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password INTEGER NOT NULL DEFAULT 0, -- set after an admin password reset
   focus_weak INTEGER NOT NULL DEFAULT 1,           -- practice exams lean toward missed / unsure material
   theme TEXT NOT NULL DEFAULT 'blocks',            -- colour theme, see lib/themes.ts
+  session_epoch INTEGER NOT NULL DEFAULT 0,        -- bumped on a password change: older sign-in cookies stop working
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -354,6 +355,7 @@ function migrate(db: Database.Database) {
   }
   if (!columns(db, "users").includes("focus_weak")) db.exec("ALTER TABLE users ADD COLUMN focus_weak INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "users").includes("theme")) db.exec("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'classic'");
+  if (!columns(db, "users").includes("session_epoch")) db.exec("ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0");
   if (!columns(db, "attempts").includes("adaptive")) db.exec("ALTER TABLE attempts ADD COLUMN adaptive INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "attempts").includes("plan_json")) db.exec("ALTER TABLE attempts ADD COLUMN plan_json TEXT");
   if (!columns(db, "attempt_questions").includes("confidence")) {
@@ -417,6 +419,7 @@ export type User = {
   must_change_password: number;
   focus_weak: number;
   theme: string;
+  session_epoch: number;
   created_at: string;
 };
 
