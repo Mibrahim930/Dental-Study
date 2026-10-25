@@ -115,8 +115,13 @@ function copyExam(sourceId: number, userId: number): number {
     const insertTopic = db.prepare(
       "INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized, lesson_json, checks_json, checks_version, document_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
+    let position = 0;
     for (const t of db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(sourceId) as Topic[]) {
-      const pages = (JSON.parse(t.page_ids) as number[]).map(mapPage).filter((x): x is number => x != null);
+      const sourcePages = JSON.parse(t.page_ids) as number[];
+      const pages = sourcePages.map(mapPage).filter((x): x is number => x != null);
+      // A section whose slides weren't copied (its lecture failed to read, so the lecture isn't copied either) would be
+      // an empty, lecture-less topic in the copy: leave it out and close the gap in the numbering.
+      if (pages.length === 0 && sourcePages.length > 0) continue;
       let lesson = t.lesson_json;
       if (lesson) {
         const l = JSON.parse(lesson) as { slides: { page_id: number }[] };
@@ -143,7 +148,7 @@ function copyExam(sourceId: number, userId: number): number {
       const topicId = Number(
         insertTopic.run(
           examId,
-          t.position,
+          position++,
           t.title,
           t.summary,
           JSON.stringify(pages),

@@ -35,6 +35,8 @@ type Lecture = { docId: number; filename: string; slides: PageForMap[] };
 type Section = { title: string; summary: string; page_ids: number[]; emphasized: boolean; concepts: string[]; document_id: number };
 
 const inflight = new Map<number, { p: Promise<void>; mode: Mode }>();
+/** One automatic run waiting behind an in-flight run, per exam (see buildTopicMap). */
+const queuedAuto = new Map<number, Promise<void>>();
 
 /**
  * Build or update an exam's topic map: one map per lecture, sections inside it. Concurrent calls for the same exam
@@ -47,8 +49,27 @@ const inflight = new Map<number, { p: Promise<void>; mode: Mode }>();
  */
 export function buildTopicMap(examId: number, mode: Mode = "auto"): Promise<void> {
   const running = inflight.get(examId);
-  // Same or weaker request while one runs: share it. A Rebuild asked during an automatic run runs right after it.
-  if (running && (running.mode === "full" || mode === "auto")) return running.p;
+  if (running) {
+    // A Rebuild asked while a Rebuild runs shares it.
+    if (mode === "full" && running.mode === "full") return running.p;
+    if (mode === "auto") {
+      // A lecture that finished while a run is in flight isn't in that run's snapshot of the slides, so one automatic
+      // run is queued behind it (shared by every automatic request that arrives meanwhile; it costs nothing when
+      // nothing new is left to map).
+      let q = queuedAuto.get(examId);
+      if (!q) {
+        q = running.p
+          .catch(() => {})
+          .then(() => {
+            queuedAuto.delete(examId);
+            return buildTopicMap(examId, "auto");
+          });
+        queuedAuto.set(examId, q);
+      }
+      return q;
+    }
+    // A Rebuild asked during an automatic run runs right after it.
+  }
   const p: Promise<void> = (running ? running.p.catch(() => {}) : Promise.resolve())
     .then(() => runTopicMap(examId, mode))
     .finally(() => {
@@ -66,10 +87,12 @@ async function runTopicMap(examId: number, mode: Mode) {
     const pages = db
       .prepare(
         `SELECT p.*, d.filename FROM pages p JOIN documents d ON d.id = p.document_id
-         WHERE d.exam_id = ? AND p.status = 'done' ORDER BY d.id, p.page_number`,
+         WHERE d.exam_id = ? AND p.status = 'done' AND d.status IN ('done', 'error') ORDER BY d.id, p.page_number`,
       )
       .all(examId) as PageForMap[];
-    if (pages.length === 0) throw new Error("No processed slides yet.");
+    // (A lecture still being read is left out whole: mapping its first slides now would dump the rest into one
+    // section later. It gets its own automatic run when it finishes.)
+    if (pages.length === 0) throw new Error("No lecture has finished reading yet.");
     // Title, agenda and reference slides stay out of the study plan; everything else must land in a section.
     const content = pages.filter((p) => {
       const n = parseNotes(p);
@@ -160,13 +183,21 @@ const wholeLecture = (lecture: Lecture): Section => ({
 async function mapLectures(userId: number, lectures: Lecture[]): Promise<Section[][]> {
   const concepts = existingConcepts(userId);
   const results: Section[][] = lectures.map(() => []);
+  // Once one lecture fails the whole build fails, so the lectures still waiting are not sent to the AI (and paid for).
+  const failure: { seen: boolean; err: unknown } = { seen: false, err: undefined };
   await mapLimit(
     lectures.map((l, i) => ({ l, i })),
     LECTURE_CONCURRENCY,
     async ({ l, i }) => {
-      results[i] = await mapLecture(userId, l, concepts);
+      if (failure.seen) return;
+      try {
+        results[i] = await mapLecture(userId, l, concepts);
+      } catch (err) {
+        if (!failure.seen) Object.assign(failure, { seen: true, err });
+      }
     },
   );
+  if (failure.seen) throw failure.err;
   return results;
 }
 
@@ -364,24 +395,38 @@ export async function rebuildLectureMaps(): Promise<number> {
   let done = 0;
   for (const { id } of exams) {
     const key = lectureMapsKey(id);
-    if (getMeta(key)) continue;
+    const prior = getMeta(key);
+    // A failed exam is tried again on the next start (an AI outage shouldn't leave it on the old map for good), up
+    // to LECTURE_MAP_TRIES times; after that it stays as it is until someone presses Rebuild.
+    const failures = prior?.startsWith("failed") ? Number(prior.split(":")[1] ?? LECTURE_MAP_TRIES) : 0;
+    if (prior === "done" || failures >= LECTURE_MAP_TRIES) continue;
+    // The student may have pressed Rebuild while this exam waited its turn: then there is nothing left to do.
+    if (!db.prepare("SELECT 1 FROM topics WHERE exam_id = ? AND document_id IS NULL LIMIT 1").get(id)) {
+      setMeta(key, "done");
+      continue;
+    }
+    const failed = (why: unknown) => {
+      console.error(`Reorganising exam ${id}'s topics by lecture failed (try ${failures + 1} of ${LECTURE_MAP_TRIES}); its old topic map stays:`, why);
+      setMeta(key, `failed:${failures + 1}`);
+    };
     try {
       await buildTopicMap(id, "full");
       const s = db.prepare("SELECT topic_status, topic_error FROM exams WHERE id = ?").get(id) as { topic_status: string; topic_error: string | null } | undefined;
       if (s?.topic_status === "error") {
-        console.error(`Reorganising exam ${id}'s topics by lecture failed; its old topic map stays: ${s.topic_error}`);
         // The old map is still there and works: show it as ready, not as a failed build the student didn't ask for.
         const left = db.prepare("SELECT COUNT(*) n FROM topics WHERE exam_id = ?").get(id) as { n: number };
         if (left.n > 0) db.prepare("UPDATE exams SET topic_status = 'ready', topic_error = NULL WHERE id = ?").run(id);
-        setMeta(key, "failed");
+        failed(s.topic_error);
       } else {
         setMeta(key, "done");
         done++;
       }
     } catch (err) {
-      console.error(`Reorganising exam ${id}'s topics by lecture failed`, err);
-      setMeta(key, "failed");
+      failed(err);
     }
   }
   return done;
 }
+
+/** How many server starts may try to re-map an exam by lecture before giving up (Rebuild still works by hand). */
+const LECTURE_MAP_TRIES = 3;

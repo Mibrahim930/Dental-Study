@@ -339,8 +339,18 @@ describe("startup upgrade: rebuildLectureMaps", () => {
     err.mockRestore();
     expect(topics(bad.examId).map((x) => x.id)).toEqual([bad.a, bad.b]);
     expect(status(bad.examId)).toBe("ready");
-    expect(getMeta(lectureMapsKey(bad.examId))).toBe("failed");
+    // One failed try is recorded; the good exam was still done.
+    expect(getMeta(lectureMapsKey(bad.examId))).toBe("failed:1");
     expect(topics(good.examId).every((x) => x.document_id != null)).toBe(true);
+    // The next start tries the failed exam again (an AI outage shouldn't leave it on the old map for good)…
+    prompts.length = 0;
+    const err2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    await rebuildLectureMaps();
+    err2.mockRestore();
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(getMeta(lectureMapsKey(bad.examId))).toBe("failed:2");
+    // …up to three times; after that it is left alone until someone presses Rebuild.
+    setMeta(lectureMapsKey(bad.examId), "failed:3");
     prompts.length = 0;
     await rebuildLectureMaps();
     expect(prompts).toHaveLength(0);
