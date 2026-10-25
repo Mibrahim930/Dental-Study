@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "./Toaster";
+import { signedOut } from "./clientFetch";
 
 /** Button that POSTs to an API route, then refreshes the page. */
 export function ActionButton({ url, label, className = "btn-secondary" }: { url: string; label: string; className?: string }) {
@@ -16,6 +17,7 @@ export function ActionButton({ url, label, className = "btn-secondary" }: { url:
         setBusy(true);
         try {
           const res = await fetch(url, { method: "POST" });
+          if (signedOut(res)) return;
           if (!res.ok) throw new Error(String(res.status));
           router.refresh();
         } catch {

@@ -7,6 +7,7 @@ import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
 import { toast } from "./Toaster";
+import { signedOut } from "./clientFetch";
 
 export type QuestionData = {
   id: number;
@@ -92,6 +93,7 @@ export function QuestionCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ note }),
       });
+      if (signedOut(res)) return;
       if (!res.ok) throw new Error(String(res.status));
       setFlagged(true);
     } catch {

@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
 import { toast } from "./Toaster";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
@@ -63,6 +64,7 @@ export function StudySession(props: {
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/lesson?position=${position}`)
       .then(async (res) => {
+        if (signedOut(res)) return;
         const json = await res.json();
         if (!cancelled) setResult(res.ok ? { position, data: json } : { position, error: json.error ?? "Could not load this topic." });
       })
@@ -89,6 +91,10 @@ export function StudySession(props: {
     setEnding(true);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+      if (signedOut(res)) {
+        setEnding(false);
+        return;
+      }
       if (!res.ok) throw new Error(String(res.status));
       const json = await res.json();
       setEndSummary(json.summary ?? null);
@@ -109,12 +115,13 @@ export function StudySession(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 3)), mode: "tutor", style: "mixed", topicIds }),
       });
-      const json = (await res.json().catch(() => null)) as { id?: number; error?: string } | null;
-      if (!res.ok || !json?.id) throw new Error(typeof json?.error === "string" ? json.error : "");
+      if (signedOut(res)) return;
+      const json = await jsonOf<{ id?: number; error?: string }>(res);
+      if (!res.ok || !json?.id) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
       router.push(`/attempts/${json.id}`);
     } catch (err) {
       setStarting(false);
-      toast(err instanceof Error && err.message ? err.message : "Couldn't start the practice exam. Check your connection and try again.", "error");
+      toast(failureText(err, "Couldn't start the practice exam. Check your connection and try again."), "error");
     }
   }
 
@@ -373,6 +380,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/quiz?position=${position}`)
       .then(async (res) => {
+        if (signedOut(res)) return;
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok) return setError(json.error ?? "Couldn't load the quiz.");
@@ -457,6 +465,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
       body: JSON.stringify({ topicId: quiz!.topicId, index: at, chosen }),
     })
       .then((res) => {
+        if (signedOut(res)) return;
         if (!res.ok) throw new Error(String(res.status));
       })
       .catch(() => {
@@ -472,7 +481,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
 
   const goTo = (i: number) => {
     setPicked(null);
-    moved.current = true;
+    if (i !== index) moved.current = true;
     setIndex(i);
   };
 
@@ -846,9 +855,11 @@ function TutorChat({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, position }),
       });
-      if (!res.ok) {
-        // A plain answer instead of a stream (signed out, key problem, server error): show its message, not raw JSON.
-        const json = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (signedOut(res)) {
+        acc = "_(You've been signed out. Sign in again.)_";
+      } else if (!res.ok) {
+        // A plain answer instead of a stream (key problem, server error): show its message, not raw JSON.
+        const json = await jsonOf<{ error?: string }>(res);
         acc = `_(${typeof json?.error === "string" && json.error ? json.error : "The tutor couldn't answer right now. Try again in a moment."})_`;
       } else {
         const reader = res.body?.getReader();

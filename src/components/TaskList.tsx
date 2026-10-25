@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Icon, ICONS } from "./ui";
 import { toast } from "./Toaster";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 export type TaskItem = {
   id: number;
@@ -24,13 +25,14 @@ function useStartTask() {
     setBusy(true);
     try {
       const res = await fetch(`/api/planner/tasks/${taskId}/start`, { method: "POST" });
-      const json = (await res.json().catch(() => null)) as { url?: string; error?: string } | null;
-      if (!res.ok || !json?.url) throw new Error(typeof json?.error === "string" ? json.error : "");
+      if (signedOut(res)) return false;
+      const json = await jsonOf<{ url?: string; error?: string }>(res);
+      if (!res.ok || !json?.url) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
       router.push(json.url);
       return true;
     } catch (err) {
       setBusy(false);
-      toast(err instanceof Error && err.message ? err.message : "Couldn't open that task. Check your connection and try again.", "error");
+      toast(failureText(err, "Couldn't open that task. Check your connection and try again."), "error");
       return false;
     }
   }
@@ -61,6 +63,7 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: t.status === "done" ? "todo" : "done" }),
       });
+      if (signedOut(res)) return;
       if (!res.ok) throw new Error(String(res.status));
       router.refresh();
     } catch {

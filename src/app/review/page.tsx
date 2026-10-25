@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { QuestionCard, type QuestionData } from "@/components/QuestionCard";
 import { Icon, ICONS, Strip } from "@/components/ui";
+import { jsonOf, signedOut } from "@/components/clientFetch";
 
 type Card = {
   card_id: number;
@@ -45,10 +46,11 @@ export default function ReviewPage() {
     let cancelled = false;
     fetch("/api/review?limit=0")
       .then(async (r) => {
+        if (signedOut(r)) return null;
         if (!r.ok) throw new Error(String(r.status));
         return r.json();
       })
-      .then((j) => !cancelled && setDue(j.due))
+      .then((j) => j && !cancelled && setDue(j.due))
       .catch(() => !cancelled && setError("Couldn't load your review. Check your connection and try again."));
     return () => {
       cancelled = true;
@@ -62,7 +64,8 @@ export default function ReviewPage() {
     try {
       // About one minute per card.
       const res = await fetch(`/api/review?limit=${minutes}`);
-      const j = (await res.json().catch(() => null)) as { cards?: Card[] } | null;
+      if (signedOut(res)) return;
+      const j = await jsonOf<{ cards?: Card[] }>(res);
       if (!res.ok || !j?.cards) throw new Error(String(res.status));
       setCards(j.cards);
       setIndex(0);
@@ -85,6 +88,7 @@ export default function ReviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ correct, confidence }),
       });
+      if (signedOut(res)) return;
       if (!res.ok) throw new Error(String(res.status));
       setDone((d) => d + 1);
       setChosen(null);

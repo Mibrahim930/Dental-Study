@@ -14,7 +14,8 @@ export function SlideImage({ pageId, alt, aspect, crop }: { pageId: number; alt:
         src={src}
         alt={alt}
         className="w-full rounded-lg border border-border bg-card"
-        style={aspect ? { aspectRatio: String(aspect) } : undefined}
+        // `auto <ratio>`: the stored ratio holds the space until the picture loads, then its own ratio takes over.
+        style={aspect ? { aspectRatio: `auto ${aspect}` } : undefined}
         loading="lazy"
         decoding="async"
       />

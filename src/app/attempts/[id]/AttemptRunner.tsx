@@ -7,6 +7,7 @@ import { QuestionCard, type QuestionData } from "@/components/QuestionCard";
 import type { Confidence } from "@/lib/practicePlan";
 import { DoubleRing, Icon, ICONS } from "@/components/ui";
 import { toast } from "@/components/Toaster";
+import { ServerMessage, failureText, jsonOf, signedOut } from "@/components/clientFetch";
 
 const CONFIDENCE_CHOICES: [Confidence, string, string][] = [
   ["guess", "Guessed", "bg-lilac text-on-lilac"],
@@ -22,7 +23,8 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   });
   const [pending, setPending] = useState<Record<number, number>>({});
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
+  // A failed save is pinned to its question, so it never shows under a question she moved on to meanwhile.
+  const [saveError, setSaveError] = useState<{ id: number; text: string } | null>(null);
   const [finishing, setFinishing] = useState(false);
   // "Finish" with questions left asks first (one stray tap shouldn't end a timed exam). Shown next to the button used.
   const [confirmAt, setConfirmAt] = useState<"top" | "bottom" | null>(null);
@@ -40,14 +42,14 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     questionTop.current?.focus({ preventScroll: true });
   }, [index]);
   function goto(i: number) {
-    moved.current = true;
-    setSaveError("");
+    if (i !== index) moved.current = true;
     setIndex(i);
   }
 
   const refresh = useCallback(async () => {
     try {
       const res = await fetch(`/api/attempts/${attemptId}`);
+      if (signedOut(res)) return;
       if (res.ok) setView(await res.json());
     } catch {
       // Offline for a moment: the next poll tries again.
@@ -65,7 +67,8 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     setFinishing(true);
     try {
       const res = await fetch(`/api/attempts/${attemptId}/finish`, { method: "POST" });
-      const json = (await res.json().catch(() => null)) as AttemptView | null;
+      if (signedOut(res)) return;
+      const json = await jsonOf<AttemptView>(res);
       if (!res.ok || !json?.attempt) throw new Error(String(res.status));
       setView(json);
       window.scrollTo({ top: 0 });
@@ -117,19 +120,20 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     const chosen = pending[q.id];
     if (chosen == null || q.chosen_index != null || saving) return;
     setSaving(true);
-    setSaveError("");
+    setSaveError(null);
     try {
       const res = await fetch(`/api/attempts/${attemptId}/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ questionId: q.id, chosen, confidence }),
       });
-      const json = (await res.json().catch(() => null)) as (AttemptView & { error?: string }) | null;
-      if (!res.ok || !json?.attempt) throw new Error(typeof json?.error === "string" ? json.error : "");
+      if (signedOut(res)) return;
+      const json = await jsonOf<AttemptView & { error?: string }>(res);
+      if (!res.ok || !json?.attempt) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
       setView(json);
     } catch (err) {
       // Not saved: the picked option stays so she can tap a confidence button again once she's back online.
-      setSaveError(err instanceof Error && err.message ? err.message : "Your answer didn't save. Check your connection and try again.");
+      setSaveError({ id: q.id, text: failureText(err, "Your answer didn't save. Check your connection and try again.") });
     } finally {
       setSaving(false);
     }
@@ -179,9 +183,9 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
           );
         })}
       </div>
-      {saveError && (
+      {saveError?.id === q.id && (
         <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
-          {saveError}
+          {saveError.text}
         </p>
       )}
     </div>
@@ -380,12 +384,13 @@ function Results({ view }: { view: AttemptView }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ size: Math.min(25, Math.max(10, topicIds.length * 4)), mode: "tutor", style: "mixed", scope: { kind: "topics", topicIds } }),
       });
-      const json = (await res.json().catch(() => null)) as { id?: number; error?: string } | null;
-      if (!res.ok || !json?.id) throw new Error(typeof json?.error === "string" ? json.error : "");
+      if (signedOut(res)) return;
+      const json = await jsonOf<{ id?: number; error?: string }>(res);
+      if (!res.ok || !json?.id) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
       router.push(`/attempts/${json.id}`);
     } catch (err) {
       setStarting(false);
-      toast(err instanceof Error && err.message ? err.message : "Couldn't start the practice exam. Check your connection and try again.", "error");
+      toast(failureText(err, "Couldn't start the practice exam. Check your connection and try again."), "error");
     }
   }
 
