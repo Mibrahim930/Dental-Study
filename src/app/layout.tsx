@@ -15,9 +15,9 @@ const bricolage = Bricolage_Grotesque({ variable: "--font-bricolage", subsets: [
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Lolo's Study Buddy",
+  title: "Lolo's Dental Buddy",
   description: "Study your own dental lectures with guided sessions and practice exams",
-  appleWebApp: { title: "Study Buddy" },
+  appleWebApp: { title: "Dental Buddy" },
 };
 
 export const viewport: Viewport = {

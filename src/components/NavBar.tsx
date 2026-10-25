@@ -27,9 +27,9 @@ export function NavBar({ isAdmin, reviewsDue, dateLabel }: { isAdmin: boolean; r
   return (
     <>
       <header className="mx-auto flex w-full max-w-[1280px] items-center gap-3 px-3.5 pt-4 sm:px-8 sm:pt-6">
-        <Link href="/" className="flex shrink-0 items-center gap-2.5" aria-label="Lolo's Study Buddy home">
+        <Link href="/" className="flex shrink-0 items-center gap-2.5" aria-label="Lolo's Dental Buddy home">
           <Logo size={40} />
-          <span className="hidden text-[18px] font-extrabold tracking-[-0.02em] lg:inline">Lolo&apos;s Study Buddy</span>
+          <span className="hidden text-[18px] font-extrabold tracking-[-0.02em] lg:inline">Lolo&apos;s Dental Buddy</span>
           <span className="text-[15px] font-semibold sm:hidden">{dateLabel}</span>
         </Link>
 
