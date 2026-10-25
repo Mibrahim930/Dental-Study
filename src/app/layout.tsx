@@ -4,6 +4,7 @@ import "./globals.css";
 import { currentUser } from "@/lib/user";
 import { NavBar } from "@/components/NavBar";
 import { Toaster } from "@/components/Toaster";
+import { ReportButton } from "@/components/ReportButton";
 import { themeOf } from "@/lib/themes";
 import { countDue } from "@/lib/practice";
 import { plannerSettings, todayIn } from "@/lib/planner";
@@ -35,6 +36,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         {signedIn && <NavBar isAdmin={!!user.is_admin} reviewsDue={countDue(user.id)} dateLabel={shortDate(todayIn(plannerSettings(user.id).timezone))} />}
         <main className={`mx-auto w-full min-w-0 max-w-[1280px] flex-1 px-3.5 py-4 sm:px-8 sm:py-8 ${signedIn ? "pb-32 sm:pb-12" : ""}`}>{children}</main>
         <Toaster />
+        {signedIn && <ReportButton />}
       </body>
     </html>
   );
