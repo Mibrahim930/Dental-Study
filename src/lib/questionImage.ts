@@ -27,21 +27,26 @@ export function mentionsPicture(text: string): boolean {
     `\\b${det}${noun} (?:shows?|reveals?|demonstrates?|depicts?|illustrates?)\\b`,
     `\\bwhat is (?:shown|pictured|depicted|illustrated|drawn)\\b`,
     `\\b(?:shown|pictured|depicted|illustrated|drawn) (?:in|on) ${det}${noun}\\b`,
-    // Things only a picture can carry.
+    // Things only a picture can carry. Kept narrow: "outline form", "orthodontic bracket", "teeth are numbered" and
+    // "the probe slides" are ordinary dental text, and a false positive here deletes a stored question in the repair.
     `\\b(?:diagram|illustration|schematic|flow ?chart)s?\\b`,
     `\\b(?:the|an|each|both|which|these|those) arrows?\\b`,
-    `\\b(?:the|this|that) (?:[\\w'’-]+ )?(?:asterisk|circle|outline|bracket)s?\\b`,
+    `\\b(?:the|this|that) (?:[\\w'’-]+ )?asterisks?\\b`,
     `\\b(?:dotted|dashed|shaded|hatched) (?:line|area|region|zone|circle|box|outline|portion|part)s?\\b`,
     `\\b${colour} (?:circle|box|outline|arrow)s?\\b`,
     `\\b(?:circled|outlined|highlighted|shaded|boxed|drawn|shown) in ${colour}\\b`,
-    `\\b(?:is|are|was|were) (?:drawn|shaded|highlighted|circled|outlined|colou?red|depicted|illustrated|pictured|labeled|labelled|lettered|numbered)\\b`,
+    `\\b(?:is|are|was|were) (?:drawn|shaded|highlighted|circled|outlined|colou?red|depicted|illustrated|pictured)\\b`,
     // The student is pointed at a slide: "on slide 32", "slide 32's diagram", "the slide's", "this slide".
+    // Not the verb ("the probe slides apically"): "slide" the noun comes with 's, a number, or "this slide".
     `\\bslides? #?\\d{1,3}\\b`,
-    `\\b(?:the|this|that|on|in|from) (?:[\\w-]+ )?slides?(?:'s|’s)?\\b`,
+    `\\b(?:the|this|that) (?:[\\w-]+ )?slide(?:'s|’s)\\b`,
+    `\\bthis slide\\b`,
+    `\\b(?:on|in|from) (?:the|this|that) slide\\b(?! (?:into|onto|over|under|along|off|out|down|up|across|back|past|through|apically|coronally|forward|backward)\\b)`,
   ];
   if (new RegExp(patterns.join("|"), "i").test(text)) return true;
-  // Labels: "labeled 'gp'", "marked X", "labelled as A", "numbered 3". Case matters here ("marked as the" is prose).
-  const label = `\\b(?:[Ll]abel(?:l)?ed|[Mm]arked|[Ll]ettered|[Nn]umbered|[Ii]ndicated|[Hh]ighlighted|[Cc]ircled|[Oo]utlined|[Ss]haded)(?: as| with| by)? (?:["'‘“][^"'’”]{1,24}["'’”]|[A-Z]\\b|\\d{1,2}\\b)`;
+  // Labels: "labeled 'gp'", "marked X", "labelled as A", "labeled 3". Case matters here ("marked as the" is prose), and a
+  // bare number counts only after "labeled" ("clamp numbered 8A", "pockets marked 3 mm" are text).
+  const label = `\\b(?:[Ll]abel(?:l)?ed|[Mm]arked|[Ii]ndicated|[Hh]ighlighted|[Cc]ircled|[Oo]utlined|[Ss]haded)(?: as| with| by)? (?:["'‘“][^"'’”]{1,24}["'’”]|[A-Z]\\b)|\\b[Ll]abel(?:l)?ed(?: as)? \\d{1,2}\\b`;
   return new RegExp(label).test(text);
 }
 

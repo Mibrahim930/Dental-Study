@@ -133,6 +133,16 @@ describe("helpers", () => {
       "Chronic periodontitis is marked by attachment loss. Which is true?",
       "The tooth marked as the abutment must have what?",
       "A patient has a red line along the gingival margin. What is it?",
+      // Ordinary dental wording that happens to share words with picture talk (a false positive deletes a stored question).
+      "What determines the outline form of a Class II preparation?",
+      "The orthodontic bracket is bonded to which surface?",
+      "When the probe slides apically into the sulcus, what is being measured?",
+      "In the Universal system, teeth are numbered starting from which tooth?",
+      "The tooth numbered 14 is which?",
+      "A patient's chart is labeled high caries risk. What interval is recommended?",
+      "Which of the following best describes the circle of Willis?",
+      "The rubber dam clamp is numbered 8A. For which tooth?",
+      "Pockets marked 3 mm or less are considered what?",
     ])
       expect(mentionsPicture(t), t).toBe(false);
     expect(slideNumberIn("On slide 32's diagram, what is drawn?")).toBe(32);
