@@ -19,6 +19,14 @@ export async function register() {
     // One-time upgrade: topic maps built before they were per lecture are re-mapped by lecture, one exam at a time, in
     // the background (each exam once; a restart carries on with the rest). Failures are logged and leave the old map.
     try {
+      // Section-quiz progress used to live per study session; copy it once into the per-student table.
+      try {
+        const { migrateSessionChecks } = await import("./lib/quizProgress");
+        const moved = migrateSessionChecks();
+        if (moved) console.log(`Quiz progress: copied ${moved} earlier answers into quiz_answers`);
+      } catch (err) {
+        console.error("Quiz progress migration failed", err);
+      }
       const { rebuildLectureMaps } = await import("./lib/topics");
       void rebuildLectureMaps()
         .then((n) => n && console.log(`Reorganised ${n} exam(s)' topics by lecture`))

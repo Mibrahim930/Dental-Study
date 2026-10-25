@@ -20,10 +20,13 @@ export function OptionRow({
   ranges,
   onRanges,
   chips,
+  note,
 }: {
   index: number;
   text: string;
   state: OptionState;
+  /** Once the answer is revealed: one line on why this option is right or wrong. */
+  note?: string | null;
   /** Shown as the student's pick (before the answer is revealed). */
   checked: boolean;
   /** Pick it; omitted when the question can't be answered (already answered or a review). */
@@ -90,12 +93,10 @@ export function OptionRow({
       >
         {letter}
       </span>
-      <Highlightable
-        text={text}
-        ranges={ranges}
-        onChange={onRanges}
-        className={`flex-1 py-1 text-base leading-snug font-semibold ${crossed ? "line-through decoration-2 opacity-60" : ""}`}
-      />
+      <div className="flex min-w-0 flex-1 flex-col py-1">
+        <Highlightable text={text} ranges={ranges} onChange={onRanges} className={`text-base leading-snug font-semibold ${crossed ? "line-through decoration-2 opacity-60" : ""}`} />
+        {note && <span className="mt-1 text-[13px] leading-snug font-medium opacity-80">{note}</span>}
+      </div>
       {chips}
       {onToggleCross && (
         <button

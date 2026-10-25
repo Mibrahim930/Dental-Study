@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS questions (
   root_question_id INTEGER,                                 -- original question this was copied from (class sharing)
   flagged INTEGER NOT NULL DEFAULT 0,
   flag_note TEXT,
+  option_notes TEXT,                               -- JSON string[]: one sentence per option (why right / why wrong), same order as options
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -294,6 +295,16 @@ CREATE TABLE IF NOT EXISTS shared_exams (
   UNIQUE(class_id, exam_id)
 );
 
+CREATE TABLE IF NOT EXISTS quiz_answers (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  check_index INTEGER NOT NULL,                    -- position in the topic's section quiz (checks_json)
+  chosen INTEGER NOT NULL,
+  correct INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, topic_id, check_index)     -- a student's progress on a section quiz, across sessions and devices
+);
+
 -- Highlights and crossed-out options a student put on a question, so they follow her between devices.
 -- key: "attempt:<attemptId>:<questionId>" (practice exams) or "quiz:<quiz question id>" (section quizzes). json: lib/marks.ts Marks.
 CREATE TABLE IF NOT EXISTS question_marks (
@@ -358,6 +369,7 @@ function migrate(db: Database.Database) {
   if (!columns(db, "users").includes("focus_weak")) db.exec("ALTER TABLE users ADD COLUMN focus_weak INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "users").includes("theme")) db.exec("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'classic'");
   if (!columns(db, "users").includes("session_epoch")) db.exec("ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0");
+  if (!columns(db, "questions").includes("option_notes")) db.exec("ALTER TABLE questions ADD COLUMN option_notes TEXT");
   if (!columns(db, "attempts").includes("adaptive")) db.exec("ALTER TABLE attempts ADD COLUMN adaptive INTEGER NOT NULL DEFAULT 1");
   if (!columns(db, "attempts").includes("plan_json")) db.exec("ALTER TABLE attempts ADD COLUMN plan_json TEXT");
   if (!columns(db, "attempt_questions").includes("confidence")) {
@@ -494,6 +506,8 @@ export type Topic = {
 export function resetSectionQuiz(topicId: number) {
   db.prepare("UPDATE topics SET checks_json = NULL, checks_version = NULL WHERE id = ?").run(topicId);
   db.prepare("UPDATE session_checks SET check_index = NULL WHERE topic_id = ?").run(topicId);
+  // Per-student progress on the old questions goes too (it would point at different questions otherwise).
+  db.prepare("DELETE FROM quiz_answers WHERE topic_id = ?").run(topicId);
 }
 
 export type Question = {
@@ -507,6 +521,7 @@ export type Question = {
   root_question_id: number | null;
   stem: string;
   options: string;
+  option_notes: string | null;
   correct_index: number;
   explanation: string;
   source_page_id: number | null;

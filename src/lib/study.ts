@@ -6,31 +6,38 @@ import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { recentSummaries, searchLibrary, topicConcepts, upsertConcept, weakConcepts, glossaryText } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
-import { ANGLE_TEXT, normStem, planQuiz, type Angle } from "./quizPlan";
+import { ANGLE_TEXT, normStem, planQuizByFacts, type Angle } from "./quizPlan";
+import { coveredFacts } from "./lessonCoverage";
+import { clearTopicQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK } from "./examStyle";
 import { markPictures, mentionsPicture, pictureFor, PICTURE_RULES } from "./questionImage";
 
 export const Lesson = z.object({
   explanation: z
     .string()
-    .describe("Markdown teaching walkthrough of the topic, 200-450 words, clinically oriented, with **bold** key terms"),
+    .describe(
+      "Markdown lesson that walks the section's slides in order and covers every fact on every slide. Plain words first, then the term in **bold** (\"the nerve inside the tooth — the **pulp**\"); define each term the first time it appears; short paragraphs, each ending with its slide reference like (Lecture 2, slide 7). As long as the content needs; never summarise facts away",
+    ),
   key_points: z
     .array(z.string())
-    .describe("4-7 high-yield points to remember. Start with what slides marked ★IMPORTANT emphasize, and begin those points with \"★ \""),
+    .describe("5-10 points to remember, in plain words. Start with what slides marked ★IMPORTANT emphasize, and begin those points with \"★ \""),
   slides: z
     .array(z.object({ page_id: z.number(), caption: z.string() }))
-    .describe("Up to 4 of the provided slides whose images are most worth looking at, with a caption saying what to notice"),
+    .describe("Up to 6 of the provided slides whose images are most worth looking at, with a caption saying what to notice"),
   connections: z
     .string()
     .nullable()
     .describe("How this ties to material from the student's earlier exams (cite them), or null if nothing relevant"),
 });
-export type Lesson = z.infer<typeof Lesson>;
+/** Stored lessons carry the version of the writer that made them (missing = 1); older ones are rewritten once on next open. */
+export type Lesson = z.infer<typeof Lesson> & { version?: number };
+export const LESSON_VERSION = 2;
+/** Share of the slides' facts a lesson must mention; below this one repair call asks for the missing ones. */
+const LESSON_COVERAGE = 0.8;
 
-/** Questions in a section quiz (fewer only if the AI couldn't write enough distinct, checked ones). */
-export const QUIZ_SIZE = 20;
-/** Stored in topics.checks_version. Quizzes written by an older version are rewritten once on next open. */
-export const QUIZ_VERSION = 2;
+/** Stored in topics.checks_version. Quizzes written by an older version are rewritten once on next open.
+ *  3 = one question per distinct fact (5-25), per-option notes, quality-tier writer. */
+export const QUIZ_VERSION = 3;
 
 const SectionQuiz = z.object({
   questions: z.array(
@@ -41,6 +48,9 @@ const SectionQuiz = z.object({
       correct_index: z.number().describe("0-based index of the correct option"),
       correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
       explanation: z.string().describe("Why it's right and why the tempting wrong answer is wrong. Cite the slide as (Lecture, slide N)"),
+      option_notes: z
+        .array(z.string())
+        .describe("One short sentence per option, in the same order as options: for the correct one why it is right, for each wrong one why it is wrong (what it confuses)"),
       source_page_id: z.number().describe("The [P…] id of the slide this question tests"),
       image_page_id: z
         .number()
@@ -72,6 +82,8 @@ export type QuizQuestion = {
   options: string[];
   correct_index: number;
   explanation: string;
+  /** One sentence per option (same order as options): why right / why wrong. Quizzes before version 3 have none. */
+  option_notes?: string[];
   concept: string;
   source_page_id?: number | null;
   /** Slide whose picture is shown with the question (cropped to the clinical image when the notes marked one). */
@@ -116,8 +128,18 @@ export function slideNotesText(pages: (PageRow & { filename: string })[]): strin
 const inflight = new Map<number, Promise<Lesson>>();
 
 /** Lessons are generated once per topic and cached; concurrent requests share one generation. */
+/** The stored lesson is up to date (written by this version); older ones are rewritten once on next open. */
+export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json">): boolean => {
+  if (!topic.lesson_json) return false;
+  try {
+    return ((JSON.parse(topic.lesson_json) as Lesson).version ?? 1) >= LESSON_VERSION;
+  } catch {
+    return false;
+  }
+};
+
 export function getLesson(topic: Topic): Promise<Lesson> {
-  if (topic.lesson_json) return Promise.resolve(JSON.parse(topic.lesson_json) as Lesson);
+  if (lessonIsCurrent(topic)) return Promise.resolve(JSON.parse(topic.lesson_json!) as Lesson);
   let p = inflight.get(topic.id);
   if (!p) {
     p = generateLesson(topic).finally(() => inflight.delete(topic.id));
@@ -132,34 +154,62 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   const userId = examOwner(topic.exam_id);
   const earlier = searchLibrary(userId, `${topic.title} ${concepts.map((c) => c.name).join(" ")}`, 5, topic.exam_id);
 
-  const lesson = await generate({
-    creds: credentials(userId),
-    purpose: "lesson",
-    schema: Lesson,
-    effort: "medium",
-    maxTokens: 16000,
-    system: `You are a dental school tutor writing one step of a guided study session.
-Teach only from the student's slides provided (plus standard dental knowledge needed to connect them). Slides marked ★IMPORTANT or with annotations were emphasized by the professor: make sure they are covered.
-Refer to slides as "Lecture name, slide N".`,
-    content: [
-      `Topic: ${topic.title}\n${topic.summary}`,
-      `Concepts and the student's mastery so far: ${
-        concepts.map((c) => `${c.name} (${c.mastery == null ? "untested" : Math.round(c.mastery * 100) + "%"})`).join(", ") ||
-        "none"
-      }`,
-      `Slides:\n${slideNotesText(pages)}`,
-      earlier.length
-        ? `Related slides from the student's earlier exams:\n${earlier
-            .map((h) => `- ${h.exam_name} / ${h.filename} slide ${h.page_number}: ${h.title} — ${h.snippet}`)
-            .join("\n")}`
-        : "No related material from earlier exams.",
-    ].join("\n\n"),
-  });
+  const creds = credentials(userId);
+  const content = [
+    `Section: ${topic.title}\n${topic.summary}`,
+    `Concepts and the student's mastery so far: ${
+      concepts.map((c) => `${c.name} (${c.mastery == null ? "untested" : Math.round(c.mastery * 100) + "%"})`).join(", ") || "none"
+    }`,
+    `Slides (in order; every fact listed under a slide must appear in the lesson):\n${slideNotesText(pages)}`,
+    earlier.length
+      ? `Related slides from the student's earlier exams:\n${earlier.map((h) => `- ${h.exam_name} / ${h.filename} slide ${h.page_number}: ${h.title} — ${h.snippet}`).join("\n")}`
+      : "No related material from earlier exams.",
+  ].join("\n\n");
+  const ask = (extra: string) =>
+    generate({
+      creds,
+      purpose: extra ? "lesson repair" : "lesson",
+      schema: Lesson,
+      effort: "medium",
+      maxTokens: 24000,
+      system: LESSON_SYSTEM,
+      content: extra ? `${content}\n\n${extra}` : content,
+    });
+
+  // Every fact on every slide should be in the lesson. When too many are missing, one repair call asks for them.
+  const facts = pages.flatMap((p) => parseNotes(p)?.key_facts ?? []);
+  let lesson: Lesson = await ask("");
+  let cover = coveredFacts(lesson.explanation, facts);
+  if (facts.length > 0 && cover.ratio < LESSON_COVERAGE) {
+    try {
+      const again = await ask(
+        `Your previous lesson left out these facts from the slides. Write the whole lesson again, keeping everything that was there and adding each of these where it belongs:\n${cover.missing
+          .map((f) => `- ${f}`)
+          .join("\n")}`,
+      );
+      const cover2 = coveredFacts(again.explanation, facts);
+      if (cover2.ratio >= cover.ratio) {
+        lesson = again;
+        cover = cover2;
+      }
+    } catch (err) {
+      console.error(`Lesson repair for topic ${topic.id} failed; keeping the first lesson`, err);
+    }
+  }
   const valid = new Set(pages.map((p) => p.id));
-  lesson.slides = lesson.slides.filter((s) => valid.has(s.page_id)).slice(0, 4);
+  lesson.slides = lesson.slides.filter((s) => valid.has(s.page_id)).slice(0, 6);
+  lesson.version = LESSON_VERSION;
   db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(lesson), topic.id);
   return lesson;
 }
+
+const LESSON_SYSTEM = `You are a dental school tutor writing one section of a guided study session, for a student who finds the slides dense.
+Teach only from the student's slides provided (plus standard dental knowledge needed to connect them).
+- Walk the slides in order and cover every fact on every slide: the lesson is a complete, simpler version of the lecture, not a summary. Nothing a slide says may be left out; if a slide lists six things, the lesson explains all six.
+- Say it in plain words first, then give the term in **bold**: "the nerve and blood vessels inside the tooth — the **pulp**". Define every term the first time it appears. Short sentences, short paragraphs, one idea at a time, and a one-line "In one sentence:" opener for the section.
+- Each paragraph ends with where it comes from, like (Lecture name, slide N).
+- Slides marked ★IMPORTANT or with annotations were emphasized by the professor: say so where they come up ("★ the professor stressed this") and put them first in the key points.
+- Numbers, ranges, names and classifications are given exactly as the slides give them.`;
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 
@@ -178,11 +228,12 @@ export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
 }
 
 const QUIZ_SYSTEM = `You write end-of-section quiz questions for a dental student's guided study session, based strictly on their lecture slides.
-You are given a numbered list of planned questions: each names the slide it must test and its angle. Write exactly one question for each, and set slot to its Q number and source_page_id to that slide.
+You are given a numbered list of planned questions: each names the slide it must test, usually the exact fact it must test, and its angle. Write exactly one question for each, and set slot to its Q number and source_page_id to that slide.
+- A question with a listed fact tests exactly that fact and nothing else. A question without one tests its slide from the given angle without repeating a fact another question already tests. Never ask the same fact twice in different words.
 - Single best answer, 4 options. Exactly one option is defensibly correct from the slides.
 - Use "EXCEPT"/"NOT" only when the angle says so. Don't test citations, authors, years or slide numbers.
-- When one slide has several planned questions, each tests a different fact or takes a clearly different angle. Never write the same question twice.
 - The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).
+- option_notes: one short sentence per option, in the same order as options — for the right one why it is right, for each wrong one exactly why it is wrong (which fact or condition it mixes up).
 - ${PICTURE_RULES}
 
 ${EXAM_STYLE}`;
@@ -211,26 +262,32 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const pages = topicPages(topic);
   const notes = markPictures(slideNotesText(pages), pages);
   const valid = new Set(pages.map((p) => p.id));
-  const slots = planQuiz(
+  // One question per distinct fact on the section's slides (floor 5, ceiling 25), never the same fact twice.
+  const slots = planQuizByFacts(
     pages.map((p) => {
       const n = parseNotes(p);
-      return { id: p.id, keyFacts: n?.key_facts.length ?? 0, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case) };
+      const facts = n?.key_facts ?? [];
+      return { id: p.id, keyFacts: facts.length, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case), facts };
     }),
-    QUIZ_SIZE,
   );
   const judge = process.env.QUIZ_JUDGE !== "0";
-  const context = [`Topic: ${topic.title}\n${topic.summary}`, `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`, `Slides:\n${notes}`].join("\n\n");
+  const context = [`Section: ${topic.title}\n${topic.summary}`, `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`, `Slides:\n${notes}`].join("\n\n");
 
   const write = async (wanted: number[], avoid: string[]): Promise<Draft[]> => {
     const list = wanted
-      .map((i) => `Q${i + 1}: ${slots[i].page != null ? `slide P${slots[i].page}` : "the topic"} — ${ANGLE_TEXT[slots[i].angle]}`)
+      .map((i) => {
+        const s = slots[i];
+        const where = s.page != null ? `slide P${s.page}` : "the section";
+        return `Q${i + 1}: ${where}${s.fact ? ` — fact: "${s.fact}"` : ""} — ${ANGLE_TEXT[s.angle]}`;
+      })
       .join("\n");
     const out = await generate({
       creds,
       purpose: "section quiz",
       schema: SectionQuiz,
       effort: "medium",
-      maxTokens: 16000,
+      maxTokens: 20000,
+      tier: "quality",
       system: QUIZ_SYSTEM,
       content: `${context}\n\nWrite exactly these ${wanted.length} questions:\n${list}${
         avoid.length ? `\n\nQuestions already in this quiz. Don't repeat them or ask the same fact again:\n${avoid.map((s) => `- ${s}`).join("\n")}` : ""
@@ -260,6 +317,10 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
         options: q.options,
         correct_index: correct,
         explanation: q.explanation,
+        // Per-option notes are kept only when there is exactly one per option; a good question isn't lost over them.
+        ...(Array.isArray(q.option_notes) && q.option_notes.length === q.options.length && q.option_notes.every((n) => typeof n === "string" && n.trim())
+          ? { option_notes: q.option_notes.map((n) => n.trim()) }
+          : {}),
         concept: q.concept,
         source_page_id: page,
         image_page_id: picture?.page_id ?? null,
@@ -354,13 +415,21 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       void slot;
       // Shuffle options so the correct answer isn't biased to one position.
       const order = shuffle(q.options.map((_, i) => i));
-      return { id: randomUUID().slice(0, 8), ...q, options: order.map((i) => q.options[i]), correct_index: order.indexOf(q.correct_index) };
+      return {
+        id: randomUUID().slice(0, 8),
+        ...q,
+        options: order.map((i) => q.options[i]),
+        correct_index: order.indexOf(q.correct_index),
+        ...(q.option_notes ? { option_notes: order.map((i) => q.option_notes![i]) } : {}),
+      };
     });
   if (questions.length === 0) throw new Error("Couldn't write the section quiz. Try again.");
 
   db.transaction(() => {
-    // Replacing an older quiz: earlier answers point at the old positions, so detach them (rows stay for history).
+    // Replacing an older quiz: earlier answers point at the old positions, so detach them (rows stay for history),
+    // and the per-student progress on the old questions is cleared.
     db.prepare("UPDATE session_checks SET check_index = NULL WHERE topic_id = ?").run(topic.id);
+    clearTopicQuizAnswers(topic.id);
     db.prepare("UPDATE topics SET checks_json = ?, checks_version = ? WHERE id = ?").run(JSON.stringify(questions), QUIZ_VERSION, topic.id);
     // Concepts the quiz tests count toward this topic's mastery even when the AI named a new one.
     const link = db.prepare("INSERT OR IGNORE INTO topic_concepts (topic_id, concept_id) VALUES (?, ?)");

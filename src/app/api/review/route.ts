@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dueCards, countDue, nextReviewDates } from "@/lib/practice";
 import { parseNotes } from "@/lib/processing";
+import { optionNotes } from "@/lib/attemptView";
 import { apiUser, unauthorized } from "@/lib/user";
 
 export async function GET(request: Request) {
@@ -17,6 +18,7 @@ export async function GET(request: Request) {
     options: JSON.parse(q.options),
     correct_index: q.correct_index,
     explanation: q.explanation,
+    option_notes: optionNotes(q.option_notes, (JSON.parse(q.options) as string[]).map((_, i) => i)),
     image: imageFor(q.image_page_id),
     source_page_id: q.source_page_id,
     next: nextReviewDates(q.card_id),

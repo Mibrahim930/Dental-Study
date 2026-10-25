@@ -50,7 +50,8 @@ import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { makeUser } from "./helpers";
 
 const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: ["a", "b"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+  // Two distinct facts per slide: a 6-slide topic plans 12 questions (one per fact).
+  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact a${i}`, `fact b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
 
 function world(slides = 6) {
   const userId = makeUser();
@@ -91,12 +92,12 @@ describe("a section quiz only changes through \"Write new questions\"", () => {
     expect((await check(w.sessionId, { topicId: w.topicId, index: 0, chosen: 0 })).status).toBe(200);
     const res = await regen(w.sessionId, { topicId: w.topicId });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, count: 20 });
+    expect(await res.json()).toEqual({ ok: true, count: 12 });
     const fresh = JSON.parse(w.topic().checks_json!) as QuizQuestion[];
-    expect(fresh).toHaveLength(20);
+    expect(fresh).toHaveLength(12);
     expect(fresh.map((q) => q.id)).not.toEqual(first.map((q) => q.id));
     expect(fresh.every((q) => !first.some((f) => f.question === q.question))).toBe(true); // really new text
-    expect(w.topic().checks_version).toBe(2);
+    expect(w.topic().checks_version).toBe(3);
     const rows = db.prepare("SELECT check_index FROM session_checks WHERE session_id = ?").all(w.sessionId) as { check_index: number | null }[];
     expect(rows).toEqual([{ check_index: null }]); // kept for history, no longer tied to a question
   });

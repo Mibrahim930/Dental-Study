@@ -10,6 +10,7 @@ import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
+import { QuizMe } from "./QuizMe";
 import type { Range } from "@/lib/marks";
 
 /**
@@ -46,6 +47,8 @@ type QuizQ = {
   options: string[];
   correct_index: number;
   explanation: string;
+  /** One line per option (same order): why right / why wrong. Quizzes written before version 3 have none. */
+  option_notes?: string[];
   concept: string;
   /** The picture the question is about, if any: shown cropped to the clinical image until answered, then whole. */
   image?: { page_id: number; aspect: number; crop: CropBox | null } | null;
@@ -302,6 +305,8 @@ export function StudySession(props: {
         </article>
 
         <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} open={chatOpen} onClose={closeChat} />
+        {/* Highlight any text in the lesson, quiz or tutor and get "Quiz me on this" (3 / 5 / 10 questions on that passage). */}
+        <QuizMe examId={examId} topicId={topic?.id} />
       </div>
 
       {/* Phone: floating button that opens the tutor as a bottom sheet. */}
@@ -472,6 +477,27 @@ function SectionQuiz({
     setSaveError("");
     setAttempt((a) => a + 1);
   };
+  /** "Retake this quiz": the same questions, her answers for this section cleared (asks first). */
+  const [retaking, setRetaking] = useState(false);
+  async function retake() {
+    if (!quiz || retaking) return;
+    if (!window.confirm("Start this quiz over? Your answers for this section are cleared; the questions stay the same.")) return;
+    setRetaking(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/quiz/retake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topicId: quiz.topicId }),
+      });
+      if (signedOut(res)) return;
+      if (!res.ok) throw new Error(String(res.status));
+      reload();
+    } catch {
+      toast("Couldn't reset the quiz. Check your connection and try again.", "error");
+    } finally {
+      setRetaking(false);
+    }
+  }
 
   if (error) {
     return (
@@ -494,7 +520,7 @@ function SectionQuiz({
       <section className="card flex flex-col gap-3" aria-busy>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[15px] font-semibold text-muted-foreground">
-            Writing 20 questions and checking them against your slides… about 1–2 minutes. Keep reading; it&apos;ll appear here.
+            Writing this section&apos;s quiz (one question per fact on its slides) and checking it against the slides… about 1–2 minutes. Keep reading; it&apos;ll appear here.
           </span>
           {skip}
         </div>
@@ -589,7 +615,14 @@ function SectionQuiz({
           </div>
         )}
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
-          <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
+            {done > 0 && (
+              <button className="btn-ghost btn-lg" disabled={retaking} onClick={retake}>
+                {retaking ? "Clearing…" : "Retake this quiz"}
+              </button>
+            )}
+          </div>
           <button className="btn-primary btn-lg" onClick={onNext}>{nextLabel}</button>
         </div>
         <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
@@ -698,6 +731,7 @@ function QuizBody({
             crossed={marks.crossed.includes(i)}
             // The option she has picked can't also be crossed out.
             onToggleCross={!answered && i === picked ? undefined : () => toggleCross(i)}
+            note={answered ? q.option_notes?.[i] : undefined}
             ranges={marks.hl[`opt${i}`] ?? []}
             onRanges={setHl(`opt${i}`)}
             chips={
@@ -761,7 +795,7 @@ function RegenerateQuiz({
   if (state === "working") {
     return (
       <div className="rounded-[20px] bg-muted px-4 py-3 text-[14px] font-semibold text-muted-foreground" aria-busy>
-        Writing 20 new questions and checking them against your slides… about 1–2 minutes. Keep this page open.
+        Writing a new set of questions (one per fact on these slides) and checking them against your slides… about 1–2 minutes. Keep this page open.
       </div>
     );
   }

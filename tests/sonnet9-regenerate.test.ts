@@ -46,7 +46,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getSectionQuiz, type QuizQuestion } from "@/lib/study";
+import { getSectionQuiz, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
 import { EXAM_STYLE } from "@/lib/examStyle";
 import { POST as regenPOST } from "@/app/api/sessions/[id]/quiz/regenerate/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
@@ -54,8 +54,10 @@ import { POST as reportPOST } from "@/app/api/sessions/[id]/quiz/report/route";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { makeUser } from "./helpers";
 
+// Two facts of its own per slide: the default 6-slide topic plans one question per fact, 12 in all.
 const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: ["a", "b"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact a${i}`, `fact b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+const SIZE = 12;
 
 function world(userId = makeUser(), slides = 6) {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
@@ -81,7 +83,7 @@ beforeEach(() => {
   gate = null;
 });
 
-describe("stability of a cached version-2 quiz", () => {
+describe("stability of a cached current-version quiz", () => {
   it("no AI call across repeats, answering, reporting, GETs", async () => {
     const w = world();
     currentUserId = w.userId;
@@ -98,12 +100,13 @@ describe("stability of a cached version-2 quiz", () => {
     await getSectionQuiz(w.topic());
     expect(calls.length).toBe(before);
     expect(stored(w).map((q) => q.id)).toEqual(ids);
-    expect(w.topic().checks_version).toBe(2);
+    expect(w.topic().checks_version).toBe(QUIZ_VERSION);
+    expect(QUIZ_VERSION).toBe(3);
   });
 });
 
 describe("regenerate", () => {
-  it("two simultaneous POSTs end in one consistent 20-question v2 quiz", async () => {
+  it(`two simultaneous POSTs end in one consistent ${SIZE}-question current-version quiz`, async () => {
     const w = world();
     currentUserId = w.userId;
     await getSectionQuiz(w.topic());
@@ -111,11 +114,43 @@ describe("regenerate", () => {
     const initial = count("section quiz");
     const [a, b] = await Promise.all([post(regenPOST, w.sessionId, { topicId: w.topicId }), post(regenPOST, w.sessionId, { topicId: w.topicId })]);
     expect([a.status, b.status]).toEqual([200, 200]);
-    expect(stored(w)).toHaveLength(20);
-    expect(w.topic().checks_version).toBe(2);
+    expect(stored(w)).toHaveLength(SIZE);
+    expect(w.topic().checks_version).toBe(QUIZ_VERSION);
     expect(count("section quiz") - initial).toBe(2); // one deduped generation (two half calls)
     const rows = db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId) as { check_index: number | null }[];
     expect(rows.every((r) => r.check_index === null)).toBe(true);
+  });
+
+  it("writes a fresh set with new ids, detaches earlier answers, clears the student's progress, and returns the count", async () => {
+    const w = world();
+    currentUserId = w.userId;
+    const old = await getSectionQuiz(w.topic());
+    expect(old).toHaveLength(SIZE);
+    expect((await post(checkPOST, w.sessionId, { topicId: w.topicId, index: 2, chosen: 1 })).status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) n FROM quiz_answers WHERE topic_id = ?").get(w.topicId)).toEqual({ n: 1 });
+    const res = await post(regenPOST, w.sessionId, { topicId: w.topicId });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, count: SIZE });
+    const fresh = stored(w);
+    expect(fresh).toHaveLength(SIZE);
+    expect(fresh.some((q) => old.some((o) => o.id === q.id))).toBe(false);
+    expect(db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId)).toEqual([{ check_index: null }]);
+    expect(db.prepare("SELECT COUNT(*) n FROM quiz_answers WHERE topic_id = ?").get(w.topicId)).toEqual({ n: 0 });
+    const page = await (await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId))).json();
+    expect(page.answered).toEqual({});
+    // The question can be answered again on the new quiz.
+    expect(await (await post(checkPOST, w.sessionId, { topicId: w.topicId, index: 2, chosen: fresh[2].correct_index })).json()).toEqual({ ok: true, correct: true });
+  });
+
+  it("a failed regenerate leaves the student's progress alone", async () => {
+    const w = world();
+    currentUserId = w.userId;
+    await getSectionQuiz(w.topic());
+    await post(checkPOST, w.sessionId, { topicId: w.topicId, index: 1, chosen: 3 });
+    failWriter = true;
+    expect((await post(regenPOST, w.sessionId, { topicId: w.topicId })).status).toBe(500);
+    failWriter = false;
+    expect((await (await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId))).json()).answered).toEqual({ 1: 3 });
   });
 
   it("regenerate while the first-ever generation is in flight joins it and leaves a good quiz", async () => {
@@ -129,7 +164,7 @@ describe("regenerate", () => {
     release();
     await first;
     expect((await regen).status).toBe(200);
-    expect(stored(w)).toHaveLength(20);
+    expect(stored(w)).toHaveLength(SIZE);
     expect(count("section quiz")).toBe(2);
   });
 

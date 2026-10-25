@@ -8,6 +8,7 @@ import type { Confidence } from "@/lib/practicePlan";
 import { DoubleRing, Icon, ICONS } from "@/components/ui";
 import { toast } from "@/components/Toaster";
 import { ServerMessage, failureText, jsonOf, signedOut } from "@/components/clientFetch";
+import { QuizMe } from "@/components/QuizMe";
 
 const CONFIDENCE_CHOICES: [Confidence, string, string][] = [
   ["guess", "Guessed", "bg-lilac text-on-lilac"],
@@ -519,6 +520,8 @@ function Results({ view }: { view: AttemptView }) {
           );
         })}
       </section>
+      {/* On the results page only: highlighting any explanation offers "Quiz me on this" (never during a live exam). */}
+      <QuizMe examId={attempt.exam_id} />
     </div>
   );
 }

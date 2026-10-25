@@ -14,6 +14,7 @@ type Card = {
   options: string[];
   correct_index: number;
   explanation: string;
+  option_notes?: string[] | null;
   image: QuestionData["image"];
   source_page_id: number | null;
   next?: { hard: string; good: string; easy: string };
@@ -191,7 +192,7 @@ export default function ReviewPage() {
     flagged: false,
     topic: null,
     concept: null,
-    ...(chosen != null ? { correct_index: c.correct_index, explanation: c.explanation, source: null } : {}),
+    ...(chosen != null ? { correct_index: c.correct_index, explanation: c.explanation, option_notes: c.option_notes, source: null } : {}),
   };
   const correct = chosen === c.correct_index;
 

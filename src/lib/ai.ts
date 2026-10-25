@@ -15,6 +15,20 @@ export const MODELS: Record<Provider, string> = {
   openai: process.env.OPENAI_MODEL ?? "gpt-6.1-sol",
 };
 
+/**
+ * Two tiers. "standard" does the bulk work (slide reading, lessons, tutor, checking, summaries). "quality" writes the
+ * questions students are judged by (section quizzes, practice exams, case sets, "Quiz me"): Claude Opus for Anthropic
+ * keys (about twice the price per token), the same model as standard for ChatGPT keys, which has no higher tier here.
+ */
+export type Tier = "standard" | "quality";
+export const QUALITY_MODELS: Record<Provider, string> = {
+  anthropic: process.env.CLAUDE_QUALITY_MODEL ?? "claude-opus-5-5",
+  openai: process.env.OPENAI_QUALITY_MODEL ?? MODELS.openai,
+};
+export function modelFor(provider: Provider, tier: Tier = "standard"): string {
+  return tier === "quality" ? QUALITY_MODELS[provider] : MODELS[provider];
+}
+
 // USD per million tokens. Used only for the spending tracker, so treat totals as estimates.
 const PRICES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
@@ -93,9 +107,11 @@ export async function generate<S extends z.ZodType>(opts: {
   content: Part[] | string;
   effort?: Effort;
   maxTokens?: number;
+  /** "quality" for the question writers (Opus on Anthropic keys); default "standard". */
+  tier?: Tier;
 }): Promise<z.infer<S>> {
   const { creds } = opts;
-  const model = MODELS[creds.provider];
+  const model = modelFor(creds.provider, opts.tier);
   const effort = opts.effort ?? "medium";
   const maxTokens = opts.maxTokens ?? 32000;
 

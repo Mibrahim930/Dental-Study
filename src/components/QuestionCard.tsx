@@ -26,6 +26,8 @@ export type QuestionData = {
   caseInfo?: { number: number; index: number; size: number; scenario: string } | null;
   correct_index?: number;
   explanation?: string;
+  /** One line per option (display order): why right / why wrong. Older questions have none. */
+  option_notes?: string[] | null;
   source?: { page_id: number; filename: string | null; page_number: number | null; aspect?: number | null } | null;
 };
 
@@ -162,6 +164,7 @@ export function QuestionCard({
               crossed={marks.crossed.includes(i)}
               // The option she has picked can't also be crossed out.
               onToggleCross={onChoose && i === selected ? undefined : () => toggleCross(i)}
+              note={revealed ? q.option_notes?.[i] : undefined}
               {...hl(`opt${i}`)}
               chips={
                 <>

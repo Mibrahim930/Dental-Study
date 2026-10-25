@@ -15,7 +15,8 @@ vi.mock("@/lib/ai", async (orig) => ({
     if (opts.purpose === "section quiz") {
       tryNo++;
       if (repairThrows && tryNo > 2) throw new Error("repair down");
-      const slots = [...opts.content.matchAll(/^Q(\d+): (?:slide P(\d+)|the topic)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2] ?? 0) }));
+      // A slot names its slide ("slide P<id>"), or "the section" when the topic has no slides.
+      const slots = [...opts.content.matchAll(/^Q(\d+): (?:slide P(\d+)|the section)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2] ?? 0) }));
       return {
         questions: slots
           .map((s) =>
@@ -57,15 +58,19 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getSectionQuiz, type QuizQuestion } from "@/lib/study";
+import { getSectionQuiz, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
+import { QUIZ_MAX, QUIZ_MIN } from "@/lib/quizPlan";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { POST as reportPOST } from "@/app/api/sessions/[id]/quiz/report/route";
 import { addSharedExam, createClass, shareExam, joinClass } from "@/lib/classes";
 import { makeUser } from "./helpers";
 
+// Two facts of its own per slide, so the quiz size is one per fact: clamp(2 × slides, 5, 25).
 const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: ["a", "b"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact a${i}`, `fact b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+/** The planned quiz size for an n-slide world. */
+const sizeFor = (n: number) => (n === 0 ? QUIZ_MIN : Math.min(QUIZ_MAX, Math.max(QUIZ_MIN, 2 * n)));
 function world(n: number, userId = makeUser()) {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
   const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'L1.pdf', 'done')").run(examId).lastInsertRowid);
@@ -94,21 +99,46 @@ afterEach(() => {
 });
 
 describe("quiz sizes", () => {
-  for (const n of [1, 3, 20, 21]) {
-    it(`${n}-slide topic gives 20 distinct questions, all citing the topic's slides`, async () => {
+  // [slides, expected size, slides tested]: 1 slide reaches the floor of 5 on its own; past 12 slides the ceiling of
+  // 25 cuts the later slides' facts (slide order), so 13 slides are tested.
+  for (const [n, size, tested] of [
+    [1, 5, 1],
+    [2, 5, 2],
+    [3, 6, 3],
+    [12, 24, 12],
+    [13, 25, 13],
+    [20, 25, 13],
+    [21, 25, 13],
+  ]) {
+    it(`${n}-slide topic gives ${size} distinct questions, all citing the topic's slides`, async () => {
+      expect(sizeFor(n)).toBe(size);
       const w = world(n);
       const qs = await getSectionQuiz(w.topic());
-      expect(qs).toHaveLength(20);
-      expect(new Set(qs.map((q) => q.id)).size).toBe(20);
+      expect(qs).toHaveLength(size);
+      expect(qs.length).toBeGreaterThanOrEqual(QUIZ_MIN);
+      expect(qs.length).toBeLessThanOrEqual(QUIZ_MAX);
+      expect(new Set(qs.map((q) => q.id)).size).toBe(size);
+      expect(new Set(qs.map((q) => q.question)).size).toBe(size);
       expect(qs.every((q) => /^[0-9a-f]{8}$/.test(q.id!))).toBe(true);
       expect(qs.every((q) => w.pages.includes(q.source_page_id!))).toBe(true);
-      expect(new Set(qs.map((q) => q.source_page_id)).size).toBe(Math.min(n, 20));
+      expect(new Set(qs.map((q) => q.source_page_id)).size).toBe(tested);
     });
   }
-  it("a topic with no slides at all still gets a quiz", async () => {
+  it("a 1-slide topic: 2 fact questions plus 3 more angles on the same slide, no fact named twice", async () => {
+    const w = world(1);
+    await getSectionQuiz(w.topic());
+    const prompts = calls.filter((c) => c.purpose === "section quiz").map((c) => c.content);
+    const lines = prompts.flatMap((c) => c.match(/^Q\d+: .*$/gm) ?? []);
+    expect(lines).toHaveLength(QUIZ_MIN);
+    expect(lines.every((l) => l.includes(`slide P${w.pages[0]}`))).toBe(true);
+    const facts = lines.flatMap((l) => [...l.matchAll(/fact: "(.*?)"/g)].map((m) => m[1]));
+    expect(facts.sort()).toEqual(["fact a0", "fact b0"]);
+  });
+  it("a topic with no slides at all still gets a quiz of the floor size", async () => {
     const w = world(0);
     const qs = await getSectionQuiz(w.topic());
-    expect(qs.length).toBeGreaterThan(0);
+    expect(qs).toHaveLength(QUIZ_MIN);
+    expect(qs.every((q) => q.source_page_id == null)).toBe(true);
   });
 });
 
@@ -120,12 +150,15 @@ describe("garbage from the AI", () => {
     ["fraction", () => 2.5],
     ["NaN-ish string", () => "x"],
   ] as [string, () => unknown][]) {
-    it(`slot ${name}: questions are matched by slide and the quiz still has 20`, async () => {
+    it(`slot ${name}: questions are matched by slide and the quiz is still full size`, async () => {
       const w = world(8);
       mutate = (q) => ({ ...q, slot: slot() });
       const qs = await getSectionQuiz(w.topic());
-      expect(qs).toHaveLength(20);
-      expect(new Set(qs.map((q) => q.question)).size).toBe(20);
+      expect(qs).toHaveLength(sizeFor(8));
+      expect(new Set(qs.map((q) => q.question)).size).toBe(sizeFor(8));
+      // Matched to the open slots of the slide they cite: both of each slide's facts are still tested there.
+      for (const p of w.pages) expect(qs.filter((q) => q.source_page_id === p), `slide ${p}`).toHaveLength(2);
+      expect(qs.every((q) => q.question.includes(`on P${q.source_page_id} `))).toBe(true);
     });
   }
 
@@ -134,7 +167,7 @@ describe("garbage from the AI", () => {
     mutate = (q) => ({ ...q, slot: 1 });
     const qs = await getSectionQuiz(w.topic());
     expect(qs.length).toBeGreaterThan(0);
-    expect(qs.length).toBeLessThanOrEqual(20);
+    expect(qs.length).toBeLessThanOrEqual(sizeFor(6));
   });
 
   it("answer key contradicting itself, 1 option, duplicate options, index out of range are all dropped", async () => {
@@ -172,7 +205,7 @@ describe("the checking pass", () => {
   it("nonsense verdict numbers (0, -1, 999, 1.5, NaN-like) reject nothing", async () => {
     const w = world(6);
     verdicts = () => [0, -1, 999, 1.5, 1e9].map((n) => ({ n, ok: false, reason: "x" }));
-    expect(await getSectionQuiz(w.topic())).toHaveLength(20);
+    expect(await getSectionQuiz(w.topic())).toHaveLength(sizeFor(6));
   });
 
   it("verdicts as a non-array / missing field does not lose the quiz", async () => {
@@ -181,25 +214,30 @@ describe("the checking pass", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const qs = await getSectionQuiz(w.topic());
     err.mockRestore();
-    expect(qs).toHaveLength(20);
+    expect(qs).toHaveLength(sizeFor(5));
   });
 
   it("judge throws on every call: quiz kept; repair throws too: first batch still saved", async () => {
     const w = world(5);
     judgeThrows = true;
     repairThrows = true;
-    mutate = (q, slot) => (slot > 10 ? null : q); // the second half is empty -> repair needed -> throws
+    const half = Math.ceil(sizeFor(5) / 2); // 10 slots: Q1-Q5 in the first call, Q6-Q10 in the second
+    mutate = (q, slot) => (slot > half ? null : q); // the second half is empty -> repair needed -> throws
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const qs = await getSectionQuiz(w.topic());
     err.mockRestore();
-    expect(qs.length).toBeGreaterThanOrEqual(10);
-    expect(w.topic().checks_version).toBe(2);
+    expect(qs).toHaveLength(half);
+    expect(calls.filter((c) => c.purpose === "section quiz")).toHaveLength(3);
+    expect(w.topic().checks_version).toBe(QUIZ_VERSION);
+    expect(QUIZ_VERSION).toBe(3);
   });
 
   it("judge rejects ok:false for the same question twice in verdicts - no double count", async () => {
     const w = world(5);
     verdicts = (n, call) => (call === 1 ? [{ n: 1, ok: false, reason: "a" }, { n: 1, ok: false, reason: "b" }] : []);
-    expect(await getSectionQuiz(w.topic())).toHaveLength(20);
+    expect(await getSectionQuiz(w.topic())).toHaveLength(sizeFor(5));
+    // Exactly one slot was refilled.
+    expect([...calls.filter((c) => c.purpose === "section quiz")[2].content.matchAll(/^Q\d+:/gm)]).toHaveLength(1);
   });
 
   it("QUIZ_JUDGE=0 makes no check calls even when repair is needed", async () => {
@@ -217,14 +255,16 @@ describe("old 10-question quiz with answers", () => {
     const old = Array.from({ length: 10 }, (_, i) => ({ question: `old ${i}`, options: ["a", "b", "c", "d"], correct_index: 0, explanation: "", concept: "c" }));
     db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(old), w.topicId);
     db.prepare("INSERT INTO session_checks (session_id, topic_id, question, correct, check_index, chosen) VALUES (?, ?, 'old 3', 1, 3, 0)").run(w.sessionId, w.topicId);
+    db.prepare("INSERT INTO quiz_answers (user_id, topic_id, check_index, chosen, correct) VALUES (?, ?, 3, 0, 1)").run(w.userId, w.topicId);
     currentUserId = w.userId;
     const [a, b] = await Promise.all([quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId)), quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId))]);
     const ja = await a.json();
     const jb = await b.json();
-    expect(ja.questions).toHaveLength(20);
+    expect(ja.questions).toHaveLength(sizeFor(6));
     expect(jb.questions.map((q: QuizQuestion) => q.id)).toEqual(ja.questions.map((q: QuizQuestion) => q.id));
     expect(ja.answered).toEqual({});
     expect(db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId)).toEqual([{ check_index: null }]);
+    expect(db.prepare("SELECT * FROM quiz_answers WHERE topic_id = ?").all(w.topicId)).toEqual([]);
     const n = calls.length;
     await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId));
     expect(calls.length).toBe(n);
@@ -303,7 +343,8 @@ describe("report and check routes", () => {
     const copyExam = (res as { examId: number }).examId;
     const t2 = db.prepare("SELECT * FROM topics WHERE exam_id = ?").get(copyExam) as Topic;
     const copyQs = JSON.parse(t2.checks_json!) as QuizQuestion[];
-    expect(t2.checks_version).toBe(2);
+    expect(t2.checks_version).toBe(QUIZ_VERSION);
+    expect(w.qs).toHaveLength(sizeFor(4));
     expect(copyQs.map((q) => q.id)).toEqual(w.qs.map((q) => q.id));
     const copyPages = new Set(JSON.parse(t2.page_ids) as number[]);
     expect(copyQs.every((q) => q.source_page_id != null && copyPages.has(q.source_page_id))).toBe(true);

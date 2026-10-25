@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/user";
-import { MODELS } from "@/lib/ai";
+import { MODELS, QUALITY_MODELS } from "@/lib/ai";
 import { KeyForm } from "@/components/KeyForm";
 import { SignOutButton } from "@/components/SignOutButton";
 import { ThemePicker } from "@/components/ThemePicker";
@@ -67,6 +67,13 @@ export default async function SettingsPage() {
         <p className="text-sm text-muted-foreground">
           Using <strong>{user.provider === "openai" ? "ChatGPT" : "Claude"}</strong> ({MODELS[user.provider ?? "anthropic"]}) with the key ending in{" "}
           <code className="rounded bg-muted px-1">…{user.api_key_last4}</code>.
+          {user.provider !== "openai" && (
+            <>
+              {" "}
+              Quiz and exam questions are written with <strong>{QUALITY_MODELS.anthropic}</strong> (about twice the price per token); lessons, slide reading, checking and the
+              tutor use {MODELS.anthropic}.
+            </>
+          )}
         </p>
         <details>
           <summary className="cursor-pointer text-sm font-medium text-primary">Replace key or switch provider</summary>

@@ -56,6 +56,9 @@ const GeneratedQuestions = z.object({
       correct_index: z.number().describe("0-based index of the correct option"),
       correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
       explanation: z.string().describe("Why the answer is correct and briefly why the main distractors are wrong. Cite the slide"),
+      option_notes: z
+        .array(z.string())
+        .describe("One short sentence per option, in the same order as options: for the correct one why it is right, for each wrong one why it is wrong (what it confuses)"),
       source_page_id: z.number().describe("ID of the slide this question is based on"),
       concept: z.string().describe("The concept tested; use one of the listed concept names"),
     }),
@@ -64,6 +67,7 @@ const GeneratedQuestions = z.object({
 
 const SYSTEM = `You write board-quality practice questions for a dental student, based strictly on their lecture slides.
 - Single best answer, 5 options.
+- option_notes: one short sentence per option, in the same order as options — for the right one why it is right, for each wrong one exactly why it is wrong (which fact or condition it mixes up).
 - type=recall: a direct question testing one fact or relationship.
 - type=case: INBDE style. Fill patient_box with a realistic patient (chief complaint, medical history, medications, allergies, dental history, findings), then ask about diagnosis, next step, or treatment.
 - type=image: a question about a picture (radiograph, clinical photo, diagram). Set image_page_id to the slide whose picture the student sees, and write the stem to describe the scenario without giving away the answer.
@@ -72,6 +76,15 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 - Every fact in the question and explanation must be supported by the slides.
 
 ${EXAM_STYLE}`;
+
+/**
+ * Per-option notes as stored: in the shuffled display order, and only when there is exactly one non-empty note per
+ * option (a good question is never dropped over its notes; it just shows the paragraph explanation).
+ */
+export function optionNotesJson(options: string[], notes: unknown, order: number[]): string | null {
+  if (!Array.isArray(notes) || notes.length !== options.length || !notes.every((n) => typeof n === "string" && n.trim())) return null;
+  return JSON.stringify(order.map((i) => (notes[i] as string).trim()));
+}
 
 type AttemptOptions = {
   size: number;
@@ -366,6 +379,9 @@ const GeneratedCases = z.object({
             correct_index: z.number().describe("0-based index of the correct option"),
             correct_answer: z.string().describe("The correct option, copied exactly as written in options"),
             explanation: z.string().describe("Why the answer is correct and why the main distractors are wrong. Cite the slide"),
+            option_notes: z
+              .array(z.string())
+              .describe("One short sentence per option, in the same order as options: for the correct one why it is right, for each wrong one why it is wrong"),
             source_page_id: z.number().describe("ID of the slide this question is based on"),
             concept: z.string().describe("The concept tested; use one of the listed concept names"),
           }),
@@ -451,6 +467,7 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[], o
   const out = await generate({
     creds: credentials(userId),
     purpose: "case sets",
+    tier: "quality",
     schema: GeneratedCases,
     system: CASE_SYSTEM,
     effort: "medium",
@@ -465,8 +482,8 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[], o
   const valid = new Set(pages.map((p) => p.id));
   const insertCase = db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) VALUES (?, ?, ?, ?)");
   const insertQ = db.prepare(
-    `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id, case_id)
-     VALUES (?, ?, ?, 'case', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id, case_id)
+     VALUES (?, ?, ?, 'case', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const groups: number[][] = [];
   for (const c of out.cases.slice(0, count)) {
@@ -490,6 +507,7 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[], o
             JSON.stringify(order.map((i) => q.options[i])),
             order.indexOf(q.correct_index),
             q.explanation,
+            optionNotesJson(q.options, q.option_notes, order),
             valid.has(q.source_page_id) ? q.source_page_id : null,
             image,
             caseId,
@@ -525,6 +543,7 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
   const out = await generate({
     creds: credentials(userId),
     purpose: "practice questions",
+    tier: "quality",
     schema: GeneratedQuestions,
     system: SYSTEM,
     effort: "medium",
@@ -538,8 +557,8 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
 
   const valid = new Set(pages.map((p) => p.id));
   const insert = db.prepare(
-    `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Drop anything the AI wrote that repeats an existing question on this topic word for word.
   const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -575,6 +594,7 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
           JSON.stringify(options),
           correct,
           q.explanation,
+          optionNotesJson(q.options, q.option_notes, order),
           valid.has(q.source_page_id) ? q.source_page_id : null,
           imagePage,
         ).lastInsertRowid,

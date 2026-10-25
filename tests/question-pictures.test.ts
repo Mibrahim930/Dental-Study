@@ -41,12 +41,12 @@ import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes"
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { makeUser } from "./helpers";
 
-const notes = (o: { image?: string | null; crop?: boolean } = {}) =>
+const notes = (o: { image?: string | null; crop?: boolean; facts?: string[] } = {}) =>
   JSON.stringify({
     title: "t",
     summary: "s",
     image_description: o.image ?? null,
-    key_facts: ["a", "b"],
+    key_facts: o.facts ?? ["a", "b"],
     annotations: [],
     emphasized: false,
     emphasis_note: null,
@@ -64,9 +64,11 @@ function world() {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name, topic_status) VALUES (?, 'E', 'ready')").run(userId).lastInsertRowid);
   const docId = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'L1.pdf', 'done')").run(examId).lastInsertRowid);
   const ins = db.prepare("INSERT INTO pages (document_id, page_number, image_path, aspect, status, notes_json) VALUES (?, ?, 'x.jpg', 1.5, 'done', ?)");
-  const plain = Number(ins.run(docId, 1, notes()).lastInsertRowid);
-  const photo = Number(ins.run(docId, 2, notes({ image: "A periapical radiograph of tooth #19 with a radiolucency" })).lastInsertRowid);
-  const cropped = Number(ins.run(docId, 3, notes({ image: "Clinical photo of a swelling", crop: true })).lastInsertRowid);
+  // Four distinct facts per slide: the quiz plans 12 questions, so the first writer call carries 6 slots (the picture cases below).
+  const facts = (n: number) => ["w", "x", "y", "z"].map((f) => `fact ${f}${n}`);
+  const plain = Number(ins.run(docId, 1, notes({ facts: facts(1) })).lastInsertRowid);
+  const photo = Number(ins.run(docId, 2, notes({ image: "A periapical radiograph of tooth #19 with a radiolucency", facts: facts(2) })).lastInsertRowid);
+  const cropped = Number(ins.run(docId, 3, notes({ image: "Clinical photo of a swelling", crop: true, facts: facts(3) })).lastInsertRowid);
   const topicId = Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, 0, 'T', '', ?)").run(examId, JSON.stringify([plain, photo, cropped])).lastInsertRowid);
   const sessionId = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(examId).lastInsertRowid);
   const topic = () => db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId) as Topic;

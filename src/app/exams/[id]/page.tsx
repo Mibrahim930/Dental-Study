@@ -39,10 +39,14 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
     .all(id) as { id: number; current_position: number; summary: string | null; started_at: string; ended_at: string | null }[];
   const attempts = db
     .prepare(
-      `SELECT a.*, COUNT(aq.question_id) n FROM attempts a LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
+      `SELECT a.*, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
+       FROM attempts a LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
        WHERE a.exam_id = ? GROUP BY a.id ORDER BY a.id DESC LIMIT 8`,
     )
-    .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; n: number }[];
+    .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; time_limit_sec: number | null; n: number; answered: number }[];
+  // A practice exam she stepped away from: offered first, so she continues it instead of starting another by mistake.
+  const openAttempt = attempts.find((a) => a.status === "ready" && a.n > 0 && a.answered < a.n);
+  const openExpired = openAttempt ? timeIsUp(openAttempt) : false;
 
   // For the practice form: which lecture(s) each topic comes from, and what would come back in the next exam.
   const pageDoc = new Map(
@@ -374,6 +378,18 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
           {/* Practice */}
           <section className="card flex flex-col gap-4">
             <h2 className="section-title">Practice exam</h2>
+            {openAttempt && (
+              <Link href={`/attempts/${openAttempt.id}`} className="tile cb-butter flex items-center justify-between gap-3 rounded-[22px]">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-bold opacity-75">{openAttempt.mode === "timed" ? "Timed" : "Tutor"} practice exam in progress</div>
+                  <div className="text-[17px] leading-tight font-extrabold">
+                    {openExpired ? "Time is up — see your score" : `Continue · ${openAttempt.answered} of ${openAttempt.n} answered`}
+                  </div>
+                  <div className="text-[13px] font-medium opacity-80">Started {sinceText(openAttempt.started_at)}. Your answers so far are saved.</div>
+                </div>
+                <Icon d={ICONS.arrowRight} />
+              </Link>
+            )}
             {topics.length === 0 ? (
               <p className="text-[15px] text-muted-foreground">Available once the topic map is ready.</p>
             ) : (
@@ -529,6 +545,20 @@ function SectionRow({
 }
 
 /** A stored UTC timestamp ("2026-10-09 02:30:00") as the student's local month/day. */
+/** A timed practice exam whose clock has run out (its answers are locked; opening it shows the score). */
+function timeIsUp(a: { started_at: string; time_limit_sec: number | null }): boolean {
+  return !!a.time_limit_sec && Date.now() > new Date(a.started_at.replace(" ", "T") + "Z").getTime() + a.time_limit_sec * 1000;
+}
+
+/** "just now", "3 hours ago", "yesterday", "4 days ago" for an SQLite UTC timestamp. */
+function sinceText(utc: string): string {
+  const hours = Math.floor((Date.now() - new Date(utc.replace(" ", "T") + "Z").getTime()) / 3600000);
+  if (hours < 1) return "just now";
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
 function localDay(utc: string, timeZone: string): string {
   const d = new Date(utc.replace(" ", "T") + "Z");
   try {

@@ -4,6 +4,7 @@ import { recordConceptResult, upsertConcept } from "@/lib/memory";
 import type { QuizQuestion } from "@/lib/study";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
+import { recordQuizAnswer } from "@/lib/quizProgress";
 
 /** Record one answer to a section-quiz question. Correctness is decided here, not by the browser. */
 export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[id]/check">) {
@@ -24,10 +25,12 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
   if (!topic || !q || q.hidden || typeof chosen !== "number" || !Number.isInteger(chosen) || chosen < 0 || chosen >= q.options.length) {
     return NextResponse.json({ error: "Unknown question or answer" }, { status: 400 });
   }
-  const already = db.prepare("SELECT 1 FROM session_checks WHERE session_id = ? AND topic_id = ? AND check_index = ?").get(sessionId, topicId, index);
-  if (already) return NextResponse.json({ ok: true });
-
   const correct = chosen === q.correct_index;
+  // Progress is per student and section: a question answered in an earlier session (or on another device) stays answered.
+  if (!recordQuizAnswer(user.id, topic.id, index as number, chosen, correct)) return NextResponse.json({ ok: true });
+  const already = db.prepare("SELECT 1 FROM session_checks WHERE session_id = ? AND topic_id = ? AND check_index = ?").get(sessionId, topicId, index);
+  if (already) return NextResponse.json({ ok: true, correct });
+
   db.prepare("INSERT INTO session_checks (session_id, topic_id, question, correct, check_index, chosen) VALUES (?, ?, ?, ?, ?, ?)").run(
     sessionId,
     topicId,

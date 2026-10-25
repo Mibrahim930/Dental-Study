@@ -68,6 +68,97 @@ export function planQuiz(slides: PlanSlide[], size: number): Slot[] {
   return out;
 }
 
+// ---- Fact-based planning (Release 3) ----
+// A section quiz has about one question per distinct fact on its slides, never the same fact twice: a short section
+// gets a short quiz instead of the same three facts asked seven ways.
+
+/** A slide with the facts its notes list. */
+export type FactSlide = PlanSlide & { facts: string[] };
+
+/** One planned question: the slide, the exact fact it must test (null = the slide in general), and the angle. */
+export type FactSlot = { page: number | null; fact: string | null; angle: Angle };
+
+export const QUIZ_MIN = 5;
+export const QUIZ_MAX = 25;
+
+/** Distinct facts across the slides (a slide with no listed facts counts as one), clamped to [QUIZ_MIN, QUIZ_MAX]. */
+export function quizSize(slides: Pick<FactSlide, "facts">[], min = QUIZ_MIN, max = QUIZ_MAX): number {
+  if (slides.length === 0) return min;
+  const seen = new Set<string>();
+  let n = 0;
+  for (const s of slides) {
+    const facts = s.facts.map(normStem).filter(Boolean);
+    if (facts.length === 0) n++;
+    for (const f of facts) {
+      if (seen.has(f)) continue;
+      seen.add(f);
+      n++;
+    }
+  }
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * One slot per distinct fact, in slide order (facts in the order the slide lists them). When the ceiling cuts, the
+ * facts of professor-stressed slides survive first, then case slides, then slide order. When there are fewer facts than
+ * the floor, the most important slides get extra slots that take a different angle on the slide as a whole (fact null);
+ * the writer is told not to repeat an earlier fact.
+ */
+export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): FactSlot[] {
+  if (size <= 0) return [];
+  if (slides.length === 0) {
+    return Array.from({ length: size }, (_, i) => ({ page: null, fact: null, angle: (["recall", "apply", "compare"] as Angle[])[i % 3] }));
+  }
+
+  // Every distinct fact once, remembering which slide first listed it.
+  const seen = new Set<string>();
+  const all: { slide: FactSlide; fact: string | null }[] = [];
+  for (const s of slides) {
+    const facts = s.facts.map((f) => f.trim()).filter((f) => f && !seen.has(normStem(f)));
+    if (facts.length === 0) {
+      all.push({ slide: s, fact: null });
+      continue;
+    }
+    for (const f of facts) {
+      seen.add(normStem(f));
+      all.push({ slide: s, fact: f });
+    }
+  }
+
+  let chosen = all;
+  if (all.length > size) {
+    // Keep the `size` most important (stressed slides first, then case slides, then slide order), back in slide order.
+    const rank = (x: (typeof all)[number]) => (x.slide.emphasized ? 0 : 2) + (x.slide.hasCase ? 0 : 1);
+    chosen = all
+      .map((x, i) => ({ x, i }))
+      .sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i)
+      .slice(0, size)
+      .sort((a, b) => a.i - b.i)
+      .map((a) => a.x);
+  }
+
+  // Vary the angle so a quiz isn't all recall: every second fact is applied, every third compared; case slides apply.
+  const slots: FactSlot[] = chosen.map((x, i) => ({
+    page: x.slide.id,
+    fact: x.fact,
+    angle: x.slide.hasCase ? "apply" : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall",
+  }));
+
+  // Too few facts for the floor: extra slots on the most important slides, cycling through the other angles, no fact
+  // pinned (the writer is told not to repeat a fact). Always reaches the floor: only "not" is ever skipped.
+  if (slots.length < size) {
+    const ranked = byImportance(slides);
+    const extra: Angle[] = ["apply", "compare", "not", "recall"];
+    for (let k = 0; slots.length < size; k++) {
+      const s = ranked[k % ranked.length];
+      const angle = extra[Math.floor(k / ranked.length) % extra.length];
+      if (angle === "not" && !isList(s)) continue;
+      slots.push({ page: s.id, fact: null, angle });
+    }
+  }
+  return slots;
+}
+
 /** Normalised question text, to spot the same question written twice. */
 export const normStem = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 

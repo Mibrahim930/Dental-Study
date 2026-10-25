@@ -4,6 +4,7 @@ import { getSectionQuiz } from "@/lib/study";
 import { pictureForIds } from "@/lib/questionImage";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
+import { quizAnswers } from "@/lib/quizProgress";
 
 export const maxDuration = 300;
 
@@ -26,13 +27,8 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
       // A picture question whose slide is gone (lecture removed) has nothing to show: skip it like a reported one.
       return { ...q, image, hidden: q.hidden || (q.image_page_id != null && !image) || undefined };
     });
-    const answered = Object.fromEntries(
-      (
-        db
-          .prepare("SELECT check_index, chosen FROM session_checks WHERE session_id = ? AND topic_id = ? AND check_index IS NOT NULL")
-          .all(sessionId, topic.id) as { check_index: number; chosen: number }[]
-      ).map((r) => [r.check_index, r.chosen]),
-    );
+    // Her answers for this section from any session or device, so the quiz resumes where she left it.
+    const answered = quizAnswers(user.id, topic.id);
     return NextResponse.json({ topicId: topic.id, questions, answered, slides: (JSON.parse(topic.page_ids) as number[]).length });
   } catch (err) {
     // The technical text goes to the server log; the student sees a plain message (key problems are worth saying).

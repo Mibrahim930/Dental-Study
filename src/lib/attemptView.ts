@@ -29,9 +29,22 @@ type Row = {
   source_page_number: number | null;
   source_emphasized: number | null;
   source_aspect: number | null;
+  option_notes: string | null;
 };
 
 /** The attempt as the student may see it: answers are only revealed when allowed. */
+/** Stored option notes (JSON string[], original option order) in the shown order, or null when missing or malformed. */
+export function optionNotes(json: string | null | undefined, order: number[]): string[] | null {
+  if (!json) return null;
+  try {
+    const notes = JSON.parse(json) as unknown;
+    if (!Array.isArray(notes) || notes.length !== order.length || !notes.every((n) => typeof n === "string")) return null;
+    return order.map((i) => notes[i] as string);
+  } catch {
+    return null;
+  }
+}
+
 export function attemptView(attemptId: number) {
   const attempt = db.prepare("SELECT a.*, e.name AS exam_name FROM attempts a JOIN exams e ON e.id = a.exam_id WHERE a.id = ?").get(attemptId) as
     | {
@@ -114,6 +127,8 @@ export function attemptView(attemptId: number) {
             correct_index: shown(r.correct_index)!,
             correct: r.correct === 1,
             explanation: r.explanation,
+            // Per-option notes follow the display order (stored in the original order; retries show options reshuffled).
+            option_notes: optionNotes(r.option_notes, order),
             source: r.source_page_id
               ? { page_id: r.source_page_id, filename: r.source_filename, page_number: r.source_page_number, aspect: r.source_aspect }
               : null,

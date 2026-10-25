@@ -47,6 +47,7 @@ export default async function Home() {
   const nextDays = next ? daysUntil(next.exam_date, today) : null;
   const progress = next ? examProgress(user.id, next.id) : null;
   const lectureDone = lectureProgressMany(user.id, exams.map((e) => e.id));
+  const openAttempts = openAttemptsByExam(exams.map((e) => e.id));
   const name = firstName(user.email);
   const hello = `${greeting(settings.timezone)}${name ? ` ${name}` : ""},`;
 
@@ -163,7 +164,7 @@ export default async function Home() {
             <div className="card text-[15px] text-muted-foreground">No upcoming exams. Create one to start uploading lectures.</div>
           )}
           {upcoming.map((e) => (
-            <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} />
+            <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} open={openAttempts.get(e.id)} />
           ))}
           {past.length > 0 && (
             <details className="group">
@@ -173,7 +174,7 @@ export default async function Home() {
               <p className="px-2 pt-3 text-sm text-muted-foreground">Their lectures, scores and review cards stay in memory and feed into new exams.</p>
               <div className="mt-2.5 flex flex-col gap-2.5 opacity-80">
                 {past.map((e) => (
-                  <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} />
+                  <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} open={openAttempts.get(e.id)} />
                 ))}
               </div>
             </details>
@@ -293,7 +294,23 @@ function Welcome({ hello }: { hello: string }) {
   );
 }
 
-function ExamBlock({ exam, today, lectures }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress }) {
+/** Each exam's newest practice exam that is still open (has unanswered questions), in one query. */
+function openAttemptsByExam(examIds: number[]): Map<number, { id: number; answered: number; n: number }> {
+  const out = new Map<number, { id: number; answered: number; n: number }>();
+  if (examIds.length === 0) return out;
+  const rows = db
+    .prepare(
+      `SELECT a.exam_id, a.id, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
+       FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id
+       WHERE a.status = 'ready' AND a.exam_id IN (${examIds.map(() => "?").join(",")})
+       GROUP BY a.id HAVING answered < n ORDER BY a.id DESC`,
+    )
+    .all(...examIds) as { exam_id: number; id: number; n: number; answered: number }[];
+  for (const r of rows) if (!out.has(r.exam_id)) out.set(r.exam_id, { id: r.id, answered: r.answered, n: r.n });
+  return out;
+}
+
+function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress; open?: { id: number; answered: number; n: number } }) {
   const days = daysUntil(exam.exam_date, today);
   const processing = exam.pages > 0 && exam.done_pages < exam.pages;
   // Once the topic map is by lecture: "3 of 7 lectures done" (a lecture is done when every section in it is studied).
@@ -320,6 +337,11 @@ function ExamBlock({ exam, today, lectures }: { exam: ExamWithCounts; today: str
           </div>
         )}
       </div>
+      {open && (
+        <span className="text-[13px] font-bold">
+          Practice exam in progress · {open.answered} of {open.n} answered · continue it from the exam page
+        </span>
+      )}
       {processing && (
         <div className="flex items-center gap-2.5">
           <div className="h-2 flex-1 rounded-full bg-black/10">
