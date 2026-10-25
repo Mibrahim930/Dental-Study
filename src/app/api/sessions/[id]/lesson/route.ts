@@ -59,6 +59,10 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
         .filter((s) => s.point),
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    // The technical text goes to the server log; the student sees a plain message (key problems are worth saying).
+    console.error(`Lesson for topic ${topic.id} failed`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
+    return NextResponse.json({ error: keyProblem ? msg : "Couldn't write this lesson right now. Try again in a moment." }, { status: 500 });
   }
 }
