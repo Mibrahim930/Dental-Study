@@ -39,11 +39,11 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
     .all(id) as { id: number; current_position: number; summary: string | null; started_at: string; ended_at: string | null }[];
   const attempts = db
     .prepare(
-      `SELECT a.*, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
+      `SELECT a.*, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered, COALESCE(SUM(aq.correct = 1), 0) n_right
        FROM attempts a LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
        WHERE a.exam_id = ? GROUP BY a.id ORDER BY a.id DESC LIMIT 8`,
     )
-    .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; time_limit_sec: number | null; n: number; answered: number }[];
+    .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; time_limit_sec: number | null; n: number; answered: number; n_right: number }[];
   // A practice exam she stepped away from: offered first, so she continues it instead of starting another by mistake.
   // Looked up on its own (not within the 8 listed), so it never disappears here while Home still shows it.
   const openAttempt = db
@@ -416,7 +416,12 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                       {localDay(a.started_at, tz)} · {a.n} questions · {a.mode === "timed" ? "Timed" : "Tutor"}
                     </span>
                     {a.status === "finished" ? (
-                      <MasteryChip value={a.score} />
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <MasteryChip value={a.score} />
+                        <span className="text-[13px] font-bold text-muted-foreground">
+                          {a.n_right}/{a.n}
+                        </span>
+                      </span>
                     ) : (
                       <span className="chip bg-muted text-muted-foreground">{a.status === "error" ? "Failed" : "In progress"}</span>
                     )}

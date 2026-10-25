@@ -39,6 +39,7 @@ export default function ReviewPage() {
   const [index, setIndex] = useState(0);
   const [chosen, setChosen] = useState<number | null>(null);
   const [done, setDone] = useState(0);
+  const [right, setRight] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -92,6 +93,7 @@ export default function ReviewPage() {
       if (signedOut(res)) return;
       if (!res.ok) throw new Error(String(res.status));
       setDone((d) => d + 1);
+      if (correct) setRight((r) => r + 1);
       setChosen(null);
       setIndex((i) => i + 1);
     } catch {
@@ -159,6 +161,7 @@ export default function ReviewPage() {
         <section className="tile cb-lilac flex flex-col gap-3 rounded-[28px]">
           <div className="text-[30px] leading-tight font-extrabold tracking-tight">{done > 0 ? "Nice. That's your review done." : "Nothing to review."}</div>
           <p className="text-[15px] font-medium">
+            {done > 0 ? `${Math.round((right / done) * 100)}% · ${right}/${done} right. ` : ""}
             You reviewed {done} question{done === 1 ? "" : "s"}. They&apos;ll come back right before you&apos;d forget them.
           </p>
           <div className="flex flex-wrap gap-2">

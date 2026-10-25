@@ -255,7 +255,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
           <div className="text-[13px] font-extrabold text-hero-accent">Your score</div>
           <div className="mt-1 text-[22px] font-extrabold tracking-tight">
-            You got {right} of {total} right.
+            {total > 0 ? `${Math.round((right / total) * 100)}% · ${right}/${total} right.` : "Nothing to score."}
           </div>
           <p className="mt-1 text-[14px] font-medium opacity-85">These answers count toward your mastery.</p>
         </div>

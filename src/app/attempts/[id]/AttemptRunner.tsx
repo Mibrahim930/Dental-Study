@@ -414,20 +414,20 @@ function Results({ view }: { view: AttemptView }) {
           <DoubleRing
             outer={score}
             inner={total ? confidentRight / total : 0}
-            center={`${right} of ${total}`}
-            label={`Score ${Math.round(score * 100)} percent, ${confidentRight} right and confident`}
+            center={`${Math.round(score * 100)}%`}
+            label={`Score ${Math.round(score * 100)} percent, ${right} of ${total} right, ${confidentRight} right and confident`}
           />
           <div className="flex min-w-0 flex-1 flex-col gap-2.5">
             <div className="flex flex-col gap-0.5">
               <span className="text-[13px] font-semibold text-hero-muted">Score</span>
               <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-hero-accent" aria-hidden /> {Math.round(score * 100)}%
+                <span className="h-3 w-3 rounded-[4px] bg-hero-accent" aria-hidden /> {Math.round(score * 100)}% · {right}/{total}
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[13px] font-semibold text-hero-muted">Right and confident</span>
               <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-hero-accent-2" aria-hidden /> {confidentRight} of {total}
+                <span className="h-3 w-3 rounded-[4px] bg-hero-accent-2" aria-hidden /> {total ? Math.round((confidentRight / total) * 100) : 0}% · {confidentRight}/{total}
               </span>
             </div>
           </div>
@@ -475,7 +475,7 @@ function Results({ view }: { view: AttemptView }) {
                 <div className="flex justify-between gap-3 text-[15px] font-semibold">
                   <span className="min-w-0">{title}</span>
                   <span className="shrink-0">
-                    {t.right}/{t.total}
+                    {Math.round(r * 100)}% · {t.right}/{t.total}
                   </span>
                 </div>
                 <div className="bar mt-1.5 h-2.5">

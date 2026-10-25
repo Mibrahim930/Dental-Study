@@ -599,7 +599,7 @@ function SectionQuiz({
           </div>
           {done > 0 && (
             <div className="mt-1 text-[17px] font-bold">
-              {right}/{done} right{done < total && <span className="font-medium opacity-75"> · {total - done} skipped</span>}
+              {Math.round((right / done) * 100)}% · {right}/{done} right{done < total && <span className="font-medium opacity-75"> · {total - done} skipped</span>}
             </div>
           )}
         </div>
