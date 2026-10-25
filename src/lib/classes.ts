@@ -84,6 +84,7 @@ function copyExam(sourceId: number, userId: number): number {
 
     // Lectures and slides (slide images are shared on disk, not duplicated).
     const pageMap = new Map<number, number>();
+    const docMap = new Map<number, number>();
     const docs = db.prepare("SELECT * FROM documents WHERE exam_id = ? AND status = 'done'").all(sourceId) as {
       id: number;
       filename: string;
@@ -98,6 +99,7 @@ function copyExam(sourceId: number, userId: number): number {
     const gloss = db.prepare("INSERT OR IGNORE INTO glossary (user_id, abbr, meaning) VALUES (?, ?, ?)");
     for (const d of docs) {
       const docId = Number(insertDoc.run(examId, d.filename, d.page_count).lastInsertRowid);
+      docMap.set(d.id, docId);
       for (const p of db.prepare("SELECT * FROM pages WHERE document_id = ?").all(d.id) as PageRow[]) {
         const pageId = Number(insertPage.run(docId, p.page_number, p.text, p.image_path, p.aspect, p.title, p.notes_json, p.emphasized, p.has_case).lastInsertRowid);
         pageMap.set(p.id, pageId);
@@ -111,7 +113,7 @@ function copyExam(sourceId: number, userId: number): number {
     const topicMap = new Map<number, number>();
     const conceptFor = new Map<number, number>();
     const insertTopic = db.prepare(
-      "INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized, lesson_json, checks_json, checks_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized, lesson_json, checks_json, checks_version, document_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (const t of db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(sourceId) as Topic[]) {
       const pages = (JSON.parse(t.page_ids) as number[]).map(mapPage).filter((x): x is number => x != null);
@@ -139,7 +141,19 @@ function copyExam(sourceId: number, userId: number): number {
         );
       }
       const topicId = Number(
-        insertTopic.run(examId, t.position, t.title, t.summary, JSON.stringify(pages), t.emphasized, lesson, checks, t.checks_version).lastInsertRowid,
+        insertTopic.run(
+          examId,
+          t.position,
+          t.title,
+          t.summary,
+          JSON.stringify(pages),
+          t.emphasized,
+          lesson,
+          checks,
+          t.checks_version,
+          // The section's lecture in the copy (old-style topics, and sections of a lecture not copied, have none).
+          t.document_id != null ? (docMap.get(t.document_id) ?? null) : null,
+        ).lastInsertRowid,
       );
       topicMap.set(t.id, topicId);
       for (const c of db.prepare("SELECT c.id, c.name FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?").all(t.id) as {

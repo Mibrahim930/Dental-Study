@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { db, getExam, type Topic } from "@/lib/db";
 import { StudySession } from "@/components/StudySession";
 import { requireUser } from "@/lib/user";
+import { sectionPlaces, type LectureDoc } from "@/lib/lectures";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,9 @@ export default async function StudyPage(props: PageProps<"/exams/[id]/study">) {
   if (!exam) notFound();
   const topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
   if (topics.length === 0) redirect(`/exams/${examId}`);
+  // Each section's lecture and its number inside it (the hero, the left column and the phone strip show them).
+  const docs = db.prepare("SELECT id, filename FROM documents WHERE exam_id = ? ORDER BY id").all(examId) as LectureDoc[];
+  const places = sectionPlaces(topics, docs);
 
   const last = db.prepare("SELECT * FROM study_sessions WHERE exam_id = ? ORDER BY id DESC LIMIT 1").get(examId) as
     | SessionRow
@@ -42,7 +46,7 @@ export default async function StudyPage(props: PageProps<"/exams/[id]/study">) {
       examName={exam.name}
       sessionId={sessionId}
       initialPosition={position}
-      topics={topics.map((t) => ({ id: t.id, position: t.position, title: t.title, emphasized: !!t.emphasized }))}
+      topics={topics.map((t) => ({ id: t.id, position: t.position, title: t.title, emphasized: !!t.emphasized, ...places.get(t.id)! }))}
       initialChat={chat}
     />
   );

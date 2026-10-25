@@ -15,6 +15,7 @@ import { pendingCountsByTopic } from "@/lib/practicePlan";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress } from "@/lib/readiness";
 import { DoubleRing, Icon, ICONS, MasteryChip } from "@/components/ui";
+import { groupByLecture, lectureName, sectionPlaces } from "@/lib/lectures";
 
 export const dynamic = "force-dynamic";
 
@@ -53,12 +54,27 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   // Pending counts and concept chips for all topics at once (one pass each, not one query per topic).
   const pending = pendingCountsByTopic(id);
   const conceptsByTopic = topicConceptsForExam(id);
-  const practiceTopics = topics.map((t) => ({
-    id: t.id,
-    title: `${t.position + 1}. ${t.title}`,
-    lectureIds: [...new Set((JSON.parse(t.page_ids) as number[]).map((p) => pageDoc.get(p)).filter((d): d is number => d != null))],
-    ...(pending.get(t.id) ?? { missed: 0, unsure: 0 }),
-  }));
+  // Sections grouped under their lectures (old-style topics, not tied to one lecture, form one group of their own).
+  const groups = groupByLecture(topics, docs);
+  const groupOf = new Map(groups.filter((g) => g.docId != null).map((g) => [g.docId!, g]));
+  const oldStyle = groups.find((g) => g.docId == null);
+  const places = sectionPlaces(topics, docs);
+  const studiedIds = new Set(
+    (db
+      .prepare("SELECT ts.topic_id FROM topic_study ts JOIN topics t ON t.id = ts.topic_id WHERE ts.user_id = ? AND t.exam_id = ?")
+      .all(user.id, id) as { topic_id: number }[]).map((r) => r.topic_id),
+  );
+  const practiceTopics = groups.flatMap((g) =>
+    g.sections.map((t, i) => ({
+      id: t.id,
+      title: `${i + 1}. ${t.title}`,
+      group: g.no != null ? `Lecture ${g.no} · ${g.name}` : g.name,
+      lectureIds: [...new Set((JSON.parse(t.page_ids) as number[]).map((p) => pageDoc.get(p)).filter((d): d is number => d != null))],
+      ...(pending.get(t.id) ?? { missed: 0, unsure: 0 }),
+    })),
+  );
+  const lecturesWithSections = groups.filter((g) => g.docId != null);
+  const lecturesDone = lecturesWithSections.filter((g) => g.sections.every((t) => studiedIds.has(t.id))).length;
 
   // Is every slide in the study plan? Title/agenda slides are left out on purpose; anything else missing shows here.
   const inTopics = new Set(topics.flatMap((t) => JSON.parse(t.page_ids) as number[]));
@@ -96,7 +112,11 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const totalPages = docs.reduce((a, d) => a + d.page_count, 0);
   const progress = examProgress(user.id, id);
   const current = topics[lastPosition];
+  const currentPlace = current ? places.get(current.id) : undefined;
   const notes = sessions.filter((s) => s.summary);
+  // The one-time upgrade (or a Rebuild) is turning an old-style map into lecture maps.
+  const reorganising = exam.topic_status === "building" && topics.some((t) => t.document_id == null);
+  const mapRow = { examId: id, conceptsByTopic, studiedIds, current: started ? lastPosition : null };
 
   return (
     <div className="flex flex-col gap-2.5 sm:gap-4">
@@ -152,15 +172,21 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               outerColor="currentColor"
               innerColor="color-mix(in srgb, currentColor 40%, transparent)"
               track="rgb(0 0 0 / 0.12)"
-              label={`Mastery ${progress.mastery == null ? "not tested yet" : `${Math.round(progress.mastery * 100)} percent`}, ${Math.round(progress.studied * 100)} percent of topics studied`}
+              label={`Mastery ${progress.mastery == null ? "not tested yet" : `${Math.round(progress.mastery * 100)} percent`}, ${Math.round(progress.studied * 100)} percent of sections studied`}
             />
             <div className="flex flex-col gap-2 text-[13px] font-bold">
               <span className="flex items-center gap-2">
                 <span className="h-3 w-3 rounded-[4px] bg-current" aria-hidden /> Mastery {progress.mastery == null ? "–" : pct(progress.mastery)}
               </span>
               <span className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-[4px] bg-current opacity-40" aria-hidden /> {Math.round(progress.studied * topics.length)}/{topics.length} topics studied
+                <span className="h-3 w-3 rounded-[4px] bg-current opacity-40" aria-hidden /> {Math.round(progress.studied * topics.length)}/{topics.length}{" "}
+                {lecturesWithSections.length ? "sections" : "topics"} studied
               </span>
+              {lecturesWithSections.length > 0 && (
+                <span className="flex items-center gap-2 pl-5">
+                  {lecturesDone} of {lecturesWithSections.length} lecture{lecturesWithSections.length === 1 ? "" : "s"} done
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -181,7 +207,13 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               <>
                 <div>
                   <div className="text-[13px] font-bold text-hero-muted">
-                    {started ? `Topic ${lastPosition + 1} of ${topics.length}` : `${topics.length} topics`}
+                    {started
+                      ? currentPlace?.lectureNo != null
+                        ? `Lecture ${currentPlace.lectureNo} · Section ${currentPlace.section} of ${currentPlace.sections}`
+                        : `Topic ${lastPosition + 1} of ${topics.length}`
+                      : lecturesWithSections.length
+                        ? `${lecturesWithSections.length} lecture${lecturesWithSections.length === 1 ? "" : "s"} · ${topics.length} sections`
+                        : `${topics.length} topics`}
                   </div>
                   <h2 className="mt-1 text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
                     {started && current ? current.title : "Guided study with lessons, slides, quizzes and a tutor"}
@@ -212,81 +244,127 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             )}
           </section>
 
-          {/* Topic map */}
-          <section className="card">
-            <div className="flex items-center justify-between gap-2 pb-3">
-              <h2 className="section-title">Topic map</h2>
-              {exam.topic_status !== "building" && docs.length > 0 && !processing && (
-                <ActionButton url={`/api/exams/${id}/topics`} label={topics.length ? "Rebuild" : "Build topic map"} className="btn-secondary btn-sm" />
-              )}
+          {/* Lectures: upload, then each lecture's sections (its topic map), with progress. */}
+          <section className="card flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="section-title">Lectures</h2>
+              <div className="flex items-center gap-2">
+                {totalPages > 0 && <span className="eyebrow">{totalPages} slides</span>}
+                {exam.topic_status !== "building" && docs.length > 0 && !processing && (
+                  <ActionButton url={`/api/exams/${id}/topics`} label={topics.length ? "Rebuild" : "Build topic map"} className="btn-secondary btn-sm" />
+                )}
+              </div>
             </div>
             {exam.topic_status === "building" && (
-              <p className="mb-3 rounded-2xl bg-butter px-4 py-3 text-sm font-semibold text-on-butter">Organizing your slides into topics… this takes a minute or two.</p>
+              <p className="rounded-2xl bg-butter px-4 py-3 text-sm font-semibold text-on-butter">
+                {reorganising
+                  ? "Reorganising your topics by lecture… this takes a minute or two. You can keep studying meanwhile."
+                  : "Splitting your lectures into sections… this takes a minute or two."}
+              </p>
             )}
             {exam.topic_status === "error" && (
-              <p className="mb-3 rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">Topic map failed: {exam.topic_error}</p>
+              <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">Topic map failed: {exam.topic_error}</p>
             )}
             {topics.length > 0 && exam.topic_status !== "building" && contentSlides > 0 && (
-              <p className={`mb-3 text-[13px] font-semibold ${missingSlides ? "rounded-2xl bg-butter px-4 py-3 text-on-butter" : "text-muted-foreground"}`}>
+              <p className={`text-[13px] font-semibold ${missingSlides ? "rounded-2xl bg-butter px-4 py-3 text-on-butter" : "text-muted-foreground"}`}>
                 {missingSlides
-                  ? `${missingSlides} of ${contentSlides} slides aren't in a topic yet. Tap Rebuild to add them.`
+                  ? `${missingSlides} of ${contentSlides} slides aren't in a section yet. Tap Rebuild to add them.`
                   : `All ${contentSlides} slides are in your study plan.`}
                 {fillerSlides > 0 && ` ${fillerSlides} title or agenda slide${fillerSlides === 1 ? " was" : "s were"} left out.`}
               </p>
             )}
-            <ol className="grid gap-2.5 sm:grid-cols-2">
-              {topics.map((t) => {
-                const concepts = conceptsByTopic.get(t.id) ?? [];
-                const isCurrent = started && t.position === lastPosition;
+            <Uploader examId={id} />
+            {docs.map((d, i) => {
+              const group = groupOf.get(d.id);
+              const no = i + 1;
+              const name = lectureName(d.filename);
+              const reading = d.status === "processing" || d.status === "pending";
+              const status = <LectureStatus doc={d} />;
+              const remove = <RemoveLectureButton docId={d.id} name={name} reading={reading} />;
+              if (!group) {
                 return (
-                  <li key={t.id}>
-                    <Link
-                      href={`/exams/${id}/study?topic=${t.position}`}
-                      className={`flex h-full flex-col gap-2 rounded-[22px] p-4 transition-colors ${
-                        isCurrent ? "bg-hero text-hero-foreground" : "bg-muted hover:bg-muted-strong"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <span
-                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-sm font-extrabold ${
-                            isCurrent ? "bg-mint text-on-mint" : "bg-card"
-                          }`}
-                        >
-                          {t.position + 1}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="leading-snug font-bold">
-                            {t.title}
-                            {t.emphasized ? <span className={isCurrent ? "text-hero-accent-2" : "text-warning"} title="Emphasized in lecture"> ★</span> : null}
-                          </div>
-                          <div className={`text-[13px] font-medium ${isCurrent ? "text-hero-muted" : "text-muted-foreground"}`}>
-                            {JSON.parse(t.page_ids).length} slides{isCurrent ? " · you're here" : ""}
-                          </div>
-                        </div>
-                      </div>
-                      {concepts.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {concepts.map((c) => (
-                            <span
-                              key={c.id}
-                              className="inline-flex items-center gap-1.5 rounded-[10px] bg-card py-0.5 pr-2 pl-0.5 text-[12px] font-semibold text-foreground"
-                              title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : "New for this exam"}
-                            >
-                              <MasteryChip value={c.mastery} className="px-1.5 py-0 text-[11px]" />
-                              {c.name}
-                              {c.earlier_exams.length > 0 && " ↺"}
-                            </span>
-                          ))}
-                        </div>
+                  <div key={d.id} className="flex flex-col gap-2 rounded-[22px] bg-muted p-4">
+                    <LectureHead no={no} name={name}>
+                      {d.status === "done" ? (
+                        <span className="chip cb-mint shrink-0">{d.page_count} slides</span>
+                      ) : d.status === "error" ? (
+                        <span className="chip cb-coral shrink-0">Failed</span>
+                      ) : (
+                        <span className="chip cb-butter shrink-0">{d.status === "pending" ? "Waiting" : "Reading"}</span>
                       )}
-                    </Link>
-                  </li>
+                    </LectureHead>
+                    {d.status === "done" && (
+                      <p className="text-[13px] font-medium text-muted-foreground">
+                        {exam.topic_status === "building"
+                          ? "Being split into sections…"
+                          : oldStyle
+                            ? "In the topic list below until it's split into sections."
+                            : "No sections yet. Tap Rebuild to split it into sections."}
+                      </p>
+                    )}
+                    {status}
+                    <div className="-mt-1 flex justify-end">{remove}</div>
+                  </div>
                 );
-              })}
-            </ol>
+              }
+              const sections = group.sections;
+              const doneCount = sections.filter((t) => studiedIds.has(t.id)).length;
+              const stars = sections.filter((t) => t.emphasized).length;
+              const slides = sections.reduce((n, t) => n + (JSON.parse(t.page_ids) as number[]).length, 0);
+              const mastery = average(sections.flatMap((t) => (conceptsByTopic.get(t.id) ?? []).map((c) => c.mastery)));
+              const here = started && sections.some((t) => t.position === lastPosition);
+              return (
+                <details key={d.id} className="group rounded-[22px] bg-muted" open={here}>
+                  <summary className="flex cursor-pointer list-none flex-col gap-2.5 rounded-[22px] p-4 hover:bg-muted-strong [&::-webkit-details-marker]:hidden">
+                    <LectureHead no={no} name={name}>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <MasteryChip value={mastery} />
+                        <Icon d={ICONS.chevronDown} size={18} className="text-muted-foreground transition-transform group-open:rotate-180" />
+                      </span>
+                    </LectureHead>
+                    <div className="text-[13px] font-semibold text-muted-foreground">
+                      {doneCount} of {sections.length} section{sections.length === 1 ? "" : "s"} done · {slides} slides
+                      {stars > 0 && <span className="text-warning"> · ★ {stars}</span>}
+                      {d.status === "error" && <span className="text-danger"> · some slides failed</span>}
+                    </div>
+                    <div className="bar bg-card" role="progressbar" aria-label={`${name}: ${doneCount} of ${sections.length} sections done`} aria-valuemin={0} aria-valuemax={sections.length} aria-valuenow={doneCount}>
+                      <span className="bg-hero" style={{ width: `${(doneCount / sections.length) * 100}%` }} />
+                    </div>
+                  </summary>
+                  <div className="flex flex-col gap-2 px-2.5 pb-3">
+                    {status}
+                    <ol className="flex flex-col gap-2">
+                      {sections.map((t, k) => (
+                        <SectionRow key={t.id} topic={t} n={k + 1} {...mapRow} />
+                      ))}
+                    </ol>
+                    <div className="flex justify-end">{remove}</div>
+                  </div>
+                </details>
+              );
+            })}
+            {oldStyle && (
+              <details className="group rounded-[22px] bg-muted" open={!groups.some((g) => g.docId != null)}>
+                <summary className="flex cursor-pointer list-none items-start justify-between gap-3 rounded-[22px] p-4 hover:bg-muted-strong [&::-webkit-details-marker]:hidden">
+                  <div className="min-w-0">
+                    <div className="leading-snug font-bold">Topics from all lectures</div>
+                    <div className="text-[13px] font-medium text-muted-foreground">
+                      {oldStyle.sections.length} topics, made before topics were grouped by lecture.
+                      {exam.topic_status === "building" ? "" : " Tap Rebuild to split them by lecture."}
+                    </div>
+                  </div>
+                  <Icon d={ICONS.chevronDown} size={18} className="mt-1 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                </summary>
+                <ol className="flex flex-col gap-2 px-2.5 pb-3">
+                  {oldStyle.sections.map((t) => (
+                    <SectionRow key={t.id} topic={t} n={t.position + 1} {...mapRow} />
+                  ))}
+                </ol>
+              </details>
+            )}
             {topics.length > 0 && (
-              <p className="mt-3 text-[13px] text-muted-foreground">
-                Chips show mastery: mint ≥80%, butter ≥60%, coral below, “New” untested. ★ emphasized by your professor. ↺ covered in an earlier exam.
+              <p className="text-[13px] text-muted-foreground">
+                Chips show mastery: mint ≥80%, butter ≥60%, coral below, “New” untested. ★ emphasized by your professor. ↺ covered in an earlier exam. ✓ studied.
               </p>
             )}
           </section>
@@ -324,54 +402,129 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               </div>
             )}
           </section>
-
-          {/* Lectures */}
-          <section className="card flex flex-col gap-3">
-            <div className="flex items-baseline justify-between">
-              <h2 className="section-title">Lectures</h2>
-              {totalPages > 0 && <span className="eyebrow">{totalPages} slides</span>}
-            </div>
-            <Uploader examId={id} />
-            {docs.map((d) => {
-              const done = d.done ?? 0;
-              return (
-                <div key={d.id} className="flex flex-col gap-2 rounded-[20px] bg-muted p-3.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="min-w-0 text-[15px] leading-snug font-semibold break-words">{d.filename}</span>
-                    {d.status === "done" ? (
-                      <span className="chip cb-mint shrink-0">{d.page_count} slides</span>
-                    ) : d.status === "error" ? (
-                      <span className="chip cb-coral shrink-0">Failed</span>
-                    ) : (
-                      <span className="chip cb-butter shrink-0">{d.status === "pending" ? "Waiting" : "Reading"}</span>
-                    )}
-                  </div>
-                  <div className="-mt-1 flex justify-end">
-                    <RemoveLectureButton docId={d.id} name={d.filename.replace(/\.pdf$/i, "")} reading={d.status === "processing" || d.status === "pending"} />
-                  </div>
-                  {d.status === "processing" && d.page_count > 0 && (
-                    <div className="flex items-center gap-2.5">
-                      <div className="bar flex-1 bg-card">
-                        <span className="bg-hero" style={{ width: `${(done / d.page_count) * 100}%` }} />
-                      </div>
-                      <span className="text-xs font-bold text-muted-foreground">
-                        {done}/{d.page_count}
-                      </span>
-                    </div>
-                  )}
-                  {d.status === "error" && (
-                    <div className="flex items-center justify-between gap-2 text-sm text-danger">
-                      <span className="min-w-0 break-words">{d.error}</span>
-                      <ActionButton url={`/api/documents/${d.id}/retry`} label="Retry" className="btn-secondary btn-sm shrink-0 bg-card" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </section>
         </div>
       </div>
     </div>
+  );
+}
+
+const average = (xs: (number | null)[]): number | null => {
+  const ms = xs.filter((m): m is number => m != null);
+  return ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
+};
+
+/** A lecture row's head: its number, "Lecture N", its name, and whatever sits on the right. */
+function LectureHead({ no, name, children }: { no: number; name: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-card text-sm font-extrabold">{no}</span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-bold text-muted-foreground">Lecture {no}</div>
+        <div className="leading-snug font-bold break-words">{name}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Reading progress, or the error with Retry, for a lecture that isn't fully read. */
+function LectureStatus({ doc }: { doc: DocWithProgress }) {
+  const done = doc.done ?? 0;
+  if (doc.status === "processing" && doc.page_count > 0) {
+    return (
+      <div className="flex items-center gap-2.5">
+        <div className="bar flex-1 bg-card">
+          <span className="bg-hero" style={{ width: `${(done / doc.page_count) * 100}%` }} />
+        </div>
+        <span className="text-xs font-bold text-muted-foreground">
+          {done}/{doc.page_count}
+        </span>
+      </div>
+    );
+  }
+  if (doc.status === "error") {
+    return (
+      <div className="flex items-center justify-between gap-2 text-sm text-danger">
+        <span className="min-w-0 break-words">{doc.error}</span>
+        <ActionButton url={`/api/documents/${doc.id}/retry`} label="Retry" className="btn-secondary btn-sm shrink-0 bg-card" />
+      </div>
+    );
+  }
+  return null;
+}
+
+/** One section of a lecture: number (✓ once studied), title, slides, mastery, concept chips; the whole row opens it. */
+function SectionRow({
+  topic: t,
+  n,
+  examId,
+  conceptsByTopic,
+  studiedIds,
+  current,
+}: {
+  topic: Topic;
+  n: number;
+  examId: number;
+  conceptsByTopic: ReturnType<typeof topicConceptsForExam>;
+  studiedIds: Set<number>;
+  current: number | null;
+}) {
+  const concepts = conceptsByTopic.get(t.id) ?? [];
+  const isCurrent = t.position === current;
+  const studied = studiedIds.has(t.id);
+  const mastery = average(concepts.map((c) => c.mastery));
+  return (
+    <li>
+      <Link
+        href={`/exams/${examId}/study?topic=${t.position}`}
+        className={`flex flex-col gap-2 rounded-[18px] p-3.5 transition-colors ${isCurrent ? "bg-hero text-hero-foreground" : "bg-card hover:bg-muted-strong"}`}
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] text-[13px] font-extrabold ${
+              studied ? "bg-mint text-on-mint" : isCurrent ? "bg-white/15" : "bg-muted"
+            }`}
+          >
+            {studied ? (
+              <>
+                <Icon d={ICONS.check} size={15} />
+                <span className="sr-only">Section {n}, studied:</span>
+              </>
+            ) : (
+              n
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="leading-snug font-bold break-words">
+              {t.title}
+              {t.emphasized ? <span className={isCurrent ? "text-hero-accent-2" : "text-warning"} title="Emphasized in lecture"> ★</span> : null}
+            </div>
+            <div className={`text-[13px] font-medium ${isCurrent ? "text-hero-muted" : "text-muted-foreground"}`}>
+              {(JSON.parse(t.page_ids) as number[]).length} slides{isCurrent ? " · you're here" : ""}
+            </div>
+          </div>
+          <MasteryChip value={mastery} className="shrink-0" />
+        </div>
+        {concepts.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {concepts.map((c) => (
+              <span
+                key={c.id}
+                className={`inline-flex max-w-full items-center gap-1.5 rounded-[10px] py-0.5 pr-2 pl-0.5 text-[12px] font-semibold ${isCurrent ? "bg-white/10" : "bg-muted text-foreground"}`}
+                title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : "New for this exam"}
+              >
+                <MasteryChip value={c.mastery} className="px-1.5 py-0 text-[11px]" />
+                <span className="min-w-0 break-words">{c.name}</span>
+                {c.earlier_exams.length > 0 && " ↺"}
+              </span>
+            ))}
+          </div>
+        )}
+        <span className={`flex items-center gap-1 self-end text-[13px] font-extrabold ${isCurrent ? "text-hero-accent" : "text-primary"}`}>
+          Study this <Icon d={ICONS.arrowRight} size={15} />
+        </span>
+      </Link>
+    </li>
   );
 }
 

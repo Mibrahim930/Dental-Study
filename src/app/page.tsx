@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, missedSummary, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
 import { MissedBanner } from "@/components/PlanAdjust";
 import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
-import { examProgress, firstName } from "@/lib/readiness";
+import { examProgress, firstName, lectureProgressMany, type LectureProgress } from "@/lib/readiness";
 import { PlanWarnings } from "@/components/PlanWarnings";
 import { StartTaskButton, TaskList, type TaskItem } from "@/components/TaskList";
 import { DoubleRing, Icon, ICONS, MasteryChip, RingLegend, Strip } from "@/components/ui";
@@ -46,6 +46,7 @@ export default async function Home() {
   const next = upcoming.find((e) => e.exam_date);
   const nextDays = next ? daysUntil(next.exam_date, today) : null;
   const progress = next ? examProgress(user.id, next.id) : null;
+  const lectureDone = lectureProgressMany(user.id, exams.map((e) => e.id));
   const name = firstName(user.email);
   const hello = `${greeting(settings.timezone)}${name ? ` ${name}` : ""},`;
 
@@ -162,7 +163,7 @@ export default async function Home() {
             <div className="card text-[15px] text-muted-foreground">No upcoming exams. Create one to start uploading lectures.</div>
           )}
           {upcoming.map((e) => (
-            <ExamBlock key={e.id} exam={e} today={today} />
+            <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} />
           ))}
           {past.length > 0 && (
             <details className="group">
@@ -172,7 +173,7 @@ export default async function Home() {
               <p className="px-2 pt-3 text-sm text-muted-foreground">Their lectures, scores and review cards stay in memory and feed into new exams.</p>
               <div className="mt-2.5 flex flex-col gap-2.5 opacity-80">
                 {past.map((e) => (
-                  <ExamBlock key={e.id} exam={e} today={today} />
+                  <ExamBlock key={e.id} exam={e} today={today} lectures={lectureDone.get(e.id)} />
                 ))}
               </div>
             </details>
@@ -292,9 +293,13 @@ function Welcome({ hello }: { hello: string }) {
   );
 }
 
-function ExamBlock({ exam, today }: { exam: ExamWithCounts; today: string }) {
+function ExamBlock({ exam, today, lectures }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress }) {
   const days = daysUntil(exam.exam_date, today);
   const processing = exam.pages > 0 && exam.done_pages < exam.pages;
+  // Once the topic map is by lecture: "3 of 7 lectures done" (a lecture is done when every section in it is studied).
+  const lectureLine = lectures?.lectures
+    ? `${lectures.done} of ${lectures.lectures} lecture${lectures.lectures === 1 ? "" : "s"} done`
+    : `${exam.docs} lecture${exam.docs === 1 ? "" : "s"}`;
   return (
     <Link href={`/exams/${exam.id}`} className={`flex flex-col gap-3.5 rounded-[28px] px-[22px] py-5 transition-transform active:scale-[.99] ${KIND_STYLE[exam.kind]}`}>
       <div className="flex items-end justify-between gap-3">
@@ -305,7 +310,7 @@ function ExamBlock({ exam, today }: { exam: ExamWithCounts; today: string }) {
           </span>
           <span className="text-[22px] leading-[1.05] font-extrabold tracking-[-0.02em]">{exam.name}</span>
           <span className="text-[13px] font-semibold opacity-75">
-            {formatDate(exam.exam_date)} · {exam.docs} lecture{exam.docs === 1 ? "" : "s"} · {exam.pages} slides
+            {formatDate(exam.exam_date)} · {lectureLine} · {exam.pages} slides
           </span>
         </div>
         {days != null && days >= 0 && (

@@ -94,9 +94,11 @@ CREATE TABLE IF NOT EXISTS topics (
   emphasized INTEGER NOT NULL DEFAULT 0,
   lesson_json TEXT,
   checks_json TEXT,                                -- section quiz shown after the lesson (JSON array; see lib/study.ts)
-  checks_version INTEGER                           -- how checks_json was written: NULL = old 10-question quiz,
+  checks_version INTEGER,                          -- how checks_json was written: NULL = old 10-question quiz,
                                                    -- 2 = 20 questions planned over the slides and checked by a second AI pass.
                                                    -- Quizzes older than QUIZ_VERSION are rewritten once on next open.
+  document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE -- the lecture this section belongs to; NULL = old-style
+                                                   -- topic from before topic maps were built per lecture
 );
 
 CREATE TABLE IF NOT EXISTS topic_concepts (
@@ -364,6 +366,7 @@ function migrate(db: Database.Database) {
   }
   if (!columns(db, "topics").includes("checks_json")) db.exec("ALTER TABLE topics ADD COLUMN checks_json TEXT");
   if (!columns(db, "topics").includes("checks_version")) db.exec("ALTER TABLE topics ADD COLUMN checks_version INTEGER");
+  if (!columns(db, "topics").includes("document_id")) db.exec("ALTER TABLE topics ADD COLUMN document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE");
   if (!columns(db, "session_checks").includes("check_index")) {
     db.exec("ALTER TABLE session_checks ADD COLUMN check_index INTEGER");
     db.exec("ALTER TABLE session_checks ADD COLUMN chosen INTEGER");
@@ -480,6 +483,8 @@ export type Topic = {
   lesson_json: string | null;
   checks_json: string | null;
   checks_version: number | null;
+  /** The lecture (documents.id) this section belongs to; null for old-style topics mapped across lectures. */
+  document_id: number | null;
 };
 
 /**

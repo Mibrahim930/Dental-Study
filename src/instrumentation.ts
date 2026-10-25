@@ -16,6 +16,16 @@ export async function register() {
     } catch (err) {
       console.error("Cleaning other exams' questions out of open practice exams failed", err);
     }
+    // One-time upgrade: topic maps built before they were per lecture are re-mapped by lecture, one exam at a time, in
+    // the background (each exam once; a restart carries on with the rest). Failures are logged and leave the old map.
+    try {
+      const { rebuildLectureMaps } = await import("./lib/topics");
+      void rebuildLectureMaps()
+        .then((n) => n && console.log(`Reorganised ${n} exam(s)' topics by lecture`))
+        .catch((err) => console.error("Reorganising topics by lecture failed", err));
+    } catch (err) {
+      console.error("Reorganising topics by lecture failed", err);
+    }
     // Claude slide batches finish in the background; collect results every minute.
     setInterval(() => void pollBatches(), 60_000);
     // Daily off-disk backup (checked hourly; first check shortly after start).

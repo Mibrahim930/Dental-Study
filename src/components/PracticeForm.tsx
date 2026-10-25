@@ -2,7 +2,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-type TopicOption = { id: number; title: string; lectureIds: number[]; missed: number; unsure: number };
+/** A section of the topic map; `group` is the lecture it belongs to ("Lecture 2 · Pulp biology"), shown as a header. */
+type TopicOption = { id: number; title: string; group?: string; lectureIds: number[]; missed: number; unsure: number };
 type Cover = "all" | "lectures" | "topics";
 
 export function PracticeForm({
@@ -59,12 +60,14 @@ export function PracticeForm({
         <select id="cover" className="input" value={cover} onChange={(e) => setCover(e.target.value as Cover)}>
           <option value="all">Entire exam{lectures.length > 1 ? ` (all ${lectures.length} lectures)` : ""}</option>
           {lectures.length > 1 && <option value="lectures">Choose lectures…</option>}
-          <option value="topics">Choose topics…</option>
+          <option value="topics">Choose sections…</option>
         </select>
         {cover === "lectures" && (
           <CheckList items={lectures.map((l) => ({ id: l.id, label: l.name }))} selected={lectureIds} onChange={setLectureIds} />
         )}
-        {cover === "topics" && <CheckList items={topics.map((t) => ({ id: t.id, label: t.title }))} selected={topicIds} onChange={setTopicIds} />}
+        {cover === "topics" && (
+          <CheckList items={topics.map((t) => ({ id: t.id, label: t.title, group: t.group }))} selected={topicIds} onChange={setTopicIds} />
+        )}
       </div>
 
       <label className="flex cursor-pointer items-start gap-3 rounded-[22px] bg-butter p-4 text-on-butter">
@@ -111,13 +114,21 @@ export function PracticeForm({
       </div>
       {error && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{error}</p>}
       <button className="btn-primary btn-lg w-full" onClick={start} disabled={busy || nothingChosen}>
-        {busy ? "Starting…" : nothingChosen ? `Choose ${cover === "lectures" ? "a lecture" : "a topic"} first` : "Write my practice exam"}
+        {busy ? "Starting…" : nothingChosen ? `Choose ${cover === "lectures" ? "a lecture" : "a section"} first` : "Write my practice exam"}
       </button>
     </div>
   );
 }
 
-function CheckList({ items, selected, onChange }: { items: { id: number; label: string }[]; selected: number[]; onChange: (ids: number[]) => void }) {
+function CheckList({
+  items,
+  selected,
+  onChange,
+}: {
+  items: { id: number; label: string; group?: string }[];
+  selected: number[];
+  onChange: (ids: number[]) => void;
+}) {
   const all = selected.length === items.length;
   return (
     <div className="mt-2 overflow-hidden rounded-[20px] border-2 border-foreground bg-card">
@@ -128,28 +139,33 @@ function CheckList({ items, selected, onChange }: { items: { id: number; label: 
         </button>
       </div>
       <div className="max-h-64 overflow-y-auto p-1.5">
-        {items.map((item) => {
+        {items.map((item, i) => {
           const on = selected.includes(item.id);
+          // A lecture header above its first section.
+          const header = item.group && item.group !== items[i - 1]?.group ? item.group : null;
           return (
-            <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-[14px] px-2.5 py-2 text-[15px] font-medium hover:bg-muted">
-              <input
-                type="checkbox"
-                className="peer sr-only"
-                checked={on}
-                onChange={() => onChange(on ? selected.filter((x) => x !== item.id) : [...selected, item.id])}
-              />
-              <span
-                aria-hidden
-                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg peer-focus-visible:outline-3 peer-focus-visible:outline-primary ${on ? "bg-hero text-hero-foreground" : "bg-muted"}`}
-              >
-                {on && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 12.5l4.5 4.5L19 7" />
-                  </svg>
-                )}
-              </span>
-              {item.label}
-            </label>
+            <div key={item.id}>
+              {header && <div className="px-2.5 pt-2.5 pb-1 text-[12px] font-extrabold text-muted-foreground">{header}</div>}
+              <label className="flex cursor-pointer items-start gap-3 rounded-[14px] px-2.5 py-2 text-[15px] font-medium hover:bg-muted">
+                <input
+                  type="checkbox"
+                  className="peer sr-only"
+                  checked={on}
+                  onChange={() => onChange(on ? selected.filter((x) => x !== item.id) : [...selected, item.id])}
+                />
+                <span
+                  aria-hidden
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg peer-focus-visible:outline-3 peer-focus-visible:outline-primary ${on ? "bg-hero text-hero-foreground" : "bg-muted"}`}
+                >
+                  {on && (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12.5l4.5 4.5L19 7" />
+                    </svg>
+                  )}
+                </span>
+                {item.label}
+              </label>
+            </div>
           );
         })}
       </div>

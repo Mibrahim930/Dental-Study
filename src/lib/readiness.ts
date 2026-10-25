@@ -65,6 +65,30 @@ export function examProgressMany(userId: number, examIds: number[]): Map<number,
   return out;
 }
 
+/** Lectures with sections in the topic map, and how many of them are done (every section studied by this student). */
+export type LectureProgress = { lectures: number; done: number };
+
+/** LectureProgress for several exams in one query. Old-style topics (not tied to a lecture) don't count. */
+export function lectureProgressMany(userId: number, examIds: number[]): Map<number, LectureProgress> {
+  const out = new Map<number, LectureProgress>();
+  const ids = [...new Set(examIds)];
+  for (const id of ids) out.set(id, { lectures: 0, done: 0 });
+  if (ids.length === 0) return out;
+  const marks = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT t.exam_id, t.document_id, COUNT(*) n, SUM(EXISTS (SELECT 1 FROM topic_study s WHERE s.user_id = ? AND s.topic_id = t.id)) studied
+       FROM topics t WHERE t.exam_id IN (${marks}) AND t.document_id IS NOT NULL GROUP BY t.exam_id, t.document_id`,
+    )
+    .all(userId, ...ids) as { exam_id: number; document_id: number; n: number; studied: number }[];
+  for (const r of rows) {
+    const p = out.get(r.exam_id)!;
+    p.lectures++;
+    if (r.studied >= r.n) p.done++;
+  }
+  return out;
+}
+
 /** How this finished practice exam compares with the previous one and the best one for the same exam. */
 export function scoreContext(attemptId: number): { previous: number | null; best: boolean } {
   const a = db.prepare("SELECT exam_id, score FROM attempts WHERE id = ?").get(attemptId) as { exam_id: number; score: number | null } | undefined;

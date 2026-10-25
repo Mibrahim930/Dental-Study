@@ -12,7 +12,21 @@ import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
 import type { Range } from "@/lib/marks";
 
-type TopicLite = { id: number; position: number; title: string; emphasized: boolean };
+/**
+ * A section of the topic map, with where it sits: its lecture (`lectureId` null for an old-style topic mapped across
+ * lectures), the lecture's number and name, and the section's number among the lecture's `sections`.
+ */
+type TopicLite = {
+  id: number;
+  position: number;
+  title: string;
+  emphasized: boolean;
+  lectureId: number | null;
+  lectureNo: number | null;
+  lecture: string;
+  section: number;
+  sections: number;
+};
 type ChatMsg = { id?: number; role: "user" | "assistant"; content: string };
 type LessonData = {
   topic: { id: number; title: string; summary: string; emphasized: boolean };
@@ -127,6 +141,19 @@ export function StudySession(props: {
 
   const topic = topics[position];
   const isLast = position + 1 >= topics.length;
+  const byLecture = topic.lectureId != null;
+  // The last section of a lecture leads on to the next lecture; the very last one finishes the session.
+  const lastInLecture = !isLast && topics[position + 1].lectureId !== topic.lectureId;
+  const nextLabel = isLast ? "Finish session" : lastInLecture ? "Next lecture →" : "Next section →";
+  const where = byLecture ? `Lecture ${topic.lectureNo ?? "?"} · Section ${topic.section} of ${topic.sections}` : `Topic ${position + 1} of ${topics.length}`;
+  // Left column: sections under their lecture headers, in study order.
+  const navGroups: { key: string; label: string | null; items: TopicLite[] }[] = [];
+  for (const t of topics) {
+    const key = String(t.lectureId);
+    const last = navGroups.at(-1);
+    if (last?.key === key) last.items.push(t);
+    else navGroups.push({ key, label: t.lectureId != null ? `Lecture ${t.lectureNo ?? "?"} · ${t.lecture}` : null, items: [t] });
+  }
 
   return (
     <div className="flex flex-col gap-2.5 sm:gap-4">
@@ -147,7 +174,12 @@ export function StudySession(props: {
           </button>
         </div>
       </div>
-      <Strip total={topics.length} filled={position + 1} className="px-1 lg:hidden" />
+      {/* Phone: this lecture's sections (the whole list for an old-style map). */}
+      {byLecture ? (
+        <Strip total={topic.sections} filled={topic.section} className="px-1 lg:hidden" />
+      ) : (
+        <Strip total={topics.length} filled={position + 1} className="px-1 lg:hidden" />
+      )}
 
       {endSummary !== undefined && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3.5 sm:items-center">
@@ -155,7 +187,7 @@ export function StudySession(props: {
             <h2 className="section-title">Session saved</h2>
             {endSummary && <p className="text-[15px] leading-relaxed">{endSummary}</p>}
             <p className="text-[15px] text-muted-foreground">
-              Want to lock it in? Take a short practice exam on the {visited.size} topic{visited.size === 1 ? "" : "s"} you covered.
+              Want to lock it in? Take a short practice exam on the {visited.size} section{visited.size === 1 ? "" : "s"} you covered.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <button className="btn-primary btn-lg flex-1" disabled={starting} onClick={practiceCovered}>
@@ -173,38 +205,46 @@ export function StudySession(props: {
       )}
 
       <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,1fr)_380px]">
-        <nav className="hidden lg:block" aria-label="Topics">
-          <ol className="card sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col gap-1 overflow-y-auto p-2.5">
-            {topics.map((t) => (
-              <li key={t.id}>
-                <button
-                  onClick={() => go(t.position)}
-                  aria-current={t.position === position ? "step" : undefined}
-                  className={`flex w-full items-start gap-2 rounded-[16px] px-3 py-2.5 text-left text-sm font-semibold transition-colors ${
-                    t.position === position
-                      ? "bg-hero text-hero-foreground"
-                      : visited.has(t.position)
-                        ? "hover:bg-muted"
-                        : "text-muted-foreground hover:bg-muted"
-                  }`}
-                >
-                  <span className="w-5 shrink-0 font-extrabold">{t.position + 1}</span>
-                  <span>
-                    {t.title}
-                    {t.emphasized && " ★"}
-                  </span>
-                </button>
-              </li>
+        <nav className="hidden lg:block" aria-label="Sections">
+          <div className="card sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col gap-1 overflow-y-auto p-2.5">
+            {navGroups.map((g) => (
+              <div key={g.key} className="flex flex-col gap-1">
+                {g.label && <div className="px-3 pt-2 pb-0.5 text-[12px] leading-snug font-extrabold text-muted-foreground">{g.label}</div>}
+                <ol className="flex flex-col gap-1">
+                  {g.items.map((t) => (
+                    <li key={t.id}>
+                      <button
+                        onClick={() => go(t.position)}
+                        aria-current={t.position === position ? "step" : undefined}
+                        className={`flex w-full items-start gap-2 rounded-[16px] px-3 py-2.5 text-left text-sm font-semibold transition-colors ${
+                          t.position === position
+                            ? "bg-hero text-hero-foreground"
+                            : visited.has(t.position)
+                              ? "hover:bg-muted"
+                              : "text-muted-foreground hover:bg-muted"
+                        }`}
+                      >
+                        <span className="w-5 shrink-0 font-extrabold">{t.lectureId != null ? t.section : t.position + 1}</span>
+                        <span>
+                          {t.title}
+                          {t.emphasized && " ★"}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
             ))}
-          </ol>
+          </div>
         </nav>
 
         <article className="flex min-w-0 flex-col gap-2.5 sm:gap-4">
           <section className="card-hero flex flex-col gap-3">
             <div className="text-[13px] font-bold text-hero-muted">
-              Topic {position + 1} of {topics.length}
+              {where}
               {topic.emphasized && " · ★ emphasized in lecture"}
             </div>
+            {byLecture && <div className="-mt-2 text-[13px] font-semibold break-words text-hero-muted">{topic.lecture}</div>}
             <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.03em] sm:text-[38px]">{topic.title}</h1>
             {data && data.concepts.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -245,6 +285,8 @@ export function StudySession(props: {
               sessionId={sessionId}
               position={position}
               isLast={isLast}
+              label={byLecture ? `Section ${topic.section}` : `Topic ${position + 1}`}
+              nextLabel={nextLabel}
               onNext={() => (isLast ? endSession() : go(position + 1))}
             />
           )}
@@ -254,7 +296,7 @@ export function StudySession(props: {
             {isLast ? (
               <button className="btn-primary btn-lg" onClick={endSession}>Finish session</button>
             ) : (
-              <button className="btn-primary btn-lg" onClick={() => go(position + 1)}>Next topic →</button>
+              <button className="btn-primary btn-lg" onClick={() => go(position + 1)}>{nextLabel}</button>
             )}
           </div>
         </article>
@@ -354,7 +396,23 @@ function Lesson({ data }: { data: LessonData }) {
  * End-of-section quiz: one question at a time, with a way to skip ahead or stop and see the score at any point.
  * `index` counts the questions shown (reported ones are skipped); answers are keyed by the question's place in the quiz.
  */
-function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: number; position: number; isLast: boolean; onNext: () => void }) {
+function SectionQuiz({
+  sessionId,
+  position,
+  isLast,
+  label,
+  nextLabel,
+  onNext,
+}: {
+  sessionId: number;
+  position: number;
+  isLast: boolean;
+  /** "Section 3" (or "Topic 3" on an old-style map), for the score line. */
+  label: string;
+  /** "Next section →", "Next lecture →" on a lecture's last section, "Finish session" on the very last. */
+  nextLabel: string;
+  onNext: () => void;
+}) {
   const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[]; slides: number } | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [picked, setPicked] = useState<number | null>(null);
@@ -398,9 +456,10 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
     };
   }, [sessionId, position, attempt]);
 
+  const skipLabel = isLast ? "Skip & finish session" : nextLabel === "Next lecture →" ? "Skip to next lecture →" : "Skip to next section →";
   const skip = (
     <button className="btn-ghost px-1" onClick={onNext}>
-      {isLast ? "Skip & finish session" : "Skip to next section →"}
+      {skipLabel}
     </button>
   );
   /** After "Write new questions": start the quiz over with the fresh set. */
@@ -424,7 +483,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn-primary btn-sm" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>Try again</button>
           <button className="btn-ghost btn-sm text-on-coral" onClick={onNext}>
-            {isLast ? "Skip & finish session" : "Skip to next section →"}
+            {skipLabel}
           </button>
         </div>
       </section>
@@ -510,7 +569,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         <div>
           <div ref={heading} tabIndex={-1} className="text-[13px] font-bold opacity-75 outline-none">Section quiz</div>
           <div className="text-[30px] leading-tight font-extrabold tracking-[-0.03em]">
-            {good ? `Topic ${position + 1}, done.` : done === 0 ? "No questions answered." : "Worth another look."}
+            {good ? `${label}, done.` : done === 0 ? "No questions answered." : "Worth another look."}
           </div>
           {done > 0 && (
             <div className="mt-1 text-[17px] font-bold">
@@ -531,7 +590,7 @@ function SectionQuiz({ sessionId, position, isLast, onNext }: { sessionId: numbe
         )}
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
           <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
-          <button className="btn-primary btn-lg" onClick={onNext}>{isLast ? "Finish session" : "Next section →"}</button>
+          <button className="btn-primary btn-lg" onClick={onNext}>{nextLabel}</button>
         </div>
         <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
       </section>

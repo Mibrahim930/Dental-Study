@@ -101,11 +101,12 @@ describe("new lecture added to an existing map", () => {
   it("keeps old topic ids, lessons, quiz answers, study progress and questions; only new slides form new topics", async () => {
     const w = await studied();
     const p2 = lecture(w.examId, "L2.pdf", 4);
+    // Release 3: maps are per lecture, so the new lecture's sections are appended after the existing lecture's.
     topicMapReply = () => ({ topics: [t("C", p2.slice(0, 2), { after_topic: 1 }), t("D", p2.slice(2), { after_topic: 2 })] });
     await buildTopicMap(w.examId);
     expect(status(w.examId).topic_status).toBe("ready");
     const now = topics(w.examId);
-    expect(now.map((x) => x.title)).toEqual(["A", "C", "B", "D"]);
+    expect(now.map((x) => x.title)).toEqual(["A", "B", "C", "D"]);
     expect(now.map((x) => x.position)).toEqual([0, 1, 2, 3]);
     const a = now.find((x) => x.id === w.a.id)!;
     expect(pagesOf(a)).toEqual(pagesOf(w.a));
@@ -115,8 +116,8 @@ describe("new lecture added to an existing map", () => {
     expect(db.prepare("SELECT check_index FROM session_checks WHERE session_id = ?").get(w.session)).toEqual({ check_index: 0 });
     expect(db.prepare("SELECT 1 x FROM topic_study WHERE topic_id = ?").get(w.a.id)).toEqual({ x: 1 });
     expect(db.prepare("SELECT topic_id FROM questions WHERE id = ?").get(w.question)).toEqual({ topic_id: w.a.id });
-    // The AI was told about existing topics and given only the new slides.
-    expect(prompts[1]).toContain("1. A");
+    // The AI was given only the new lecture's slides.
+    expect(prompts[1]).toContain("L2.pdf");
     for (const id of w.p1) expect(prompts[1]).not.toContain(`[P${id}]`);
   });
 
@@ -192,16 +193,16 @@ describe("Rebuild (full re-map)", () => {
     const qMoves = Number(ins.run(examId, b.id, p[5]).lastInsertRowid);
     const qOrphan = Number(ins.run(examId, null, p[0]).lastInsertRowid);
 
-    // Same A; B loses p[5] to C; C reordered first.
+    // Same A; B loses p[5] to C; the AI lists C first, but sections always follow slide order.
     topicMapReply = () => ({ topics: [t("C2", [p[5], ...p.slice(6)]), t("A", p.slice(0, 3)), t("B2", p.slice(3, 5))] });
     await buildTopicMap(examId, "full");
     const now = topics(examId);
-    expect(now.map((x) => x.id)).toEqual([c.id, a.id, b.id]);
-    const A = now[1];
+    expect(now.map((x) => x.id)).toEqual([a.id, b.id, c.id]);
+    const A = now[0];
     expect(A.title).toBe("A");
     expect(A.lesson_json).toBe("L");
     expect(A.checks_version).toBe(2);
-    const B = now[2];
+    const B = now[1];
     expect(B.title).toBe("B2");
     expect(B.lesson_json).toBeNull();
     expect(B.checks_json).toBeNull();

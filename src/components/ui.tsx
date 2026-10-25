@@ -146,6 +146,7 @@ export function Icon({ d, size = 20, className = "" }: { d: string; size?: numbe
 export const ICONS = {
   arrowRight: "M5 12h14M13 6l6 6-6 6",
   arrowLeft: "M19 12H5M11 18l-6-6 6-6",
+  chevronDown: "M6 9l6 6 6-6",
   check: "M5 12.5l4.5 4.5L19 7",
   plus: "M12 5v14M5 12h14",
   book: "M4 19.5V5a2 2 0 0 1 2-2h14v15H6.5A2.5 2.5 0 0 0 4 20.5 2.5 2.5 0 0 0 6.5 23H20v-5",

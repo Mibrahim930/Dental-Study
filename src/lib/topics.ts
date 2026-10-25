@@ -1,57 +1,49 @@
 import { z } from "zod";
-import { db, examOwner, resetSectionQuiz, type PageRow } from "./db";
+import { db, examOwner, getMeta, resetSectionQuiz, setMeta, type PageRow } from "./db";
 import { credentials } from "./credentials";
 import { rebuildPlan } from "./planner";
-import { generate } from "./ai";
+import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { upsertConcept } from "./memory";
-import { cleanTopics, matchTopics, placeNewTopics, sameSlides, type SlideRef } from "./topicMerge";
+import { cleanTopics, matchTopics, sameSlides, type SlideRef } from "./topicMerge";
 
 const TopicFields = {
-  title: z.string(),
-  summary: z.string().describe("2-3 sentences: what this topic covers and why it matters clinically"),
-  page_ids: z.array(z.number()).describe("IDs of the slides (the P numbers) that belong to this topic"),
-  emphasized: z.boolean().describe("True if the professor/student flagged slides in this topic as important"),
-  concepts: z.array(z.string()).describe("3-8 canonical concept names covered by this topic"),
+  title: z.string().describe("Short, specific name for what this section teaches"),
+  summary: z.string().describe("2-3 sentences: what this section covers and why it matters clinically"),
+  page_ids: z.array(z.number()).describe("IDs of the slides (the P numbers) that belong to this section, in slide order"),
+  emphasized: z.boolean().describe("True if the professor/student flagged slides in this section as important"),
+  concepts: z.array(z.string()).describe("3-8 canonical concept names covered by this section"),
 };
 
-const TopicMap = z.object({ topics: z.array(z.object(TopicFields)) });
+const TopicMap = z.object({ topics: z.array(z.object(TopicFields)).describe("The lecture's sections, in slide order") });
 
-const NewTopics = z.object({
-  topics: z.array(
-    z.object({
-      ...TopicFields,
-      after_topic: z.number().describe("Number of the existing topic this new topic should come right after in study order; 0 = before topic 1"),
-    }),
-  ),
-});
-
-const RULES = `- Group slides into coherent topics (typically 5-15 slides each). Topics may combine slides from different lectures when they teach the same thing.
-- Order topics for learning: foundations (biology, microbiology, anatomy) before pathology/diagnosis, before treatment, before prognosis.
-- Every slide ID listed must appear in exactly one topic. Skip none.
+// One lecture at a time: sections follow the lecture's own structure and never mix lectures.
+const SYSTEM = `You split ONE lecture of a dental student's slides into study sections. The student studies the exam lecture by lecture, section by section.
+Rules:
+- Split this lecture into sections that follow the lecture's own structure (its headings/agenda). Typically 3-10 slides per section; a short lecture may be one section.
+- Sections stay in slide order: list them in the order the lecture teaches them, each one a run of neighbouring slides.
+- Every slide ID listed must appear in exactly one section. Skip none, and use only the IDs listed.
 - Concepts are short canonical names (e.g. "Symptomatic irreversible pulpitis", "Cvek pulpotomy", "Inferior alveolar nerve block").
   The student already has a concept list from earlier exams. When a concept means the same thing as an existing one, reuse the existing name exactly.`;
 
-const SYSTEM = `You organize a dental student's lecture slides for one exam into a topic map they will study in order.
-Rules:
-${RULES}`;
-
-const ADD_SYSTEM = `You add newly uploaded lecture slides to a dental student's existing topic map for one exam.
-The existing topics stay exactly as they are (the student has already studied some of them). Put ONLY the new slides into NEW topics, and say where each new topic belongs in study order (after_topic).
-Rules:
-${RULES}`;
+/** How many lectures are mapped at the same time. */
+const LECTURE_CONCURRENCY = 3;
 
 type PageForMap = PageRow & { filename: string };
 type Mode = "auto" | "full";
+type Lecture = { docId: number; filename: string; slides: PageForMap[] };
+type Section = { title: string; summary: string; page_ids: number[]; emphasized: boolean; concepts: string[]; document_id: number };
 
 const inflight = new Map<number, { p: Promise<void>; mode: Mode }>();
 
 /**
- * Build or update an exam's topic map. Concurrent calls for the same exam share one run.
- * - "auto" (after lectures finish processing): with a map already there, existing topics are kept untouched and only
- *   slides not yet in any topic are organised into new topics. With no map yet, a full map is built.
- * - "full" (the Rebuild button): the AI re-maps every slide, but topics whose slides mostly match an old topic keep
- *   that topic (and its lesson, quiz, answers and study progress).
+ * Build or update an exam's topic map: one map per lecture, sections inside it. Concurrent calls for the same exam
+ * share one run.
+ * - "auto" (after lectures finish processing): lectures that are already mapped stay untouched; each new lecture is
+ *   split into sections and appended at the end. With no map yet, every lecture is mapped.
+ * - "full" (the Rebuild button, and the one-time upgrade to lecture maps): every lecture is mapped again, but sections
+ *   whose slides mostly match an old topic keep that topic (and its lesson, quiz, answers and study progress).
+ * Study order is lectures in upload order, sections in slide order; `topics.position` is that flat order.
  */
 export function buildTopicMap(examId: number, mode: Mode = "auto"): Promise<void> {
   const running = inflight.get(examId);
@@ -66,7 +58,7 @@ export function buildTopicMap(examId: number, mode: Mode = "auto"): Promise<void
   return p;
 }
 
-type Existing = { id: number; position: number; title: string; summary: string; page_ids: string; emphasized: number };
+type Existing = { id: number; position: number; title: string; summary: string; page_ids: string; emphasized: number; document_id: number | null };
 
 async function runTopicMap(examId: number, mode: Mode) {
   db.prepare("UPDATE exams SET topic_status = 'building', topic_error = NULL WHERE id = ?").run(examId);
@@ -78,122 +70,208 @@ async function runTopicMap(examId: number, mode: Mode) {
       )
       .all(examId) as PageForMap[];
     if (pages.length === 0) throw new Error("No processed slides yet.");
-    // Title, agenda and reference slides stay out of the study plan; everything else must land in a topic.
+    // Title, agenda and reference slides stay out of the study plan; everything else must land in a section.
     const content = pages.filter((p) => {
       const n = parseNotes(p);
       return n && !n.is_filler;
     });
-    const existing = db.prepare("SELECT id, position, title, summary, page_ids, emphasized FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Existing[];
+    const existing = db
+      .prepare("SELECT id, position, title, summary, page_ids, emphasized, document_id FROM topics WHERE exam_id = ? ORDER BY position")
+      .all(examId) as Existing[];
     const userId = examOwner(examId);
 
-    if (mode === "auto" && existing.length > 0) {
-      const assigned = new Set(existing.flatMap((t) => JSON.parse(t.page_ids) as number[]));
-      const fresh = content.filter((p) => !assigned.has(p.id));
-      if (fresh.length > 0) await addTopics(examId, userId, existing, fresh);
-    } else {
-      await fullMap(examId, userId, existing, content);
-    }
+    if (mode === "auto" && existing.length > 0) await addLectures(examId, userId, existing, lecturesOf(content));
+    else await fullMap(examId, userId, existing, content);
     db.prepare("UPDATE exams SET topic_status = 'ready' WHERE id = ?").run(examId);
-    rebuildPlan(userId); // new topics → new study tasks
+    rebuildPlan(userId); // new sections → new study tasks
   } catch (err) {
     db.prepare("UPDATE exams SET topic_status = 'error', topic_error = ? WHERE id = ?").run(String(err), examId);
   }
 }
 
-function slideLines(pages: PageForMap[]): string {
-  const lines: string[] = [];
-  let lecture = "";
-  for (const p of pages) {
-    const n = parseNotes(p)!;
-    if (p.filename !== lecture) {
-      lecture = p.filename;
-      lines.push(`\n## Lecture: ${lecture}`);
-    }
-    lines.push(
-      `[P${p.id}] slide ${p.page_number}: ${n.title}${n.emphasized ? " ★IMPORTANT" : ""} — ${n.summary}` +
-        (n.case_prompt ? ` | case: ${n.case_prompt}` : "") +
-        ` | concepts: ${n.concepts.join("; ")}`,
-    );
+/** Content slides grouped by lecture, lectures in upload order (pages arrive ordered by document, then slide). */
+function lecturesOf(content: PageForMap[]): Lecture[] {
+  const out: Lecture[] = [];
+  for (const p of content) {
+    const last = out.at(-1);
+    if (last?.docId === p.document_id) last.slides.push(p);
+    else out.push({ docId: p.document_id, filename: p.filename, slides: [p] });
   }
-  return lines.join("\n");
+  return out;
+}
+
+function slideLines(pages: PageForMap[]): string {
+  return pages
+    .map((p) => {
+      const n = parseNotes(p)!;
+      return (
+        `[P${p.id}] slide ${p.page_number}: ${n.title}${n.emphasized ? " ★IMPORTANT" : ""} — ${n.summary}` +
+        (n.case_prompt ? ` | case: ${n.case_prompt}` : "") +
+        ` | concepts: ${n.concepts.join("; ")}`
+      );
+    })
+    .join("\n");
 }
 
 const refs = (pages: PageForMap[]): SlideRef[] => pages.map((p) => ({ id: p.id, doc: p.document_id, n: p.page_number }));
 const existingConcepts = (userId: number) =>
   (db.prepare("SELECT name FROM concepts WHERE user_id = ? ORDER BY name").all(userId) as { name: string }[]).map((c) => c.name);
 
-/** Re-file practice questions without a topic (or whose topic is gone) under the topic that now holds their source slide. */
+/**
+ * One AI call for one lecture, with only that lecture's slides. Ids outside the lecture are dropped and every slide
+ * of it lands in exactly one section (`cleanTopics`); sections come back in slide order with their slides in order.
+ * Returns [] when the AI placed nothing usable.
+ */
+async function mapLecture(userId: number, lecture: Lecture, concepts: string[]): Promise<Section[]> {
+  const out = await generate({
+    creds: credentials(userId),
+    purpose: "topic map",
+    schema: TopicMap,
+    system: SYSTEM,
+    effort: "medium",
+    maxTokens: 32000,
+    content:
+      `Existing concepts from earlier exams (${concepts.length}):\n${concepts.join("\n") || "(none yet)"}\n\n` +
+      `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}`,
+  });
+  return inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture);
+}
+
+/** Sort a lecture's sections (and the slides inside each) by slide number, and tag them with the lecture. */
+function inSlideOrder(drafts: Omit<Section, "document_id">[], lecture: Lecture): Section[] {
+  const n = new Map(lecture.slides.map((p) => [p.id, p.page_number]));
+  const at = (id: number) => n.get(id) ?? Number.MAX_SAFE_INTEGER;
+  return drafts
+    .map((d) => ({ ...d, page_ids: [...d.page_ids].sort((a, b) => at(a) - at(b)), document_id: lecture.docId }))
+    .sort((a, b) => at(a.page_ids[0]) - at(b.page_ids[0]));
+}
+
+/** The AI placed nothing usable for a new lecture: one section for the whole lecture, so no slide is lost. */
+const wholeLecture = (lecture: Lecture): Section => ({
+  title: lecture.filename.replace(/\.pdf$/i, ""),
+  summary: `Slides from ${lecture.filename}.`,
+  page_ids: lecture.slides.map((p) => p.id),
+  emphasized: lecture.slides.some((p) => p.emphasized),
+  concepts: [],
+  document_id: lecture.docId,
+});
+
+/** Map several lectures, LECTURE_CONCURRENCY at a time; results keep the lectures' order. */
+async function mapLectures(userId: number, lectures: Lecture[]): Promise<Section[][]> {
+  const concepts = existingConcepts(userId);
+  const results: Section[][] = lectures.map(() => []);
+  await mapLimit(
+    lectures.map((l, i) => ({ l, i })),
+    LECTURE_CONCURRENCY,
+    async ({ l, i }) => {
+      results[i] = await mapLecture(userId, l, concepts);
+    },
+  );
+  return results;
+}
+
+/**
+ * Renumber the exam's topics into study order: old-style topics (no lecture) first, as they were; then lectures in
+ * upload order, sections in slide order inside each lecture.
+ */
+function renumber(examId: number) {
+  const rows = db.prepare("SELECT id, position, page_ids, document_id FROM topics WHERE exam_id = ? ORDER BY position, id").all(examId) as {
+    id: number;
+    position: number;
+    page_ids: string;
+    document_id: number | null;
+  }[];
+  const slideNo = new Map(
+    (db.prepare("SELECT p.id, p.page_number FROM pages p JOIN documents d ON d.id = p.document_id WHERE d.exam_id = ?").all(examId) as {
+      id: number;
+      page_number: number;
+    }[]).map((p) => [p.id, p.page_number]),
+  );
+  const first = (r: (typeof rows)[number]) => Math.min(...(JSON.parse(r.page_ids) as number[]).map((p) => slideNo.get(p) ?? Number.MAX_SAFE_INTEGER));
+  const keyed = rows.map((r, i) => ({ r, i, doc: r.document_id, first: first(r) }));
+  keyed.sort((a, b) => {
+    if (a.doc == null || b.doc == null) return a.doc == null && b.doc == null ? a.i - b.i : a.doc == null ? -1 : 1;
+    return a.doc - b.doc || a.first - b.first || a.i - b.i;
+  });
+  const setPos = db.prepare("UPDATE topics SET position = ? WHERE id = ?");
+  // Out of the way first, then 0..n-1, so no two topics ever share a position mid-way.
+  for (const { r } of keyed) setPos.run(-1 - r.position - rows.length, r.id);
+  keyed.forEach(({ r }, position) => setPos.run(position, r.id));
+  db.prepare("UPDATE study_sessions SET current_position = MIN(current_position, ?) WHERE exam_id = ?").run(Math.max(0, rows.length - 1), examId);
+}
+
+/** Re-file practice questions without a topic (or whose topic is gone) under the section that now holds their source slide. */
 function refileQuestions(examId: number) {
   const topics = db.prepare("SELECT id, page_ids FROM topics WHERE exam_id = ?").all(examId) as { id: number; page_ids: string }[];
   const set = db.prepare("UPDATE questions SET topic_id = ? WHERE exam_id = ? AND topic_id IS NULL AND source_page_id = ?");
   for (const t of topics) for (const p of JSON.parse(t.page_ids) as number[]) set.run(t.id, examId, p);
 }
 
-/** New lectures on an existing map: only the new slides are organised, into new topics placed in study order. */
-async function addTopics(examId: number, userId: number, existing: Existing[], fresh: PageForMap[]) {
-  const out = await generate({
-    creds: credentials(userId),
-    purpose: "topic map",
-    schema: NewTopics,
-    system: ADD_SYSTEM,
-    effort: "medium",
-    maxTokens: 64000,
-    content:
-      `Existing concepts from earlier exams:\n${existingConcepts(userId).join("\n") || "(none yet)"}\n\n` +
-      `Existing topics of this exam, in study order (keep them; do not list them):\n${existing.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}\n\n` +
-      `New slides to organise (IDs in brackets):\n${slideLines(fresh)}`,
-  });
-  let topics = cleanTopics(out.topics, refs(fresh));
-  if (topics.length === 0) {
-    // The AI placed nothing usable: one topic per new lecture, so no slide is lost.
-    const byDoc = new Map<number, PageForMap[]>();
-    for (const p of fresh) byDoc.set(p.document_id, [...(byDoc.get(p.document_id) ?? []), p]);
-    topics = [...byDoc.values()].map((ps) => ({
-      title: ps[0].filename.replace(/\.pdf$/i, ""),
-      summary: `Slides from ${ps[0].filename}.`,
-      page_ids: ps.map((p) => p.id),
-      emphasized: ps.some((p) => p.emphasized),
-      concepts: [],
-      after_topic: existing.length,
-    }));
-  }
+const insertTopic = () =>
+  db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized, document_id) VALUES (?, ?, ?, ?, ?, ?, ?)");
+const linkConcept = () => db.prepare("INSERT OR IGNORE INTO topic_concepts (topic_id, concept_id) VALUES (?, ?)");
 
+/**
+ * New lectures on an existing map. Lectures already mapped keep their sections untouched; each lecture with no slide
+ * in the map yet is split into sections (one AI call each) and appended. A mapped lecture that gained a slide (e.g. a
+ * retried slide that now reads) gets it in the section holding its nearest slide, with no AI call; that section's
+ * lesson is rewritten to include it.
+ */
+async function addLectures(examId: number, userId: number, existing: Existing[], lectures: Lecture[]) {
+  const assigned = new Map<number, number>(); // slide id -> topic id
+  for (const t of existing) for (const p of JSON.parse(t.page_ids) as number[]) assigned.set(p, t.id);
+  const fresh: Lecture[] = [];
+  const extras: { slide: PageForMap; lecture: Lecture }[] = [];
+  for (const l of lectures) {
+    const left = l.slides.filter((p) => !assigned.has(p.id));
+    if (left.length === 0) continue;
+    if (left.length === l.slides.length) fresh.push(l);
+    else for (const slide of left) extras.push({ slide, lecture: l });
+  }
+  if (fresh.length === 0 && extras.length === 0) return;
+
+  const mapped = await mapLectures(userId, fresh);
   db.transaction(() => {
-    const insert = db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized) VALUES (?, ?, ?, ?, ?, ?)");
-    const link = db.prepare("INSERT OR IGNORE INTO topic_concepts (topic_id, concept_id) VALUES (?, ?)");
-    const order = placeNewTopics(
-      existing.map((t) => t.id),
-      topics.map((t) => ({ topic: t, after: t.after_topic })),
-    );
-    const setPos = db.prepare("UPDATE topics SET position = ? WHERE id = ?");
-    // Positions are unique per exam in practice; move old topics out of the way first.
-    existing.forEach((t) => setPos.run(-1 - t.position, t.id));
-    order.forEach((o, position) => {
-      if ("old" in o) return setPos.run(position, o.old);
-      const t = o.fresh;
-      const id = Number(insert.run(examId, position, t.title, t.summary, JSON.stringify(t.page_ids), t.emphasized ? 1 : 0).lastInsertRowid);
-      for (const name of t.concepts) if (name.trim()) link.run(id, upsertConcept(userId, name));
+    const insert = insertTopic();
+    const link = linkConcept();
+    fresh.forEach((l, i) => {
+      const sections = mapped[i].length ? mapped[i] : [wholeLecture(l)];
+      for (const s of sections) {
+        const id = Number(insert.run(examId, existing.length + 1000, s.title, s.summary, JSON.stringify(s.page_ids), s.emphasized ? 1 : 0, s.document_id).lastInsertRowid);
+        for (const name of s.concepts) if (name.trim()) link.run(id, upsertConcept(userId, name));
+      }
     });
+    // Leftover slides of lectures already in the map: next to their nearest neighbour in the same lecture.
+    const grown = new Map<number, number[]>();
+    for (const { slide, lecture } of extras) {
+      let best: { topic: number; dist: number } | null = null;
+      for (const p of lecture.slides) {
+        const topic = assigned.get(p.id);
+        if (topic == null) continue;
+        const dist = Math.abs(p.page_number - slide.page_number);
+        if (!best || dist < best.dist) best = { topic, dist };
+      }
+      if (best) grown.set(best.topic, [...(grown.get(best.topic) ?? []), slide.id]);
+    }
+    const order = new Map(lectures.flatMap((l) => l.slides.map((p) => [p.id, p.page_number] as const)));
+    for (const [topicId, add] of grown) {
+      const t = existing.find((e) => e.id === topicId)!;
+      const ids = [...(JSON.parse(t.page_ids) as number[]), ...add].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+      db.prepare("UPDATE topics SET page_ids = ?, lesson_json = NULL WHERE id = ?").run(JSON.stringify(ids), topicId);
+    }
+    renumber(examId);
     refileQuestions(examId);
   })();
 }
 
-/** Map every slide again, keeping each old topic that a new topic mostly matches. */
+/** Map every lecture again, keeping each old topic that a new section mostly matches. */
 async function fullMap(examId: number, userId: number, existing: Existing[], content: PageForMap[]) {
   if (content.length === 0) throw new Error("No slides with study content yet.");
-  const map = await generate({
-    creds: credentials(userId),
-    purpose: "topic map",
-    schema: TopicMap,
-    system: SYSTEM,
-    effort: "medium",
-    maxTokens: 64000,
-    content:
-      `Existing concepts from earlier exams (${existingConcepts(userId).length}):\n${existingConcepts(userId).join("\n") || "(none yet)"}\n\n` +
-      `Slides for this exam (IDs in brackets):\n${slideLines(content)}`,
-  });
-  const topics = cleanTopics(map.topics, refs(content));
-  if (topics.length === 0) throw new Error("The topic map came back empty. Try Rebuild again.");
+  const lectures = lecturesOf(content);
+  const mapped = await mapLectures(userId, lectures);
+  const empty = lectures.filter((_, i) => mapped[i].length === 0);
+  if (empty.length) throw new Error(`The topic map came back empty for ${empty.map((l) => l.filename).join(", ")}. Try Rebuild again.`);
+  const topics = mapped.flat();
   const old = existing.map((t) => ({ ...t, pages: JSON.parse(t.page_ids) as number[] }));
   const matched = matchTopics(
     old.map((t) => ({ id: t.id, page_ids: t.pages })),
@@ -210,8 +288,8 @@ async function fullMap(examId: number, userId: number, existing: Existing[], con
     }
     // Free up positions before renumbering.
     for (const id of keep) db.prepare("UPDATE topics SET position = -1 - position WHERE id = ?").run(id);
-    const insert = db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, emphasized) VALUES (?, ?, ?, ?, ?, ?)");
-    const link = db.prepare("INSERT OR IGNORE INTO topic_concepts (topic_id, concept_id) VALUES (?, ?)");
+    const insert = insertTopic();
+    const link = linkConcept();
     topics.forEach((t, position) => {
       const oldId = matched.get(position);
       let id: number;
@@ -219,26 +297,33 @@ async function fullMap(examId: number, userId: number, existing: Existing[], con
         const before = old.find((o) => o.id === oldId)!;
         id = oldId;
         if (sameSlides(before.pages, t.page_ids)) {
-          // Unchanged: keep its name, lesson and quiz; only the place in the order may move.
-          db.prepare("UPDATE topics SET position = ?, emphasized = ? WHERE id = ?").run(position, t.emphasized || before.emphasized ? 1 : 0, id);
+          // Unchanged: keep its name, lesson and quiz; only its place in the order (and its lecture) may change.
+          db.prepare("UPDATE topics SET position = ?, emphasized = ?, page_ids = ?, document_id = ? WHERE id = ?").run(
+            position,
+            t.emphasized || before.emphasized ? 1 : 0,
+            JSON.stringify(t.page_ids),
+            t.document_id,
+            id,
+          );
         } else {
           // Same topic, slides changed: the lesson and quiz are rewritten from the new slides. Answers and progress stay.
-          db.prepare("UPDATE topics SET position = ?, title = ?, summary = ?, page_ids = ?, emphasized = ?, lesson_json = NULL WHERE id = ?").run(
+          db.prepare("UPDATE topics SET position = ?, title = ?, summary = ?, page_ids = ?, emphasized = ?, document_id = ?, lesson_json = NULL WHERE id = ?").run(
             position,
             t.title,
             t.summary,
             JSON.stringify(t.page_ids),
             t.emphasized ? 1 : 0,
+            t.document_id,
             id,
           );
           resetSectionQuiz(id);
         }
       } else {
-        id = Number(insert.run(examId, position, t.title, t.summary, JSON.stringify(t.page_ids), t.emphasized ? 1 : 0).lastInsertRowid);
+        id = Number(insert.run(examId, position, t.title, t.summary, JSON.stringify(t.page_ids), t.emphasized ? 1 : 0, t.document_id).lastInsertRowid);
       }
       for (const name of t.concepts) if (name.trim()) link.run(id, upsertConcept(userId, name));
     });
-    // Questions whose source slide moved to a different topic follow it.
+    // Questions whose source slide moved to a different section follow it.
     const owner = new Map<number, number>();
     (db.prepare("SELECT id, page_ids FROM topics WHERE exam_id = ?").all(examId) as { id: number; page_ids: string }[]).forEach((t) =>
       (JSON.parse(t.page_ids) as number[]).forEach((p) => owner.set(p, t.id)),
@@ -253,7 +338,50 @@ async function fullMap(examId: number, userId: number, existing: Existing[], con
       if (t != null && t !== q.topic_id) move.run(t, q.id);
     }
     refileQuestions(examId);
-    const count = topics.length;
-    db.prepare("UPDATE study_sessions SET current_position = MIN(current_position, ?) WHERE exam_id = ?").run(Math.max(0, count - 1), examId);
+    renumber(examId);
   })();
+}
+
+/** Meta key marking an exam as done by the one-time upgrade to lecture-based topic maps. */
+export const lectureMapsKey = (examId: number) => `lecture_maps_v1:${examId}`;
+
+/**
+ * One-time upgrade (run at startup): every exam whose topic map still has old-style topics (no lecture) and that has
+ * at least one read lecture is re-mapped by lecture with a full rebuild, one exam at a time (the owner's own key, text
+ * only). Matching topics keep their lesson, quiz and progress. Each exam is recorded in `meta` once it has been tried,
+ * so it never runs twice for an exam and a restart picks up with the exams not reached yet. A failure is logged, the
+ * old map stays in place (and stays usable), and the exam is not tried again automatically; Rebuild still works.
+ * The plan is rebuilt by the map build itself after each exam. Returns how many exams were re-mapped.
+ */
+export async function rebuildLectureMaps(): Promise<number> {
+  const exams = db
+    .prepare(
+      `SELECT DISTINCT t.exam_id id FROM topics t
+       WHERE t.document_id IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.exam_id = t.exam_id AND d.status = 'done')
+       ORDER BY t.exam_id`,
+    )
+    .all() as { id: number }[];
+  let done = 0;
+  for (const { id } of exams) {
+    const key = lectureMapsKey(id);
+    if (getMeta(key)) continue;
+    try {
+      await buildTopicMap(id, "full");
+      const s = db.prepare("SELECT topic_status, topic_error FROM exams WHERE id = ?").get(id) as { topic_status: string; topic_error: string | null } | undefined;
+      if (s?.topic_status === "error") {
+        console.error(`Reorganising exam ${id}'s topics by lecture failed; its old topic map stays: ${s.topic_error}`);
+        // The old map is still there and works: show it as ready, not as a failed build the student didn't ask for.
+        const left = db.prepare("SELECT COUNT(*) n FROM topics WHERE exam_id = ?").get(id) as { n: number };
+        if (left.n > 0) db.prepare("UPDATE exams SET topic_status = 'ready', topic_error = NULL WHERE id = ?").run(id);
+        setMeta(key, "failed");
+      } else {
+        setMeta(key, "done");
+        done++;
+      }
+    } catch (err) {
+      console.error(`Reorganising exam ${id}'s topics by lecture failed`, err);
+      setMeta(key, "failed");
+    }
+  }
+  return done;
 }

@@ -75,7 +75,7 @@ export default async function ClassesPage() {
                         <div className="font-medium">{s.name}</div>
                         <div className="text-xs text-muted-foreground">
                           {s.course ? `${s.course} · ` : ""}
-                          {formatDate(s.exam_date)} · {s.slides} slides · {s.topics} topics · shared by {s.shared_by === user.id ? "you" : s.sharer.split("@")[0]}
+                          {formatDate(s.exam_date)} · {s.slides} slides · {s.topics} section{s.topics === 1 ? "" : "s"} · shared by {s.shared_by === user.id ? "you" : s.sharer.split("@")[0]}
                         </div>
                       </div>
                       <SharedExamAction
