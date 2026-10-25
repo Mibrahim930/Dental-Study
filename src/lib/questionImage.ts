@@ -11,43 +11,75 @@ import { parseNotes } from "./processing";
  * "shown" turns up in ordinary text questions ("which radiograph is best for…", "has been shown to…"), and those
  * must not lose their place.
  */
-export function mentionsPicture(text: string): boolean {
-  const noun = "(?:image|picture|photo|photograph|radiograph|x-?ray|micrograph|figure|illustration|diagram|drawing|schematic|chart|graph)s?";
+/**
+ * Two strengths, because the two uses have opposite costs:
+ * - "strict" (the default; the start-up repair): a wrong "yes" deletes or hides a stored question, so only wording
+ *   that can't be ordinary prose counts.
+ * - "generous" (the question writers): a wrong "yes" merely attaches the slide to a question that didn't need it,
+ *   while a wrong "no" is exactly the complaint (a picture question with no picture), so looser phrasing counts too
+ *   ("the lesion shown", "the tip of the pointer", "the bitewing above", "which letter marks").
+ * Ordinary prose that shares the words never counts in either: "blood is drawn", "the line is drawn from nasion",
+ * "the patient's chart", "arrow clasp", "labeled D in Black's notation", "the probe slides apically", "outline form".
+ */
+export function mentionsPicture(text: string, mode: "strict" | "generous" = "strict"): boolean {
+  const noun = "(?:image|picture|photo|photograph|radiograph|x-?ray|micrograph|photomicrograph|figure|illustration|diagram|drawing|schematic)s?";
   const det = "(?:the|this|that) (?:[\\w'’-]+ )?"; // "the image", "this clinical photo", "the slide's diagram"
   const colour = "(?:solid|double|curved|red|blue|green|yellow|orange|purple|pink|black|white|gr[ae]y|colou?red)";
+  // A label letter or number counts when the sentence treats it as a label ("labeled B?", "labeled A through E",
+  // "labeled 3 is"), not when it runs on into prose ("labeled D in Black's notation", "marked A on the ASA scale").
+  const labelEnd = `(?=\\s*(?:[?.,;:!)]|$|is\\b|are\\b|and\\b|or\\b|through\\b|to\\b))`;
   const patterns = [
     `\\b(?:shown|pictured|depicted|illustrated|seen|visible|drawn) (?:above|below|here)\\b`,
     `\\b${det}${noun} (?:shown|below|above|provided|attached|accompanying|here|pictured)\\b`,
     `\\b(?:this|the accompanying|the attached|the given|the above|the below) (?:[\\w'’-]+ )?${noun}\\b`,
-    `\\b(?:in|on|from) ${det}(?:image|picture|photo|photograph|figure|illustration|diagram|drawing|schematic|chart|graph)s?\\b`,
-    `\\b(?:in|on) ${det}(?:radiograph|x-?ray|micrograph)s? of (?:tooth|teeth|the|this|a|an)\\b`,
+    `\\b(?:in|on|from) ${det}(?:image|picture|photo|photograph|figure|illustration|diagram|drawing|schematic|photomicrograph)s?\\b`,
     `\\b(?:look|looking) at ${det}${noun}\\b`,
     `\\b(?:examine|study|refer to|consider|see) ${det}${noun}\\b`,
     `\\bbased on ${det}${noun}\\b`,
     `\\b${det}${noun} (?:shows?|reveals?|demonstrates?|depicts?|illustrates?)\\b`,
     `\\bwhat is (?:shown|pictured|depicted|illustrated|drawn)\\b`,
     `\\b(?:shown|pictured|depicted|illustrated|drawn) (?:in|on) ${det}${noun}\\b`,
-    // Things only a picture can carry. Kept narrow: "outline form", "orthodontic bracket", "teeth are numbered" and
-    // "the probe slides" are ordinary dental text, and a false positive here deletes a stored question in the repair.
-    `\\b(?:diagram|illustration|schematic|flow ?chart)s?\\b`,
-    `\\b(?:the|an|each|both|which|these|those) arrows?\\b`,
-    `\\b(?:the|this|that) (?:[\\w'’-]+ )?asterisks?\\b`,
+    // Things only a picture can carry. A bare "diagram" is always one; "illustration"/"schematic" count with a pointer
+    // ("in the illustration", "per the schematic"), since "an illustration of the principle" is prose.
+    `\\bdiagrams?\\b`,
+    `\\b(?:per|from|see|using) ${det}(?:schematic|illustration)s?\\b`,
+    `\\b(?:the|an|each|both|which|these|those) arrows?\\b(?![ -](?:clasp|shaped|head restoration))`,
+    `\\barrowheads? (?:points?|indicates?|marks?)\\b`,
+    `\\b(?:indicated|pointed to|shown|marked) (?:by|with) (?:the|an?) (?:[\\w-]+ )?(?:arrow|arrowhead|pointer|asterisk|star|dot|circle|box|line|number|letter)s?\\b`,
     `\\b(?:dotted|dashed|shaded|hatched) (?:line|area|region|zone|circle|box|outline|portion|part)s?\\b`,
     `\\b${colour} (?:circle|box|outline|arrow)s?\\b`,
     `\\b(?:circled|outlined|highlighted|shaded|boxed|drawn|shown) in ${colour}\\b`,
-    `\\b(?:is|are|was|were) (?:drawn|shaded|highlighted|circled|outlined|colou?red|depicted|illustrated|pictured)\\b`,
     // The student is pointed at a slide: "on slide 32", "slide 32's diagram", "the slide's", "this slide".
     // Not the verb ("the probe slides apically"): "slide" the noun comes with 's, a number, or "this slide".
     `\\bslides? #?\\d{1,3}\\b`,
     `\\b(?:the|this|that) (?:[\\w-]+ )?slide(?:'s|’s)\\b`,
     `\\bthis slide\\b`,
-    `\\b(?:on|in|from) (?:the|this|that) slide\\b(?! (?:into|onto|over|under|along|off|out|down|up|across|back|past|through|apically|coronally|forward|backward)\\b)`,
+    `\\b(?:on|in|from) (?:the|this|that) slide\\b(?! (?:into|onto|over|under|along|off|out|down|up|across|back|past|through|apically|coronally|forward|backward|valve)\\b)`,
   ];
-  if (new RegExp(patterns.join("|"), "i").test(text)) return true;
-  // Labels: "labeled 'gp'", "marked X", "labelled as A", "labeled 3". Case matters here ("marked as the" is prose), and a
-  // bare number counts only after "labeled" ("clamp numbered 8A", "pockets marked 3 mm" are text).
-  const label = `\\b(?:[Ll]abel(?:l)?ed|[Mm]arked|[Ii]ndicated|[Hh]ighlighted|[Cc]ircled|[Oo]utlined|[Ss]haded)(?: as| with| by)? (?:["'‘“][^"'’”]{1,24}["'’”]|[A-Z]\\b)|\\b[Ll]abel(?:l)?ed(?: as)? \\d{1,2}\\b`;
-  return new RegExp(label).test(text);
+  // Labels: "labeled 'gp'", "marked X?", "labelled as A through E", "labeled 3 is". Case matters ("indicated for" is prose).
+  const labels = [
+    `\\b(?:[Ll]abell?ed|[Mm]arked|[Ii]ndicated|[Hh]ighlighted|[Cc]ircled|[Oo]utlined|[Ss]haded)(?: as| with| by)? ["'‘“][^"'’”]{1,24}["'’”]`,
+    `\\b(?:[Ll]abell?ed|[Mm]arked|[Ii]ndicated|[Hh]ighlighted|[Cc]ircled|[Oo]utlined|[Ss]haded)(?: as)? (?:[A-Z]|\\d{1,2})\\b${labelEnd}`,
+  ];
+  const generous = [
+    // "the lesion shown", "the case pictured", "the restoration shown on tooth #30", "the clasp illustrated".
+    `\\b(?:lesion|case|restoration|clasp|structure|tooth|teeth|area|finding|instrument|appliance|specimen|defect|fracture|pattern|anomaly|crown|bridge|denture|canal|root|bone loss)s? (?:shown|pictured|illustrated|depicted)\\b`,
+    `\\btip of the pointer\\b`,
+    `\\bpointers? (?:points?|indicates?|marks?)\\b`,
+    `\\bwhich (?:letter|number) (?:marks|represents|indicates|labels|corresponds)\\b`,
+    `\\b(?:the )?numbered structures?\\b`,
+    `\\barea enclosed (?:in|by|within) (?:the|a) (?:box|circle|square|rectangle|outline)\\b`,
+    `\\bdescribes? the (?:radiograph|image|picture|photo|photograph|film|scan)\\b`,
+    // Picture nouns that only appear as pictures when pointed at: "the bitewing above", "the CBCT slice shows", and
+    // "in the panoramic radiograph," / "on this film?" only when the noun ends the clause ("on the periapical
+    // radiograph of a healthy tooth, the PDL space appears…" is textbook prose).
+    `\\b${det}(?:bitewing|panoramic|periapical|film|cbct(?: slice| scan| image)?|cephalogram|ceph|scan)s? (?:shown|below|above|provided|attached|here|shows?|reveals?|demonstrates?)\\b`,
+    `\\b(?:in|on|from) ${det}(?:bitewing|panoramic(?: radiograph| image| film)?|periapical(?: radiograph| film)?|film|cbct(?: slice| scan| image)?|cephalogram|ceph|photomicrograph)s?(?=\\s*(?:[?.,;:!)]|$))`,
+    // "In the radiograph of tooth #19" is a picture; "on the radiograph of a healthy tooth, the PDL appears…" is prose.
+    `\\b(?:in|on) ${det}(?:radiograph|x-?ray|bitewing|periapical|panoramic|film)s? of (?:tooth|teeth) #?\\d`,
+  ];
+  const all = mode === "generous" ? [...patterns, ...generous] : patterns;
+  return new RegExp(all.join("|"), "i").test(text) || new RegExp(labels.join("|")).test(text);
 }
 
 /** The slide number the question names ("on slide 32", "slide #7"), if any. */

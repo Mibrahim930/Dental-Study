@@ -250,7 +250,8 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       const page = valid.size === 0 ? null : valid.has(q.source_page_id) ? q.source_page_id : null;
       if (valid.size > 0 && page == null) continue;
       // A question that talks about a picture must have one to show (the slide it names, or the slide it tests).
-      const wantsPicture = q.image_page_id != null || mentionsPicture(q.question);
+      // "generous": a question that merely gets its slide attached loses nothing; a picture question without one is the complaint.
+      const wantsPicture = q.image_page_id != null || mentionsPicture(q.question, "generous");
       const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page, q.question) : null;
       if (wantsPicture && !picture) continue;
       drafts.push({

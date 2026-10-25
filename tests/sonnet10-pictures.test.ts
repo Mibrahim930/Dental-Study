@@ -86,7 +86,8 @@ describe("mentionsPicture (tightened version)", () => {
       "Identify the structure marked X.",
       "What is the radiolucency indicated by the arrow?",
     ];
-    expect(missed.filter((t) => !mentionsPicture(t))).toEqual([]);
+    // The question writers use the generous mode (the strict one is for the start-up repair, where a wrong "yes" deletes).
+    expect(missed.filter((t) => !mentionsPicture(t, "generous"))).toEqual([]);
   });
 });
 

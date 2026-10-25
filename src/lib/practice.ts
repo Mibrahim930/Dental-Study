@@ -553,7 +553,8 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     if (seen.has(norm(q.stem))) continue;
     seen.add(norm(q.stem));
     // A question about a picture must have one to show: the slide it names, else the slide it was written from.
-    const wantsPicture = q.type === "image" || q.image_page_id != null || mentionsPicture(q.stem);
+    // "generous": there is no checking pass on practice exams, so a missed picture question would be shown without its picture.
+    const wantsPicture = q.type === "image" || q.image_page_id != null || mentionsPicture(q.stem, "generous");
     const picture = wantsPicture ? pictureFor(pages, q.image_page_id, valid.has(q.source_page_id) ? q.source_page_id : null, q.stem) : null;
     if (wantsPicture && !picture) continue;
     const imagePage = picture?.page_id ?? null;
