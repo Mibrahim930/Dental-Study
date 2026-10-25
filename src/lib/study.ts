@@ -115,7 +115,8 @@ export function slideNotesText(pages: (PageRow & { filename: string })[]): strin
         `[P${p.id}] ${p.filename} slide ${p.page_number}: ${n.title}${n.emphasized ? ` ★IMPORTANT${n.emphasis_note ? ` (${n.emphasis_note})` : ""}` : ""}`,
         n.summary,
         n.image_description && `Image: ${n.image_description}`,
-        ...n.key_facts.map((f) => `- ${f}`),
+        // One line per fact (a fact with a line break inside could otherwise pose as a planned question in the prompt).
+        ...n.key_facts.map((f) => `- ${f.replace(/\s+/g, " ").trim()}`),
         ...n.annotations.map((a) => `Annotation: ${a}`),
         n.case_prompt && `Case: ${n.case_prompt}${n.case_answer ? ` → ${n.case_answer}` : ""}`,
       ]
@@ -177,7 +178,10 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     });
 
   // Every fact on every slide should be in the lesson. When too many are missing, one repair call asks for them.
-  const facts = pages.flatMap((p) => parseNotes(p)?.key_facts ?? []);
+  // Each distinct fact once (slides often repeat one), so coverage isn't counted twice and a repair doesn't ask twice.
+  const facts = [...new Map(pages.flatMap((p) => parseNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
+    .filter(([key, f]) => key && f)
+    .map(([, f]) => f);
   let lesson: Lesson = await ask("");
   let cover = coveredFacts(lesson.explanation, facts);
   if (facts.length > 0 && cover.ratio < LESSON_COVERAGE) {
@@ -278,7 +282,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       .map((i) => {
         const s = slots[i];
         const where = s.page != null ? `slide P${s.page}` : "the section";
-        return `Q${i + 1}: ${where}${s.fact ? ` — fact: "${s.fact}"` : ""} — ${ANGLE_TEXT[s.angle]}`;
+        return `Q${i + 1}: ${where}${s.fact ? ` — fact: "${s.fact.replace(/\s+/g, " ").replace(/"/g, "'")}"` : ""} — ${ANGLE_TEXT[s.angle]}`;
       })
       .join("\n");
     const out = await generate({

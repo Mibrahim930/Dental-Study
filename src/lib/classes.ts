@@ -175,8 +175,8 @@ function copyExam(sourceId: number, userId: number): number {
     const caseMap = new Map<number, number>();
     const insertCase = db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) SELECT ?, scenario, patient_box, ? FROM cases WHERE id = ?");
     const insertQ = db.prepare(
-      `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, source_page_id, image_page_id, case_id, root_question_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id, case_id, root_question_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const q of db.prepare("SELECT * FROM questions WHERE exam_id = ? AND flagged = 0").all(sourceId) as Question[]) {
       let caseId: number | null = null;
@@ -197,6 +197,7 @@ function copyExam(sourceId: number, userId: number): number {
         q.options,
         q.correct_index,
         q.explanation,
+        q.option_notes,
         mapPage(q.source_page_id),
         mapPage(q.image_page_id),
         caseId,

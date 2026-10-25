@@ -24,6 +24,43 @@ export function sniffFile(bytes: Uint8Array): UploadKind {
   return "unknown";
 }
 
+/** Pictures over this many pixels are refused before decoding (40 MP: well above any phone photo; decoding costs ~2.3 bytes per pixel). */
+export const MAX_IMAGE_PIXELS = 40_000_000;
+
+export class ImageTooLarge extends Error {
+  constructor(width: number, height: number) {
+    super(`That picture is ${width}×${height} pixels, which is too large to read here. Take a screenshot of it instead.`);
+  }
+}
+
+/** Width and height from a PNG or JPEG header without decoding it; null for other kinds or a header we can't read. */
+export function imageDimensions(bytes: Uint8Array, kind: UploadKind): { width: number; height: number } | null {
+  const b = bytes;
+  const u32 = (i: number) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+  const u16 = (i: number) => (b[i] << 8) | b[i + 1];
+  if (kind === "png") return b.length >= 24 ? { width: u32(16), height: u32(20) } : null;
+  if (kind === "jpeg") {
+    // Walk the segments to the first start-of-frame marker (C0–C3, C5–C7, C9–CB, CD–CF), which carries height then width.
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) return null;
+      const marker = b[i + 1];
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01 || marker === 0xff) {
+        i += marker === 0xff ? 1 : 2;
+        continue;
+      }
+      const len = u16(i + 2);
+      if (len < 2) return null;
+      const sof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (sof) return { width: u16(i + 7), height: u16(i + 5) };
+      if (marker === 0xda || marker === 0xd9) return null; // scan data or end before any frame header
+      i += 2 + len;
+    }
+    return null;
+  }
+  return null;
+}
+
 const IMAGE_MIME: Partial<Record<UploadKind, string>> = { jpeg: "image/jpeg", png: "image/png", gif: "image/gif", bmp: "image/bmp", tiff: "image/tiff" };
 
 /**
@@ -33,6 +70,9 @@ const IMAGE_MIME: Partial<Record<UploadKind, string>> = { jpeg: "image/jpeg", pn
 export function imageToJpeg(bytes: Uint8Array, kind: UploadKind, maxSide = 1600): Uint8Array {
   const mime = IMAGE_MIME[kind];
   if (!mime) throw new Error(`Can't decode ${kind} images`);
+  // A small file can still be a huge picture (a 400-megapixel PNG is 400 KB): refuse before MuPDF decodes it.
+  const dims = imageDimensions(bytes, kind);
+  if (dims && dims.width * dims.height > MAX_IMAGE_PIXELS) throw new ImageTooLarge(dims.width, dims.height);
   const doc = mupdf.Document.openDocument(bytes, mime);
   try {
     const page = doc.loadPage(0);

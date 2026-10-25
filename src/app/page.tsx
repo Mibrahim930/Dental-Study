@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db, type Exam } from "@/lib/db";
 import { countDue } from "@/lib/practice";
 import { weakConcepts } from "@/lib/memory";
-import { daysUntil, formatDate } from "@/lib/format";
+import { daysUntil, formatDate, timeIsUp } from "@/lib/format";
 import { createExam } from "./actions";
 import { requireUser } from "@/lib/user";
 import { ensurePlanFresh, missedSummary, plannerSettings, tasksOn, todayIn, type PlanWarning } from "@/lib/planner";
@@ -295,22 +295,24 @@ function Welcome({ hello }: { hello: string }) {
 }
 
 /** Each exam's newest practice exam that is still open (has unanswered questions), in one query. */
-function openAttemptsByExam(examIds: number[]): Map<number, { id: number; answered: number; n: number }> {
-  const out = new Map<number, { id: number; answered: number; n: number }>();
+type OpenAttempt = { id: number; answered: number; n: number; expired: boolean };
+
+function openAttemptsByExam(examIds: number[]): Map<number, OpenAttempt> {
+  const out = new Map<number, OpenAttempt>();
   if (examIds.length === 0) return out;
   const rows = db
     .prepare(
-      `SELECT a.exam_id, a.id, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
+      `SELECT a.exam_id, a.id, a.started_at, a.time_limit_sec, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
        FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id
        WHERE a.status = 'ready' AND a.exam_id IN (${examIds.map(() => "?").join(",")})
        GROUP BY a.id HAVING answered < n ORDER BY a.id DESC`,
     )
-    .all(...examIds) as { exam_id: number; id: number; n: number; answered: number }[];
-  for (const r of rows) if (!out.has(r.exam_id)) out.set(r.exam_id, { id: r.id, answered: r.answered, n: r.n });
+    .all(...examIds) as { exam_id: number; id: number; started_at: string; time_limit_sec: number | null; n: number; answered: number }[];
+  for (const r of rows) if (!out.has(r.exam_id)) out.set(r.exam_id, { id: r.id, answered: r.answered, n: r.n, expired: timeIsUp(r) });
   return out;
 }
 
-function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress; open?: { id: number; answered: number; n: number } }) {
+function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress; open?: OpenAttempt }) {
   const days = daysUntil(exam.exam_date, today);
   const processing = exam.pages > 0 && exam.done_pages < exam.pages;
   // Once the topic map is by lecture: "3 of 7 lectures done" (a lecture is done when every section in it is studied).
@@ -339,7 +341,9 @@ function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; toda
       </div>
       {open && (
         <span className="text-[13px] font-bold">
-          Practice exam in progress · {open.answered} of {open.n} answered · continue it from the exam page
+          {open.expired
+            ? "Timed practice exam · time is up · open it from the exam page to see your score"
+            : `Practice exam in progress · ${open.answered} of ${open.n} answered · continue it from the exam page`}
         </span>
       )}
       {processing && (

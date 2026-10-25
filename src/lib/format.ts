@@ -12,6 +12,20 @@ export function formatDate(date: string | null): string {
   return new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
+/** A timed practice exam whose clock has run out (opening it shows the score). `started_at` is an SQLite UTC timestamp. */
+export function timeIsUp(a: { started_at: string; time_limit_sec: number | null }, now = Date.now()): boolean {
+  return !!a.time_limit_sec && now > new Date(a.started_at.replace(" ", "T") + "Z").getTime() + a.time_limit_sec * 1000;
+}
+
+/** "just now", "3 hours ago", "yesterday", "4 days ago" for an SQLite UTC timestamp. */
+export function sinceText(utc: string, now = Date.now()): string {
+  const hours = Math.floor((now - new Date(utc.replace(" ", "T") + "Z").getTime()) / 3600000);
+  if (hours < 1) return "just now";
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
 export function pct(x: number | null | undefined): string {
   return x == null ? "—" : `${Math.round(x * 100)}%`;
 }

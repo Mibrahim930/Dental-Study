@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { apiUser, unauthorized } from "@/lib/user";
 import { credentials, type Credentials } from "@/lib/credentials";
 import { plannerSettings, todayIn } from "@/lib/planner";
-import { imageToJpeg, openPdf, renderPage, sniffFile } from "@/lib/pdf";
+import { ImageTooLarge, imageToJpeg, openPdf, renderPage, sniffFile } from "@/lib/pdf";
 import { isKeyProblem, MAX_PASTE_CHARS, readSchedule } from "@/lib/scheduleImport";
 
 export const maxDuration = 120;
@@ -71,6 +71,7 @@ export async function POST(request: Request) {
         images.push(imageToJpeg(bytes, kind));
       }
     } catch (err) {
+      if (err instanceof ImageTooLarge) return fail(err.message);
       console.error("Schedule import: couldn't open", file.name, err);
       return fail(`We couldn't open "${file.name}". Try another photo, or paste the text instead.`);
     }

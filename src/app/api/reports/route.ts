@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiUser, unauthorized } from "@/lib/user";
-import { imageToJpeg, sniffFile } from "@/lib/pdf";
+import { ImageTooLarge, imageToJpeg, sniffFile } from "@/lib/pdf";
 import { createReport, REPORT_KINDS, REPORT_MAX_CHARS, REPORT_MAX_IMAGE_MB, REPORT_MAX_IMAGES, type ReportKind, type ReportMeta } from "@/lib/reports";
 
 export const maxDuration = 60;
@@ -26,7 +26,8 @@ export async function POST(request: Request) {
   const kindRaw = String(form.get("kind") ?? "problem");
   const kind: ReportKind = (REPORT_KINDS as readonly string[]).includes(kindRaw) ? (kindRaw as ReportKind) : "problem";
   const pageRaw = typeof form.get("page") === "string" ? String(form.get("page")) : "";
-  const page = pageRaw.startsWith("/") ? pageRaw.slice(0, 500) : null;
+  // A path on this site only: "//evil.example" or "/\evil.example" would read as another site when shown as a link.
+  const page = /^\/(?![/\\\t\r\n])[^\t\r\n]*$/.test(pageRaw) ? pageRaw.slice(0, 500) : null;
   let meta: ReportMeta = {};
   try {
     const parsed = JSON.parse(String(form.get("meta") ?? "{}")) as Record<string, unknown>;
@@ -38,6 +39,10 @@ export async function POST(request: Request) {
 
   const files = form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length > REPORT_MAX_IMAGES) return fail(`Add up to ${REPORT_MAX_IMAGES} screenshots.`);
+  // The same cap again on what actually arrived (a request can come without a content-length header).
+  if (files.reduce((s, f) => s + f.size, 0) > REPORT_MAX_IMAGES * REPORT_MAX_IMAGE_MB * 1024 * 1024) {
+    return fail(`That's too big. Up to ${REPORT_MAX_IMAGES} screenshots of ${REPORT_MAX_IMAGE_MB} MB each.`, 413);
+  }
   const images: Uint8Array[] = [];
   for (const file of files) {
     if (file.size > REPORT_MAX_IMAGE_MB * 1024 * 1024) return fail(`"${file.name}" is over ${REPORT_MAX_IMAGE_MB} MB. Try a screenshot instead of a photo.`, 413);
@@ -48,8 +53,8 @@ export async function POST(request: Request) {
     if (!["jpeg", "png", "gif", "bmp", "tiff"].includes(fileKind)) return fail(`"${file.name}" isn't a picture. Add JPG or PNG screenshots.`);
     try {
       images.push(imageToJpeg(bytes, fileKind, 1600));
-    } catch {
-      return fail(`"${file.name}" couldn't be read as a picture. Try a screenshot.`);
+    } catch (err) {
+      return fail(err instanceof ImageTooLarge ? err.message : `"${file.name}" couldn't be read as a picture. Try a screenshot.`);
     }
   }
 

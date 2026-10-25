@@ -86,11 +86,14 @@ export default async function AdminPage() {
                   <span className={`chip ${r.kind === "idea" ? "cb-lilac" : "cb-coral"}`}>{r.kind === "idea" ? "Idea" : "Problem"}</span>
                   <span className="font-semibold text-foreground">{r.email}</span>
                   <span>{r.created_at} UTC</span>
-                  {r.page && (
-                    <a href={r.page} className="truncate underline underline-offset-2">
-                      {r.page}
-                    </a>
-                  )}
+                  {r.page &&
+                    (/^\/(?![/\\])/.test(r.page) ? (
+                      <a href={r.page} className="truncate underline underline-offset-2">
+                        {r.page}
+                      </a>
+                    ) : (
+                      <span className="truncate">{r.page}</span>
+                    ))}
                   {r.meta.viewport && (
                     <span>
                       {r.meta.viewport}

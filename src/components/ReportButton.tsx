@@ -129,7 +129,7 @@ export function ReportButton() {
                 </h2>
                 <p className="text-[13px] text-muted-foreground">A problem you hit, or something you&apos;d like. Screenshots help.</p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
+              <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
                 <Icon d={ICONS.close} size={18} />
               </button>
             </div>
@@ -166,7 +166,12 @@ export function ReportButton() {
                 {files.map((f, i) => (
                   <li key={`${f.name}-${i}`} className="flex items-center gap-1.5 rounded-xl bg-muted px-2.5 py-1.5 text-[13px] font-semibold">
                     <span className="max-w-[140px] truncate">{f.name}</span>
-                    <button type="button" onClick={() => setFiles(files.filter((_, k) => k !== i))} aria-label={`Remove ${f.name}`} className="text-muted-foreground hover:text-foreground">
+                    <button
+                      type="button"
+                      onClick={() => setFiles(files.filter((_, k) => k !== i))}
+                      aria-label={`Remove ${f.name}`}
+                      className="-mr-1.5 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                    >
                       <Icon d={ICONS.close} size={14} />
                     </button>
                   </li>
@@ -179,11 +184,11 @@ export function ReportButton() {
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="btn-secondary btn-sm" disabled={sending || files.length >= MAX_IMAGES} onClick={() => input.current?.click()}>
+              <button type="button" className="btn-secondary min-h-11" disabled={sending || files.length >= MAX_IMAGES} onClick={() => input.current?.click()}>
                 {files.length ? `Add another (${files.length}/${MAX_IMAGES})` : "Add screenshots"}
               </button>
               <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => addFiles(e.target.files)} />
-              <button type="submit" className="btn-primary btn-sm ml-auto" disabled={sending || !message.trim()}>
+              <button type="submit" className="btn-primary ml-auto min-h-11" disabled={sending || !message.trim()}>
                 {sending ? "Sending…" : "Send"}
               </button>
             </div>

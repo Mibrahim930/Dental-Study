@@ -114,15 +114,21 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): F
   const seen = new Set<string>();
   const all: { slide: FactSlide; fact: string | null }[] = [];
   for (const s of slides) {
-    const facts = s.facts.map((f) => f.trim()).filter((f) => f && !seen.has(normStem(f)));
+    // Whitespace collapsed (a fact is one line in the writer's plan); a fact repeated on this or an earlier slide, or one
+    // that is only punctuation, is not a slot.
+    const facts: string[] = [];
+    for (const raw of s.facts) {
+      const f = raw.replace(/\s+/g, " ").trim();
+      const key = normStem(f);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      facts.push(f);
+    }
     if (facts.length === 0) {
       all.push({ slide: s, fact: null });
       continue;
     }
-    for (const f of facts) {
-      seen.add(normStem(f));
-      all.push({ slide: s, fact: f });
-    }
+    for (const f of facts) all.push({ slide: s, fact: f });
   }
 
   let chosen = all;

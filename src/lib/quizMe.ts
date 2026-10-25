@@ -311,15 +311,17 @@ export function getQuizMe(userId: number, id: number): QuizMeView | null {
 
 /** The newest unfinished quiz for this exam, to resume; null if there is none. */
 export function openQuizMe(userId: number, examId: number): QuizMeView | null {
-  const row = db.prepare("SELECT * FROM quizme WHERE user_id = ? AND exam_id = ? AND finished_at IS NULL ORDER BY id DESC LIMIT 1").get(userId, examId) as Row | undefined;
-  if (!row) return null;
-  const v = view(row);
-  // Every question left was skipped (its picture's slide is gone): nothing to resume.
-  if (v.left === 0) {
-    db.prepare("UPDATE quizme SET finished_at = datetime('now') WHERE id = ? AND finished_at IS NULL").run(row.id);
-    return null;
+  const rows = db.prepare("SELECT * FROM quizme WHERE user_id = ? AND exam_id = ? AND finished_at IS NULL ORDER BY id DESC").all(userId, examId) as Row[];
+  for (const row of rows) {
+    const v = view(row);
+    // Every question left was skipped (its picture's slide is gone): nothing to resume there; try the one before it.
+    if (v.left === 0) {
+      db.prepare("UPDATE quizme SET finished_at = datetime('now') WHERE id = ? AND finished_at IS NULL").run(row.id);
+      continue;
+    }
+    return v;
   }
-  return v;
+  return null;
 }
 
 export type QuizMeAnswer = {

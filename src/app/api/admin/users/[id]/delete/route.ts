@@ -15,10 +15,13 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/admin/user
   const docs = db.prepare("SELECT d.id FROM documents d JOIN exams e ON e.id = d.exam_id WHERE e.user_id = ?").all(id) as { id: number }[];
   // Slide images that classmates' copied exams still use are kept.
   const keep = sharedImageDirs(docs.map((d) => d.id), id);
+  // Screenshots they sent with bug reports go too (the rows cascade; the files don't).
+  const reports = db.prepare("SELECT id FROM reports WHERE user_id = ?").all(id) as { id: number }[];
   db.transaction(() => {
     db.prepare(`DELETE FROM pages_fts WHERE page_id IN (SELECT p.id FROM pages p JOIN documents d ON d.id = p.document_id JOIN exams e ON e.id = d.exam_id WHERE e.user_id = ?)`).run(id);
     db.prepare("DELETE FROM users WHERE id = ?").run(id); // cascades to exams, concepts, glossary, usage
   })();
   for (const d of docs.filter((d) => !keep.has(d.id))) fs.rmSync(path.join(FILES_DIR, `doc-${d.id}`), { recursive: true, force: true });
+  for (const r of reports) fs.rmSync(path.join(FILES_DIR, "reports", String(r.id)), { recursive: true, force: true });
   return NextResponse.json({ ok: true });
 }

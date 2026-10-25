@@ -268,7 +268,7 @@ export function StudySession(props: {
 
           {!data && !error && (
             <div className="card flex flex-col gap-3" aria-busy>
-              <p className="text-[15px] font-semibold text-muted-foreground">Preparing this topic from your slides… (the first time takes about 30 seconds)</p>
+              <p className="text-[15px] font-semibold text-muted-foreground">Writing this section&apos;s lesson from every slide… the first time takes about a minute.</p>
               <div className="shimmer h-4 w-11/12" />
               <div className="shimmer h-4 w-10/12" />
               <div className="shimmer h-4 w-9/12" />

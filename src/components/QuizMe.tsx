@@ -406,7 +406,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
             type="button"
             data-quizme
             onClick={() => (stage === "writing" ? setOpen(true) : resume())}
-            className="fixed left-3.5 bottom-[calc(156px+env(safe-area-inset-bottom))] z-30 flex h-11 max-w-[calc(100vw-28px)] items-center gap-2 rounded-full bg-hero px-4 text-[14px] font-extrabold text-hero-foreground shadow-[0_8px_24px_rgba(22,22,22,.18)] sm:left-[80px] sm:bottom-6"
+            className="fixed left-3.5 bottom-[calc(168px+env(safe-area-inset-bottom))] z-30 flex h-11 max-w-[calc(100vw-28px)] items-center gap-2 rounded-full bg-hero px-4 text-[14px] font-extrabold text-hero-foreground shadow-[0_8px_24px_rgba(22,22,22,.18)] sm:left-[80px] sm:bottom-6"
           >
             <Icon d={ICONS.review} size={16} />
             <span className="truncate">

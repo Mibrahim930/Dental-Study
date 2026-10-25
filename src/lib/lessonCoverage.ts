@@ -36,8 +36,15 @@ export function coveredFacts(text: string, facts: string[]): { covered: string[]
   return { covered, missing, ratio: total === 0 ? 1 : covered.length / total };
 }
 
-/** A crude stem: drops common English endings so "pulpal"/"pulps" meet "pulp". Numbers are left alone. */
+/**
+ * A crude stem: drops common English endings so "pulpal"/"pulps" meet "pulp" and "fractures"/"nerves" meet
+ * "fracture"/"nerve" (a trailing e goes too, on both sides). Numbers and short words are left alone.
+ */
 function stem(w: string): string {
   if (/\d/.test(w) || w.length <= 4) return w;
-  return w.replace(/(ically|ation|ations|ities|ity|ness|ments|ment|ingly|ing|edly|ed|ers|er|est|ally|al|ous|ive|ies|es|s|ly)$/, "");
+  // Plural first, then the derivational endings, then a trailing e — so "canals" and "canal" land on the same stem.
+  return w
+    .replace(/(ies|es|s)$/, "")
+    .replace(/(ically|ation|ations|ities|ity|ness|ments|ment|ingly|ing|edly|ed|ers|er|est|ally|al|ous|ive|ly)$/, "")
+    .replace(/e$/, "");
 }
