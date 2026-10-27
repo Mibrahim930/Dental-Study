@@ -223,7 +223,8 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   // answered). Title, agenda and reference slides never do (they don't reach a section anyway).
   const mustAppear = pages.filter((p) => {
     const n = parseNotes(p);
-    return !!n && !n.is_filler && ((n.key_facts ?? []).some((f) => f.trim()) || !!n.case_prompt?.trim());
+    // The same test as `facts` above: a "fact" with no letters or digits doesn't count.
+    return !!n && !n.is_filler && ((n.key_facts ?? []).some((f) => normStem(f)) || !!n.case_prompt?.trim());
   });
   const leftOut = (l: Lesson) => mustAppear.filter((p) => !l.slides.some((s) => s.page_id === p.id));
   let lesson = await ask("");

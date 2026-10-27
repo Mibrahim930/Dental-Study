@@ -45,7 +45,8 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
     return NextResponse.json({
       topic: { id: topic.id, title: topic.title, summary: topic.summary, emphasized: !!topic.emphasized },
       concepts: topicConcepts(topic.id, session.exam_id),
-      lesson,
+      // Only slides that are still in this section (a stored lesson can predate a slide's removal).
+      lesson: { ...lesson, slides: (lesson.slides ?? []).filter((s) => s.page_id in slideInfo) },
       aspects,
       slideInfo,
       // Slides the professor emphasized, with what was stressed, for the "Your professor stressed this" block.

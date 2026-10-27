@@ -367,7 +367,7 @@ describe("repair trigger", () => {
     expect(l.slides[0].explanation).toMatch(/^FIRST/);
   });
 
-  it("BUG(low): a left-out slide whose only fact has no significant stem (punctuation) while others have facts", async () => {
+  it("a left-out slide whose only fact has no significant stem (punctuation) needs no entry while others have facts", async () => {
     const w = world(2, (i) => (i === 0 ? ["nu0word"] : ["?!"]));
     lessonWriter = () => good(w, "", { slides: [{ page_id: w.pages[0], explanation: "nu0word" }] });
     await getLesson(w.topic());
@@ -464,7 +464,7 @@ describe("versions and migration", () => {
     expect(calls.filter((c) => c.purpose.startsWith("lesson"))).toHaveLength(0);
   });
 
-  it("a stored v3 lesson referencing removed pages still loads through the route (no throw); slideInfo lacks the stale id", async () => {
+  it("a stored v3 lesson referencing removed pages still loads through the route (no throw); the stale slide is left out, slideInfo lacks its id", async () => {
     const w = world(2);
     currentUserId = w.userId;
     const gone = 987654;
@@ -473,11 +473,11 @@ describe("versions and migration", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.slideInfo[gone]).toBeUndefined();
-    expect(body.lesson.slides).toHaveLength(2);
+    expect(body.lesson.slides.map((s: { page_id: number }) => s.page_id)).toEqual([w.pages[0]]);
     expect(Object.keys(body.slideInfo)).toHaveLength(2);
   });
 
-  it("BUG: a stored v3 lesson that references a page belonging to someone else is served unfiltered by the route", async () => {
+  it("a stored v3 lesson that references a page belonging to someone else: the route leaves that slide out", async () => {
     const w = world(1);
     currentUserId = w.userId;
     const stranger = world(1);
@@ -635,7 +635,7 @@ describe("class copy", () => {
     expect(lessonIsCurrent(copy)).toBe(false);
   });
 
-  it("BUG: a lesson slide whose page wasn't copied (lecture not 'done') keeps the SOURCE owner's page id in the classmate's lesson", () => {
+  it("a lesson slide whose page wasn't copied (lecture not 'done') is left out of the classmate's lesson", () => {
     const w = world(1);
     const failedDoc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'bad.pdf', 'error')").run(w.examId).lastInsertRowid);
     const badPage = Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, 1, '', 'done', ?)").run(failedDoc, notesJson(1, ["f"])).lastInsertRowid);

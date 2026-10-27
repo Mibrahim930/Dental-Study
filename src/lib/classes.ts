@@ -124,8 +124,13 @@ function copyExam(sourceId: number, userId: number): number {
       if (pages.length === 0 && sourcePages.length > 0) continue;
       let lesson = t.lesson_json;
       if (lesson) {
-        const l = JSON.parse(lesson) as { slides: { page_id: number }[] };
-        l.slides = l.slides.map((s) => ({ ...s, page_id: mapPage(s.page_id) ?? s.page_id }));
+        const l = JSON.parse(lesson) as { slides?: { page_id: number }[] };
+        // A slide whose page wasn't copied (its lecture hadn't finished reading) is left out of the copy's lesson rather
+        // than pointing at the owner's page, which the classmate can't see.
+        l.slides = (l.slides ?? []).flatMap((s) => {
+          const id = mapPage(s.page_id);
+          return id == null ? [] : [{ ...s, page_id: id }];
+        });
         lesson = JSON.stringify(l);
       }
       // Quizzes carry their source slide ids: map them to the copy's slides, like the lesson's.
