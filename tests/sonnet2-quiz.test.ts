@@ -180,14 +180,14 @@ describe("getSectionQuiz", () => {
     // Stamped with the current lesson version: an unversioned lesson is now rewritten once on open (LESSON_VERSION).
     const lesson = {
       version: LESSON_VERSION,
-      explanation: "e",
+      intro: "e",
       key_points: ["k"],
       slides: [],
       connections: null,
       checks: [{ question: "q", options: ["a", "b"], correct_index: 0, explanation: "x" }],
     };
     db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(lesson), w.topicIds[0]);
-    expect(await getLesson(w.topic())).toMatchObject({ explanation: "e" });
+    expect(await getLesson(w.topic())).toMatchObject({ intro: "e" });
     expect(genCalls).toHaveLength(0);
   });
 });

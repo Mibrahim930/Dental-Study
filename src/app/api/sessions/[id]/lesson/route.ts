@@ -35,18 +35,21 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
 
   try {
     const lesson = await getLesson(topic);
-    const aspects = Object.fromEntries(
-      (db.prepare(`SELECT id, aspect FROM pages WHERE id IN (${lesson.slides.map(() => "?").join(",") || "NULL"})`).all(
-        ...lesson.slides.map((s) => s.page_id),
-      ) as { id: number; aspect: number }[]).map((r) => [r.id, r.aspect]),
+    const pages = topicPages(topic);
+    // Every slide of the section: its width/height ratio (space reserved before the picture loads) and, for the slides
+    // the lesson walks through, the number and lecture shown above the picture.
+    const aspects = Object.fromEntries(pages.map((p) => [p.id, p.aspect]));
+    const slideInfo = Object.fromEntries(
+      pages.map((p) => [p.id, { number: p.page_number, lecture: p.filename.replace(/\.pdf$/i, ""), emphasized: !!p.emphasized }]),
     );
     return NextResponse.json({
       topic: { id: topic.id, title: topic.title, summary: topic.summary, emphasized: !!topic.emphasized },
       concepts: topicConcepts(topic.id, session.exam_id),
       lesson,
       aspects,
+      slideInfo,
       // Slides the professor emphasized, with what was stressed, for the "Your professor stressed this" block.
-      stressed: topicPages(topic)
+      stressed: pages
         .filter((p) => p.emphasized)
         .map((p) => {
           const n = parseNotes(p);

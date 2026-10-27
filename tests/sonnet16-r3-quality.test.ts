@@ -44,7 +44,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, getMeta, resetSectionQuiz, type Topic } from "@/lib/db";
-import { getSectionQuiz, getLesson, lessonIsCurrent, LESSON_VERSION, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
+import { getSectionQuiz, getLesson, lessonIsCurrent, lessonText, LESSON_VERSION, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
 import { normStem, planQuizByFacts, quizSize, QUIZ_MAX, QUIZ_MIN, type FactSlide } from "@/lib/quizPlan";
 import { clearQuizAnswers, migrateSessionChecks, quizAnswers, recordQuizAnswer } from "@/lib/quizProgress";
 import { coveredFacts, keyWords } from "@/lib/lessonCoverage";
@@ -784,13 +784,13 @@ describe("D: option notes", () => {
     expect(db.prepare("SELECT option_notes FROM questions WHERE exam_id = ?").get(res.examId)).toEqual({ option_notes: '["why a","why b"]' });
   });
 
-  it("copying a shared exam carries a v3 quiz's option_notes and a v2 lesson's version", () => {
+  it("copying a shared exam carries a v3 quiz's option_notes and a v3 lesson's version", () => {
     const a = makeUser();
     const b = makeUser();
     const w = world(1, undefined, { userId: a });
     db.prepare("UPDATE exams SET topic_status = 'ready' WHERE id = ?").run(w.examId);
     storeQuiz(w.topicId, 2);
-    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify({ explanation: "x", key_points: [], slides: [{ page_id: w.pages[0], caption: "c" }], connections: null, version: 2 }), w.topicId);
+    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify({ intro: "x", key_points: [], slides: [{ page_id: w.pages[0], explanation: "e" }], connections: null, version: LESSON_VERSION }), w.topicId);
     const cls = createClass(a, "C2");
     joinClass(b, (db.prepare("SELECT invite_code FROM classes WHERE id = ?").get(cls) as { invite_code: string }).invite_code);
     shareExam(a, cls, w.examId);
@@ -843,9 +843,16 @@ describe("E: lessonCoverage", () => {
 });
 
 describe("E: lessons", () => {
-  const goodLesson = (extra: object = {}) => ({ explanation: "lesson text", key_points: ["k"], slides: [], connections: null, ...extra });
+  /** A lesson in the writer's shape: `text` as the explanation of every one of the world's slides (so none is left out). */
+  const goodLesson = (w: { pages: number[] }, text = "lesson text", extra: object = {}) => ({
+    intro: "",
+    slides: w.pages.map((page_id) => ({ page_id, explanation: text })),
+    key_points: ["k"],
+    connections: null,
+    ...extra,
+  });
 
-  it("lessonIsCurrent: null / malformed / unversioned / v1 / v2 / v3", () => {
+  it("lessonIsCurrent: null / malformed / unversioned / v1 / v2 / v3 / v4", () => {
     const t = (j: string | null) => lessonIsCurrent({ lesson_json: j });
     expect(t(null)).toBe(false);
     expect(t("")).toBe(false);
@@ -855,18 +862,20 @@ describe("E: lessons", () => {
     expect(t("{}")).toBe(false);
     expect(t('{"version":1}')).toBe(false);
     expect(t('{"version":null}')).toBe(false);
-    expect(t('{"version":2}')).toBe(true);
+    expect(t('{"version":2}')).toBe(false);
     expect(t('{"version":3}')).toBe(true);
-    expect(LESSON_VERSION).toBe(2);
+    expect(t('{"version":4}')).toBe(true);
+    expect(LESSON_VERSION).toBe(3);
   });
 
-  it("an unversioned stored lesson is rewritten once; the stored lesson has version 2; a second open costs nothing", async () => {
+  it("an older stored lesson (one continuous text, v2) is rewritten once; the stored lesson has version 3; a second open costs nothing", async () => {
     const w = world(2);
-    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(goodLesson({ explanation: "OLD" })), w.topicId);
-    lessonWriter = () => goodLesson({ explanation: "NEW fact a0 fact b0 fact a1 fact b1" });
+    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify({ explanation: "OLD", key_points: [], slides: [], connections: null, version: 2 }), w.topicId);
+    lessonWriter = () => goodLesson(w, "NEW fact a0 fact b0 fact a1 fact b1");
     const l = await getLesson(w.topic());
-    expect(l.explanation).toMatch(/NEW/);
-    expect(JSON.parse(w.topic().lesson_json!).version).toBe(2);
+    expect(lessonText(l)).toMatch(/NEW/);
+    expect(l.slides.map((x) => x.page_id)).toEqual(w.pages);
+    expect(JSON.parse(w.topic().lesson_json!).version).toBe(3);
     expect(lessonCalls).toBe(1);
     await getLesson(w.topic());
     expect(lessonCalls).toBe(1);
@@ -876,17 +885,17 @@ describe("E: lessons", () => {
     // 10 facts: unique single words so coverage is easy to steer
     const facts = Array.from({ length: 10 }, (_, i) => `zebra${i}word`);
     const w = world(1, () => facts);
-    lessonWriter = () => goodLesson({ explanation: facts.slice(0, 8).join(" ") }); // exactly 80%
+    lessonWriter = () => goodLesson(w, facts.slice(0, 8).join(" ")); // exactly 80%
     await getLesson(w.topic());
     expect(lessonCalls).toBe(1);
     expect(calls.filter((c) => c.purpose === "lesson repair")).toHaveLength(0);
 
     const w2 = world(1, () => facts);
     lessonCalls = 0;
-    lessonWriter = (n) => goodLesson({ explanation: facts.slice(0, n === 1 ? 7 : 10).join(" ") }); // 70% → repair → 100%
+    lessonWriter = (n) => goodLesson(w2, facts.slice(0, n === 1 ? 7 : 10).join(" ")); // 70% → repair → 100%
     const l = await getLesson(w2.topic());
     expect(lessonCalls).toBe(2);
-    expect(l.explanation).toContain("zebra9word");
+    expect(lessonText(l)).toContain("zebra9word");
     const rep = calls.find((c) => c.purpose === "lesson repair")!;
     expect(rep.content).toMatch(/- zebra7word/);
     expect(rep.content).toMatch(/- zebra9word/);
@@ -896,7 +905,7 @@ describe("E: lessons", () => {
     // no facts at all: never a repair
     const w3 = world(2, () => []);
     lessonCalls = 0;
-    lessonWriter = () => goodLesson({ explanation: "nothing relevant" });
+    lessonWriter = () => goodLesson(w3, "nothing relevant");
     await getLesson(w3.topic());
     expect(lessonCalls).toBe(1);
   });
@@ -904,29 +913,29 @@ describe("E: lessons", () => {
   it("a repair that lowers coverage is discarded; equal coverage is accepted; a throwing repair keeps the first lesson", async () => {
     const facts = Array.from({ length: 10 }, (_, i) => `quokka${i}word`);
     const w = world(1, () => facts);
-    lessonWriter = (n) => goodLesson({ explanation: n === 1 ? "FIRST " + facts.slice(0, 5).join(" ") : "SECOND " + facts.slice(0, 3).join(" ") });
-    expect((await getLesson(w.topic())).explanation).toMatch(/^FIRST/);
+    lessonWriter = (n) => goodLesson(w, n === 1 ? "FIRST " + facts.slice(0, 5).join(" ") : "SECOND " + facts.slice(0, 3).join(" "));
+    expect(lessonText(await getLesson(w.topic()))).toMatch(/^FIRST/);
 
     const w2 = world(1, () => facts);
-    lessonWriter = (n) => goodLesson({ explanation: (n === 1 ? "FIRST " : "SECOND ") + facts.slice(0, 5).join(" ") });
-    expect((await getLesson(w2.topic())).explanation).toMatch(/^SECOND/);
+    lessonWriter = (n) => goodLesson(w2, (n === 1 ? "FIRST " : "SECOND ") + facts.slice(0, 5).join(" "));
+    expect(lessonText(await getLesson(w2.topic()))).toMatch(/^SECOND/);
 
     const w3 = world(1, () => facts);
     lessonCalls = 0;
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     lessonWriter = (n) => {
       if (n === 2) throw new Error("repair down");
-      return goodLesson({ explanation: "FIRST " + facts.slice(0, 2).join(" ") });
+      return goodLesson(w3, "FIRST " + facts.slice(0, 2).join(" "));
     };
     const l = await getLesson(w3.topic());
     err.mockRestore();
-    expect(l.explanation).toMatch(/^FIRST/);
-    expect(JSON.parse(w3.topic().lesson_json!).version).toBe(2);
+    expect(lessonText(l)).toMatch(/^FIRST/);
+    expect(JSON.parse(w3.topic().lesson_json!).version).toBe(3);
   });
 
   it("a failing FIRST call stores nothing and leaves an old lesson in place", async () => {
     const w = world(1);
-    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(goodLesson({ explanation: "OLD" })), w.topicId);
+    db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify({ explanation: "OLD", key_points: [], slides: [], connections: null, version: 2 }), w.topicId);
     lessonWriter = () => {
       throw new Error("down");
     };
@@ -934,19 +943,48 @@ describe("E: lessons", () => {
     expect(JSON.parse(w.topic().lesson_json!).explanation).toBe("OLD");
   });
 
-  it("pictures: capped at 6 after filtering to the topic's own slides", async () => {
+  it("slides: only the topic's own slides, in slide order, one entry each (a slide given twice has its texts joined), no cap", async () => {
     const w = world(9, (i) => [`f${i}x`]);
     const foreign = world(1).pages[0];
-    const sl = [foreign, ...w.pages, foreign, 999999].map((p, i) => ({ page_id: p, caption: `c${i}` }));
-    lessonWriter = () => goodLesson({ explanation: w.pages.map((_, i) => `f${i}x`).join(" "), slides: sl });
+    const given = [foreign, ...[...w.pages].reverse(), foreign, 999999, w.pages[0]];
+    const sl = given.map((p, i) => ({ page_id: p, explanation: i === given.length - 1 ? "again f0x" : `f${w.pages.indexOf(p)}x text ${i}` }));
+    lessonWriter = () => goodLesson(w, "", { slides: sl });
     const l = await getLesson(w.topic());
-    expect(l.slides.map((s) => s.page_id)).toEqual(w.pages.slice(0, 6));
-    expect(JSON.parse(w.topic().lesson_json!).slides).toHaveLength(6);
+    expect(l.slides.map((s) => s.page_id)).toEqual(w.pages);
+    expect(l.slides[0].explanation).toBe("f0x text 9\n\nagain f0x");
+    expect(JSON.parse(w.topic().lesson_json!).slides).toHaveLength(9);
+    expect(lessonCalls).toBe(1); // nothing missing, no repair
+  });
+
+  it("a slide with facts that got no entry triggers the one repair call, which names the slide; a slide without facts may be skipped", async () => {
+    const w = world(3, (i) => (i === 1 ? [] : [`g${i}x`]));
+    lessonWriter = (n) =>
+      n === 1
+        ? goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: "g0x" }] }) // slide 3 (facts) left out, slide 2 (no facts) skipped
+        : goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: "g0x" }, { page_id: w.pages[2], explanation: "g2x" }] });
+    const l = await getLesson(w.topic());
+    expect(lessonCalls).toBe(2);
+    const rep = calls.find((c) => c.purpose === "lesson repair")!;
+    const asked = rep.content.slice(rep.content.indexOf("Your previous lesson"));
+    expect(asked).toContain(`- [P${w.pages[2]}] L1.pdf slide 3`);
+    expect(asked).not.toContain(`[P${w.pages[1]}]`); // the fact-less slide isn't demanded
+    expect(l.slides.map((s) => s.page_id)).toEqual([w.pages[0], w.pages[2]]);
+  });
+
+  it("a repair that brings back fewer slides than the first lesson is discarded even if its fact coverage is equal", async () => {
+    const w = world(2, (i) => [`h${i}x`]);
+    lessonWriter = (n) =>
+      n === 1
+        ? goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: "h0x h1x" }] }) // all facts, slide 2 missing → repair
+        : goodLesson(w, "", { slides: [] }); // the repair drops everything
+    const l = await getLesson(w.topic());
+    expect(lessonCalls).toBe(2);
+    expect(l.slides.map((s) => s.page_id)).toEqual([w.pages[0]]);
   });
 
   it("concurrent opens share one generation", async () => {
     const w = world(1);
-    lessonWriter = () => goodLesson({ explanation: "fact a0 fact b0" });
+    lessonWriter = () => goodLesson(w, "fact a0 fact b0");
     await Promise.all([getLesson(w.topic()), getLesson(w.topic()), getLesson(w.topic())]);
     expect(lessonCalls).toBe(1);
   });
@@ -954,7 +992,7 @@ describe("E: lessons", () => {
   it("BUG(low): a fact repeated on two slides is listed twice in the repair prompt and counted twice in the coverage", async () => {
     const facts = ["unique fact one", "shared sentinel fact", "unique fact two", "unique fact three", "unique fact four"];
     const w = world(2, (i) => (i === 0 ? facts : ["shared sentinel fact"]));
-    lessonWriter = (n) => goodLesson({ explanation: n === 1 ? "nothing" : facts.join(" ") });
+    lessonWriter = (n) => goodLesson(w, n === 1 ? "nothing" : facts.join(" "));
     await getLesson(w.topic());
     const rep = calls.find((c) => c.purpose === "lesson repair")!;
     expect(rep.content.slice(rep.content.indexOf("Your previous lesson")).match(/- shared sentinel fact/g)).toHaveLength(1);
