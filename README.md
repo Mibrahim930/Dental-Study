@@ -53,3 +53,7 @@ Live at https://dental-study-production.up.railway.app (Railway project "truthfu
 - Service variables: `APP_PASSCODE`, `SECRET_KEY` (never change it once users exist, or saved API keys can't be decrypted), `DATA_DIR`.
 
 To host somewhere else, use a server with a persistent disk (Render and Fly.io also work). Point `DATA_DIR` at the disk, run `npm run build`, then `npm start`.
+
+## Handoff for maintainers
+
+Start with [docs/HANDOFF.md](docs/HANDOFF.md): what the project is and its goal, where it runs, the owner's working rules, the code map, everything shipped so far, decisions already taken and open items.
