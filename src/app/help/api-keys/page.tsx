@@ -32,7 +32,7 @@ export default function ApiKeyHelpPage() {
       <div className="card border-warning/40 bg-warning-soft text-sm text-warning">
         <strong>Heads up:</strong> a Claude Pro or ChatGPT Plus subscription does <em>not</em> include API access. The API is a separate,
         pay-as-you-go account. It&apos;s cheap for studying: reading a typical exam&apos;s lectures (around 500 slides) costs roughly $3 with
-        Claude or $5 with ChatGPT, once. Each practice exam or tutor question costs a few cents.
+        Claude or $5 with ChatGPT, once. Each practice exam or section quiz costs a few cents.
       </div>
 
       <section className="card space-y-4">

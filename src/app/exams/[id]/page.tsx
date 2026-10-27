@@ -227,7 +227,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                         : `${topics.length} topics`}
                   </div>
                   <h2 className="mt-1 text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
-                    {started && current ? current.title : "Guided study with lessons, slides, quizzes and a tutor"}
+                    {started && current ? current.title : "Guided study with lessons, slides and quizzes"}
                   </h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -388,7 +388,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             {openAttempt && (
               <Link href={`/attempts/${openAttempt.id}`} className="tile cb-butter flex items-center justify-between gap-3 rounded-[22px]">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-bold opacity-75">{openAttempt.mode === "timed" ? "Timed" : "Tutor"} practice exam in progress</div>
+                  <div className="text-[13px] font-bold opacity-75">{openAttempt.mode === "timed" ? "Timed" : "Learn"} practice exam in progress</div>
                   <div className="text-[17px] leading-tight font-extrabold">
                     {openExpired ? "Time is up — see your score" : `Continue · ${openAttempt.answered} of ${openAttempt.n} answered`}
                   </div>
@@ -413,7 +413,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                 {attempts.map((a) => (
                   <Link key={a.id} href={`/attempts/${a.id}`} className="flex items-center justify-between gap-2 rounded-2xl px-2 py-2.5 hover:bg-muted">
                     <span className="text-[15px] font-semibold">
-                      {localDay(a.started_at, tz)} · {a.n} questions · {a.mode === "timed" ? "Timed" : "Tutor"}
+                      {localDay(a.started_at, tz)} · {a.n} questions · {a.mode === "timed" ? "Timed" : "Learn"}
                     </span>
                     {a.status === "finished" ? (
                       <span className="flex shrink-0 items-center gap-1.5">

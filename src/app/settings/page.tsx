@@ -70,8 +70,8 @@ export default async function SettingsPage() {
           {user.provider !== "openai" && (
             <>
               {" "}
-              Quiz and exam questions are written with <strong>{QUALITY_MODELS.anthropic}</strong> (about twice the price per token); lessons, slide reading, checking and the
-              tutor use {MODELS.anthropic}.
+              Quiz and exam questions are written with <strong>{QUALITY_MODELS.anthropic}</strong> (about twice the price per token); lessons, slide reading and checking use{" "}
+              {MODELS.anthropic}.
             </>
           )}
         </p>

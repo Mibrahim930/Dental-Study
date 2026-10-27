@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type Q = { question: string; options: string[]; correct_index: number; explanation: string; concept: string; id?: string; slot?: number; source_page_id?: number };
 /** Planned slot numbers (1-based) asked for in a section-quiz prompt. */
 const slotsIn = (content: string) => [...content.matchAll(/^Q(\d+):/gm)].map((m) => Number(m[1]));
+/** The slide each planned slot tests ("Q3: slide P12 …"), or nothing for "the section". */
+const pagesIn = (content: string) => new Map([...content.matchAll(/^Q(\d+): slide P(\d+)/gm)].map((m) => [Number(m[1]), Number(m[2])]));
 /** By default the AI answers every planned slot with a distinct question. */
 let quizResponse: (slots: number[]) => { questions: Q[] } = (slots) => ({
   questions: slots.map((n) => ({ ...mk(1)[0], question: `Question ${n}?`, options: [`a${n}`, `b${n}`, `c${n}`, `d${n}`], concept: `Concept ${n % 3}`, slot: n, source_page_id: 0 })),
@@ -17,7 +19,12 @@ vi.mock("@/lib/ai", async (orig) => ({
     genCalls.push(opts.purpose);
     if (opts.purpose === "section quiz") quizPrompts.push(opts.content);
     await new Promise((r) => setTimeout(r, 5));
-    if (opts.purpose === "section quiz") return quizResponse(slotsIn(opts.content));
+    if (opts.purpose === "section quiz") {
+      // A written question must cite one of the topic's slides: the mock fills in the slot's slide unless a test set one.
+      const r = quizResponse(slotsIn(opts.content));
+      const pages = pagesIn(opts.content);
+      return { ...r, questions: r.questions.map((q) => (q.source_page_id ? q : { ...q, source_page_id: pages.get(q.slot ?? 0) ?? q.source_page_id })) };
+    }
     if (opts.purpose === "section quiz check") return { verdicts: [] };
     if (opts.purpose === "session summary") return { summary: summaryText };
     throw new Error("unexpected " + opts.purpose);
@@ -35,7 +42,7 @@ vi.mock("@/lib/user", async (orig) => ({
 
 import { db, type Topic } from "@/lib/db";
 import { getSectionQuiz, getLesson, LESSON_VERSION, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
-import { QUIZ_MIN, quizSize } from "@/lib/quizPlan";
+import { quizSize } from "@/lib/quizPlan";
 import { weakConcepts } from "@/lib/memory";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
@@ -52,9 +59,20 @@ const mk = (n: number, over: Partial<Q> = {}): Q[] =>
     ...over,
   }));
 
+/** Two topics with five one-fact slides each, so every quiz is five questions (one per fact). */
 function world(slides = 2) {
   const userId = makeUser();
   const { examId, topicIds } = makeExam(userId, null, [slides, slides]);
+  const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'L1.pdf', 'done')").run(examId).lastInsertRowid);
+  let n = 0;
+  for (const topicId of topicIds) {
+    const pages = Array.from({ length: FACTS }, () => {
+      n++;
+      const notes = JSON.stringify({ title: `slide ${n}`, summary: "s", image_description: null, key_facts: [`fact ${n}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+      return Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, '', 'done', ?)").run(doc, n, notes).lastInsertRowid);
+    });
+    db.prepare("UPDATE topics SET page_ids = ? WHERE id = ?").run(JSON.stringify(pages), topicId);
+  }
   const sessionId = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(examId).lastInsertRowid);
   const topic = (i = 0) => db.prepare("SELECT * FROM topics WHERE id = ?").get(topicIds[i]) as Topic;
   return { userId, examId, topicIds, sessionId, topic };
@@ -64,11 +82,9 @@ const get = (sessionId: number, position: number) => quizGET(new Request(`http:/
 const post = (sessionId: number, body: unknown) =>
   checkPOST(new Request("http://x/c", { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }), ctx(sessionId));
 
-/**
- * makeExam's topics list slide ids (100000+) that have no page rows, so the writer sees no slides and no facts:
- * the plan is the floor, QUIZ_MIN slots on "the section" in general.
- */
-const SIZE = quizSize([]);
+/** Facts per topic in `world`, and so the quiz size: one question per fact. */
+const FACTS = 5;
+const SIZE = quizSize(Array.from({ length: FACTS }, (_, i) => ({ facts: [`fact ${i}`] })));
 
 const defaultQuiz = quizResponse;
 beforeEach(() => {
@@ -78,8 +94,8 @@ beforeEach(() => {
 });
 
 describe("getSectionQuiz", () => {
-  it(`a topic whose slides the writer can't see gets the floor of ${QUIZ_MIN}: stable ids, shuffled consistently, cached as the current version`, async () => {
-    expect(SIZE).toBe(QUIZ_MIN);
+  it("a five-fact topic gets five questions: stable ids, shuffled consistently, cached as the current version", async () => {
+    expect(SIZE).toBe(5);
     const w = world();
     const qs = await getSectionQuiz(w.topic());
     expect(qs).toHaveLength(SIZE);
@@ -90,7 +106,7 @@ describe("getSectionQuiz", () => {
     }
     expect(new Set(qs.map((q) => q.id)).size).toBe(SIZE);
     expect(JSON.parse(w.topic().checks_json!)).toEqual(qs);
-    expect(QUIZ_VERSION).toBe(3);
+    expect(QUIZ_VERSION).toBe(4);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
     await getSectionQuiz(w.topic());
     // Two writing calls splitting the plan in halves, and one checking pass, once.
@@ -99,8 +115,8 @@ describe("getSectionQuiz", () => {
     const halves = quizPrompts.map((c) => slotsIn(c));
     expect(halves.map((h) => h.length)).toEqual([Math.ceil(SIZE / 2), Math.floor(SIZE / 2)]);
     expect(halves.flat()).toEqual(Array.from({ length: SIZE }, (_, i) => i + 1));
-    // With no slides, every slot tests the section in general and pins no fact.
-    expect(quizPrompts.every((c) => !/^Q\d+: slide P/m.test(c) && !/— fact: /.test(c))).toBe(true);
+    // Every slot names its slide and pins its fact.
+    expect(quizPrompts.every((c) => /^Q\d+: slide P\d+ — fact: /m.test(c))).toBe(true);
   });
 
   it("dedupes concurrent generation", async () => {
@@ -110,11 +126,11 @@ describe("getSectionQuiz", () => {
     expect(genCalls).toHaveLength(3);
   });
 
-  it("works for a topic with zero slides", async () => {
+  it("works for a topic with zero slides: one general question", async () => {
     const userId = makeUser();
     const { topicIds } = makeExam(userId, null, [0]);
     const t = db.prepare("SELECT * FROM topics WHERE id = ?").get(topicIds[0]) as Topic;
-    expect(await getSectionQuiz(t)).toHaveLength(SIZE);
+    expect(await getSectionQuiz(t)).toHaveLength(1);
   });
 
   it("filters malformed answers, repairs the gaps once, and accepts a shorter quiz if the repair falls short", async () => {

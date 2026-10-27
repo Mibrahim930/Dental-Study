@@ -53,7 +53,7 @@ function withAnswer(q: QuizMeView, at: number, r: QuizMeAnswer): QuizMeView {
 
 /**
  * "Quiz me on this": select three or more words anywhere in the page's <main> (lesson, key points, explanations,
- * tutor replies) and a pill offers a short quiz on exactly that: 3, 5 or 10 questions written from the matching
+ * explanations) and a pill offers a short quiz on exactly that: 3, 5 or 10 questions written from the matching
  * slides, answered one at a time with a note on every option. Answers count toward mastery. An unfinished quiz is
  * kept and offered again ("Resume your quiz") the next time this exam's pages open.
  */

@@ -265,7 +265,7 @@ function Welcome({ hello }: { hello: string }) {
   const steps = [
     ["Create an exam", "Give it a name and a date with the New exam form."],
     ["Upload lecture PDFs", "AI reads every slide, including X-rays and handwriting."],
-    ["Study and practise", "Guided lessons, a tutor chat, practice exams and daily review."],
+    ["Study and practise", "Guided lessons, section quizzes, practice exams and daily review."],
   ];
   return (
     <section className="card-hero flex flex-col gap-5">

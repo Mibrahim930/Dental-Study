@@ -101,7 +101,7 @@ describe("stability of a cached current-version quiz", () => {
     expect(calls.length).toBe(before);
     expect(stored(w).map((q) => q.id)).toEqual(ids);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(QUIZ_VERSION).toBe(3);
+    expect(QUIZ_VERSION).toBe(4);
   });
 });
 

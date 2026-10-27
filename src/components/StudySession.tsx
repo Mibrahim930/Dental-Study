@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
 import { toast } from "./Toaster";
@@ -28,7 +28,6 @@ type TopicLite = {
   section: number;
   sections: number;
 };
-type ChatMsg = { id?: number; role: "user" | "assistant"; content: string };
 type LessonData = {
   topic: { id: number; title: string; summary: string; emphasized: boolean };
   concepts: { id: number; name: string; mastery: number | null; earlier_exams: string[] }[];
@@ -64,7 +63,6 @@ export function StudySession(props: {
   sessionId: number;
   initialPosition: number;
   topics: TopicLite[];
-  initialChat: ChatMsg[];
 }) {
   const { examId, sessionId, topics } = props;
   const router = useRouter();
@@ -76,8 +74,6 @@ export function StudySession(props: {
   const [ending, setEnding] = useState(false);
   const [starting, setStarting] = useState(false);
   const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
-  const [chatOpen, setChatOpen] = useState(false);
-  const closeChat = useCallback(() => setChatOpen(false), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,7 +205,7 @@ export function StudySession(props: {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,1fr)_380px]">
+      <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,860px)] lg:justify-center">
         <nav className="hidden lg:block" aria-label="Sections">
           <div className="card sticky top-4 flex max-h-[calc(100vh-2rem)] flex-col gap-1 overflow-y-auto p-2.5">
             {navGroups.map((g) => (
@@ -306,20 +302,10 @@ export function StudySession(props: {
           </div>
         </article>
 
-        <TutorChat sessionId={sessionId} position={position} initial={props.initialChat} open={chatOpen} onClose={closeChat} />
-        {/* Highlight any text in the lesson, quiz or tutor and get "Quiz me on this" (3 / 5 / 10 questions on that passage). */}
+        {/* Highlight any text in the lesson or quiz and get "Quiz me on this" (3 / 5 / 10 questions on that passage). */}
         <QuizMe examId={examId} topicId={topic?.id} />
       </div>
 
-      {/* Phone: floating button that opens the tutor as a bottom sheet. */}
-      {!chatOpen && (
-        <button
-          onClick={() => setChatOpen(true)}
-          className="fixed right-4 bottom-[calc(100px+env(safe-area-inset-bottom))] z-30 flex h-14 items-center gap-2 rounded-full bg-hero px-5 text-[15px] font-extrabold text-hero-foreground shadow-[0_10px_30px_rgba(14,94,85,.35)] lg:hidden"
-        >
-          <Icon d={ICONS.chat} /> Tutor
-        </button>
-      )}
     </div>
   );
 }
@@ -615,7 +601,6 @@ function SectionQuiz({
             </div>
           )}
         </div>
-        {!good && done > 0 && <p className="text-[15px] text-muted-foreground">Ask the tutor about anything that&apos;s unclear before moving on.</p>}
         {missed.length > 0 && (
           <div>
             <div className="mb-1.5 text-[13px] font-bold opacity-75">Look again at</div>
@@ -664,9 +649,9 @@ function SectionQuiz({
         </div>
       </div>
       {strip}
-      {index === 0 && !answered && quiz.slides > total && (
+      {index === 0 && !answered && (
         <p className="px-1 text-[13px] font-semibold text-muted-foreground">
-          {total} questions over the most important of this section&apos;s {quiz.slides} slides.
+          {total === 1 ? "One question" : `${total} questions`}, one for each fact on this section&apos;s {quiz.slides} {quiz.slides === 1 ? "slide" : "slides"}.
         </p>
       )}
       <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered || rewriting} chosen={chosen} picked={picked} onPick={setPicked} />
@@ -879,160 +864,5 @@ function ReportQuizQuestion({ sessionId, topicId, questionId }: { sessionId: num
         </button>
       </div>
     </div>
-  );
-}
-
-/** One chat message. Memoized: while a reply streams in, only the growing bubble re-renders and re-parses its markdown. */
-const Bubble = memo(function Bubble({ role, content }: ChatMsg) {
-  return (
-    <div className={`rounded-[20px] px-4 py-3 text-[15px] leading-relaxed ${role === "user" ? "ml-8 bg-mint font-semibold text-on-mint" : "mr-4 bg-white/10"}`}>
-      {role === "assistant" ? (
-        <div className="[&_a]:text-hero-accent [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1.5 [&_strong]:font-extrabold [&_ul]:list-disc">
-          <ReactMarkdown>{content || "…"}</ReactMarkdown>
-        </div>
-      ) : (
-        content
-      )}
-    </div>
-  );
-});
-
-function TutorChat({
-  sessionId,
-  position,
-  initial,
-  open,
-  onClose,
-}: {
-  sessionId: number;
-  position: number;
-  initial: ChatMsg[];
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [messages, setMessages] = useState<ChatMsg[]>(initial);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [desktop, setDesktop] = useState(true);
-  const bottom = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [messages, open]);
-
-  // On phones the tutor is a bottom sheet: closed means hidden from keyboard and screen readers; open is a dialog.
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const update = () => setDesktop(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, []);
-  useEffect(() => {
-    if (!open || desktop) return;
-    field.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, desktop, onClose]);
-  const sheet = !desktop;
-
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || busy) return;
-    setInput("");
-    setBusy(true);
-    setMessages((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "" }]);
-    // The reply streams in a few characters at a time. Chunks are collected and shown at most once per frame, so a long
-    // reply re-renders (and re-parses markdown for) only the growing bubble ~60 times a second, not once per chunk.
-    let acc = "";
-    let frame = 0;
-    const show = () => {
-      frame = 0;
-      const content = acc;
-      setMessages((m) => [...m.slice(0, -1), { role: "assistant", content }]);
-    };
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, position }),
-      });
-      if (signedOut(res)) {
-        acc = "_(You've been signed out. Sign in again.)_";
-      } else if (!res.ok) {
-        // A plain answer instead of a stream (key problem, server error): show its message, not raw JSON.
-        const json = await jsonOf<{ error?: string }>(res);
-        acc = `_(${typeof json?.error === "string" && json.error ? json.error : "The tutor couldn't answer right now. Try again in a moment."})_`;
-      } else {
-        const reader = res.body?.getReader();
-        const decoder = new TextDecoder();
-        while (reader) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value, { stream: true });
-          if (!frame) frame = requestAnimationFrame(show);
-        }
-        acc += decoder.decode(); // any bytes held back from a character split across the last chunk
-      }
-    } catch {
-      // Connection dropped (offline, or the server went away mid-reply): say so in the bubble instead of hanging.
-      acc += `${acc ? "\n\n" : ""}_(The tutor couldn't be reached. Check your connection and try again.)_`;
-    } finally {
-      if (frame) cancelAnimationFrame(frame);
-      show();
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      {open && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} aria-hidden />}
-      <aside
-        aria-label="Ask the tutor"
-        role={sheet && open ? "dialog" : undefined}
-        aria-modal={sheet && open ? true : undefined}
-        inert={sheet && !open}
-        className={`fixed inset-x-0 bottom-0 z-50 flex h-[85vh] flex-col rounded-t-[32px] bg-nav text-white transition-transform duration-[280ms] ease-out lg:sticky lg:inset-auto lg:top-4 lg:z-auto lg:h-[calc(100vh-2rem)] lg:translate-y-0 lg:rounded-[28px] ${
-          open ? "translate-y-0" : "translate-y-full"
-        }`}
-      >
-        <div className="flex items-start justify-between gap-2 px-5 pt-5 pb-3">
-          <div>
-            <h2 className="text-[20px] font-extrabold tracking-tight">Ask the tutor</h2>
-            <p className="text-[13px] text-nav-foreground">Answers come from your lectures and remember your past sessions.</p>
-          </div>
-          <button onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-white/10 lg:hidden" aria-label="Close tutor">
-            <Icon d={ICONS.close} />
-          </button>
-        </div>
-        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-2">
-          {messages.length === 0 && (
-            <p className="px-1 text-[15px] text-nav-foreground">
-              Try: &quot;What&apos;s the difference between SIP and SAP?&quot; or &quot;Quiz me on this topic.&quot;
-            </p>
-          )}
-          {messages.map((m, i) => (
-            <Bubble key={i} role={m.role} content={m.content} />
-          ))}
-          <div ref={bottom} />
-        </div>
-        <form onSubmit={send} className="flex gap-2 p-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
-          <input
-            ref={field}
-            className="h-[50px] w-full rounded-2xl border-2 border-transparent bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-nav-foreground focus:border-hero-accent focus:bg-white/15"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask anything…"
-            aria-label="Message the tutor"
-          />
-          <button className="btn bg-mint px-5 text-on-mint" disabled={busy || !input.trim()}>
-            Send
-          </button>
-        </form>
-      </aside>
-    </>
   );
 }

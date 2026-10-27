@@ -59,18 +59,17 @@ vi.mock("@/lib/user", async (orig) => ({
 
 import { db, type Topic } from "@/lib/db";
 import { getSectionQuiz, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
-import { QUIZ_MAX, QUIZ_MIN } from "@/lib/quizPlan";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { POST as reportPOST } from "@/app/api/sessions/[id]/quiz/report/route";
 import { addSharedExam, createClass, shareExam, joinClass } from "@/lib/classes";
 import { makeUser } from "./helpers";
 
-// Two facts of its own per slide, so the quiz size is one per fact: clamp(2 × slides, 5, 25).
+// Two facts of its own per slide, so the quiz size is one per fact: 2 × slides (no floor, no cap).
 const notes = (i: number) =>
   JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact a${i}`, `fact b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
 /** The planned quiz size for an n-slide world. */
-const sizeFor = (n: number) => (n === 0 ? QUIZ_MIN : Math.min(QUIZ_MAX, Math.max(QUIZ_MIN, 2 * n)));
+const sizeFor = (n: number) => (n === 0 ? 1 : 2 * n);
 function world(n: number, userId = makeUser()) {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
   const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'L1.pdf', 'done')").run(examId).lastInsertRowid);
@@ -99,24 +98,20 @@ afterEach(() => {
 });
 
 describe("quiz sizes", () => {
-  // [slides, expected size, slides tested]: 1 slide reaches the floor of 5 on its own; past 12 slides the ceiling of
-  // 25 cuts the later slides' facts (slide order), so 13 slides are tested.
+  // [slides, expected size, slides tested]: exactly two questions per slide, every slide tested, however many.
   for (const [n, size, tested] of [
-    [1, 5, 1],
-    [2, 5, 2],
+    [1, 2, 1],
+    [2, 4, 2],
     [3, 6, 3],
     [12, 24, 12],
-    [13, 25, 13],
-    [20, 25, 13],
-    [21, 25, 13],
+    [13, 26, 13],
+    [21, 42, 21],
   ]) {
     it(`${n}-slide topic gives ${size} distinct questions, all citing the topic's slides`, async () => {
       expect(sizeFor(n)).toBe(size);
       const w = world(n);
       const qs = await getSectionQuiz(w.topic());
       expect(qs).toHaveLength(size);
-      expect(qs.length).toBeGreaterThanOrEqual(QUIZ_MIN);
-      expect(qs.length).toBeLessThanOrEqual(QUIZ_MAX);
       expect(new Set(qs.map((q) => q.id)).size).toBe(size);
       expect(new Set(qs.map((q) => q.question)).size).toBe(size);
       expect(qs.every((q) => /^[0-9a-f]{8}$/.test(q.id!))).toBe(true);
@@ -124,20 +119,20 @@ describe("quiz sizes", () => {
       expect(new Set(qs.map((q) => q.source_page_id)).size).toBe(tested);
     });
   }
-  it("a 1-slide topic: 2 fact questions plus 3 more angles on the same slide, no fact named twice", async () => {
+  it("a 1-slide topic: its 2 fact questions and nothing more (no padding, so nothing to repeat)", async () => {
     const w = world(1);
     await getSectionQuiz(w.topic());
     const prompts = calls.filter((c) => c.purpose === "section quiz").map((c) => c.content);
     const lines = prompts.flatMap((c) => c.match(/^Q\d+: .*$/gm) ?? []);
-    expect(lines).toHaveLength(QUIZ_MIN);
+    expect(lines).toHaveLength(2);
     expect(lines.every((l) => l.includes(`slide P${w.pages[0]}`))).toBe(true);
     const facts = lines.flatMap((l) => [...l.matchAll(/fact: "(.*?)"/g)].map((m) => m[1]));
     expect(facts.sort()).toEqual(["fact a0", "fact b0"]);
   });
-  it("a topic with no slides at all still gets a quiz of the floor size", async () => {
+  it("a topic with no slides at all still gets a one-question quiz", async () => {
     const w = world(0);
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(QUIZ_MIN);
+    expect(qs).toHaveLength(1);
     expect(qs.every((q) => q.source_page_id == null)).toBe(true);
   });
 });
@@ -229,7 +224,7 @@ describe("the checking pass", () => {
     expect(qs).toHaveLength(half);
     expect(calls.filter((c) => c.purpose === "section quiz")).toHaveLength(3);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(QUIZ_VERSION).toBe(3);
+    expect(QUIZ_VERSION).toBe(4);
   });
 
   it("judge rejects ok:false for the same question twice in verdicts - no double count", async () => {

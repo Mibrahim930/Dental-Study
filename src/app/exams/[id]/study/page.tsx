@@ -36,10 +36,6 @@ export default async function StudyPage(props: PageProps<"/exams/[id]/study">) {
       db.prepare("INSERT INTO study_sessions (exam_id, current_position) VALUES (?, ?)").run(examId, position).lastInsertRowid,
     );
   }
-  const chat = db
-    .prepare("SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY id")
-    .all(sessionId) as { id: number; role: "user" | "assistant"; content: string }[];
-
   return (
     <StudySession
       examId={examId}
@@ -47,7 +43,6 @@ export default async function StudyPage(props: PageProps<"/exams/[id]/study">) {
       sessionId={sessionId}
       initialPosition={position}
       topics={topics.map((t) => ({ id: t.id, position: t.position, title: t.title, emphasized: !!t.emphasized, ...places.get(t.id)! }))}
-      initialChat={chat}
     />
   );
 }

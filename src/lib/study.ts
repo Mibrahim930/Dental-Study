@@ -1,12 +1,12 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { db, examOwner, type Exam, type PageRow, type Topic } from "./db";
-import { chatStream, generate, type ChatTurn } from "./ai";
+import { db, examOwner, type PageRow, type Topic } from "./db";
+import { generate } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
-import { recentSummaries, searchLibrary, topicConcepts, upsertConcept, weakConcepts, glossaryText } from "./memory";
+import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
-import { ANGLE_TEXT, normStem, planQuizByFacts, type Angle } from "./quizPlan";
+import { ANGLE_TEXT, normStem, planQuizByFacts, quizSize, type Angle, type FactSlide } from "./quizPlan";
 import { coveredFacts } from "./lessonCoverage";
 import { clearTopicQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK } from "./examStyle";
@@ -48,8 +48,10 @@ export function lessonText(lesson: Pick<Lesson, "intro" | "slides">): string {
 const LESSON_COVERAGE = 0.8;
 
 /** Stored in topics.checks_version. Quizzes written by an older version are rewritten once on next open.
- *  3 = one question per distinct fact (5-25), per-option notes, quality-tier writer. */
-export const QUIZ_VERSION = 3;
+ *  3 = one question per distinct fact (5-25), per-option notes, quality-tier writer.
+ *  4 = one question per distinct fact with no floor and no cap (a version-3 quiz whose section has 5-25 facts was
+ *      written the same way and is kept; see quizIsCurrent). */
+export const QUIZ_VERSION = 4;
 
 const SectionQuiz = z.object({
   questions: z.array(
@@ -271,8 +273,29 @@ Teach only from the student's slides provided (plus standard dental knowledge ne
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 
-/** The current quiz is up to date (written by this version); older ones are rewritten once. */
-export const quizIsCurrent = (topic: Pick<Topic, "checks_json" | "checks_version">) => !!topic.checks_json && (topic.checks_version ?? 0) >= QUIZ_VERSION;
+/** The facts the section's slides list, the way the quiz planner sees them. */
+function factSlides(pages: ReturnType<typeof topicPages>): FactSlide[] {
+  return pages.map((p) => {
+    const n = parseNotes(p);
+    const facts = n?.key_facts ?? [];
+    return { id: p.id, keyFacts: facts.length, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case), facts };
+  });
+}
+
+/**
+ * The current quiz is up to date; older ones are rewritten once on next open. A version-3 quiz is kept when its
+ * section has 5 to 25 distinct facts: version 3 wrote exactly one question per fact there too. Only sections that
+ * were padded to 5 (repeated questions) or cut at 25 (material left out) are rewritten, so the rewrite costs
+ * nothing where nothing would change.
+ */
+export function quizIsCurrent(topic: Pick<Topic, "checks_json" | "checks_version" | "page_ids">): boolean {
+  if (!topic.checks_json) return false;
+  const v = topic.checks_version ?? 0;
+  if (v >= QUIZ_VERSION) return true;
+  if (v !== 3) return false;
+  const n = quizSize(factSlides(topicPages(topic as Topic)));
+  return n >= 5 && n <= 25;
+}
 
 /** The section quiz after a lesson: written once per topic and cached, like the lesson. */
 export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
@@ -320,14 +343,8 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const pages = topicPages(topic);
   const notes = markPictures(slideNotesText(pages), pages);
   const valid = new Set(pages.map((p) => p.id));
-  // One question per distinct fact on the section's slides (floor 5, ceiling 25), never the same fact twice.
-  const slots = planQuizByFacts(
-    pages.map((p) => {
-      const n = parseNotes(p);
-      const facts = n?.key_facts ?? [];
-      return { id: p.id, keyFacts: facts.length, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case), facts };
-    }),
-  );
+  // One question per distinct fact on the section's slides (no floor, no cap), never the same fact twice.
+  const slots = planQuizByFacts(factSlides(pages));
   const judge = process.env.QUIZ_JUDGE !== "0";
   const context = [`Section: ${topic.title}\n${topic.summary}`, `Concept names: ${concepts.map((c) => c.name).join("; ") || "none"}`, `Slides:\n${notes}`].join("\n\n");
 
@@ -494,53 +511,6 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
     for (const name of new Set(questions.map((q) => q.concept?.trim()).filter(Boolean))) link.run(topic.id, upsertConcept(userId, name!));
   })();
   return questions;
-}
-
-/** Build the tutor's system prompt: what the AI "remembers" about this student and exam. */
-function tutorSystem(examId: number, topic: Topic | undefined): string {
-  const exam = db.prepare("SELECT * FROM exams WHERE id = ?").get(examId) as Exam;
-  const topics = db.prepare("SELECT position, title FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as {
-    position: number;
-    title: string;
-  }[];
-  const weak = weakConcepts(exam.user_id, 8);
-  const summaries = recentSummaries(exam.user_id, 4);
-  return [
-    `You are a friendly, precise dental school tutor helping a student prepare for "${exam.name}"${
-      exam.exam_date ? ` on ${exam.exam_date}` : ""
-    }.
-Answer from the student's own lecture slides first and cite them as (Lecture, slide N). If you add knowledge beyond the slides, say so.
-Keep answers focused and short unless asked to go deeper. Use markdown. When useful, end with one quick question to check understanding.`,
-    `Exam topic map:\n${topics.map((t) => `${t.position + 1}. ${t.title}`).join("\n")}`,
-    topic ? `The student is currently studying: ${topic.title}\n\n${slideNotesText(topicPages(topic))}` : "",
-    weak.length
-      ? `Concepts the student is weak on (any exam): ${weak.map((c) => `${c.name} ${Math.round(c.mastery * 100)}%`).join(", ")}`
-      : "",
-    summaries.length
-      ? `Notes from recent study sessions:\n${summaries.map((s) => `- [${s.exam_name}] ${s.summary}`).join("\n")}`
-      : "",
-    `Abbreviations seen in the student's lectures: ${glossaryText(exam.user_id)}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-export function tutorStream(sessionId: number, examId: number, topic: Topic | undefined, question: string) {
-  const userId = examOwner(examId);
-  const history = db
-    .prepare("SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id")
-    .all(sessionId) as { role: "user" | "assistant"; content: string }[];
-  const hits = searchLibrary(userId, question, 6);
-  const retrieved = hits.length
-    ? `\n\n<library_search>\n${hits
-        .map((h) => `${h.exam_name} / ${h.filename} slide ${h.page_number}: ${h.title} — ${h.snippet}`)
-        .join("\n")}\n</library_search>`
-    : "";
-  const messages: ChatTurn[] = [
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    { role: "user", content: question + retrieved },
-  ];
-  return chatStream({ creds: credentials(userId), purpose: "tutor chat", system: tutorSystem(examId, topic), messages });
 }
 
 const SessionSummary = z.object({

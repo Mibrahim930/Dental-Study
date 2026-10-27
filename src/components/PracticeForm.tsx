@@ -99,7 +99,7 @@ export function PracticeForm({
           The {inScope.length - slots} left out come first in your next exam{style === "caseset" ? "." : ", or pick a longer exam to cover everything."}
         </p>
       )}
-      <Choice label="Mode" value={mode} onChange={setMode} options={[["tutor", "Tutor"], ["timed", "Timed"]]} />
+      <Choice label="Mode" value={mode} onChange={setMode} options={[["tutor", "Learn"], ["timed", "Timed"]]} />
       <p className="-mt-2 text-[13px] text-muted-foreground">
         {mode === "tutor" ? "See the answer and explanation after each question." : "Exam conditions: a timer, and answers only at the end."}
       </p>

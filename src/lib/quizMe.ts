@@ -1,4 +1,4 @@
-// "Quiz me on this": the student highlights a passage while studying (lesson, key points, explanations, tutor replies)
+// "Quiz me on this": the student highlights a passage while studying (lesson, key points, explanations)
 // and gets 3, 5 or 10 questions about exactly that, written from the slides that match it. Stored, so an unfinished
 // quiz can be resumed; answers count toward concept mastery like the section quiz. Self-contained: creates its own
 // table on first use.
@@ -127,7 +127,7 @@ const STOPWORDS = new Set(
   ),
 );
 
-/** Slides of one exam that match the words, best first (full-text search, like the tutor's library search). */
+/** Slides of one exam that match the words, best first (full-text search over the slide library). */
 export function searchExamPages(userId: number, examId: number, text: string, limit = QUIZME_SEARCH_HITS): number[] {
   const terms = text
     .toLowerCase()

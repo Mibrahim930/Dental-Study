@@ -208,7 +208,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
       </div>
       {confirmAt === "top" && confirmBox}
       <div className="px-1">
-        <h1 className="text-[26px] font-extrabold tracking-[-0.03em]">Practice exam · {tutor ? "Tutor" : "Timed"}</h1>
+        <h1 className="text-[26px] font-extrabold tracking-[-0.03em]">Practice exam · {tutor ? "Learn" : "Timed"}</h1>
       </div>
 
       <div className="flex flex-wrap gap-1.5 px-1" role="list" aria-label="Questions">

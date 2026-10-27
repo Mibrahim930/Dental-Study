@@ -16,7 +16,7 @@ export const MODELS: Record<Provider, string> = {
 };
 
 /**
- * Two tiers. "standard" does the bulk work (slide reading, lessons, tutor, checking, summaries). "quality" writes the
+ * Two tiers. "standard" does the bulk work (slide reading, lessons, checking, summaries). "quality" writes the
  * questions students are judged by (section quizzes, practice exams, case sets, "Quiz me"): Claude Opus for Anthropic
  * keys (about twice the price per token), the same model as standard for ChatGPT keys, which has no higher tier here.
  */

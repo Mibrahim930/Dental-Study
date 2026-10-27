@@ -47,8 +47,8 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getSectionQuiz, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
-import { QUIZ_MAX, QUIZ_MIN, quizSize } from "@/lib/quizPlan";
+import { getSectionQuiz, quizIsCurrent, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
+import { quizSize } from "@/lib/quizPlan";
 import { removeDocument } from "@/lib/processing";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
@@ -91,11 +91,20 @@ function world(n: number, o: { starred?: number[]; split?: number; facts?: (i: n
   const topicId = Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, 0, 'T', 's', ?)").run(examId, JSON.stringify(pages)).lastInsertRowid);
   const sessionId = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(examId).lastInsertRowid);
   const topic = () => db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId) as Topic;
-  /** The quiz size the planner gives this topic: one per distinct fact, clamped to [5, 25]. */
+  /** The quiz size the planner gives this topic: one per distinct fact, no floor, no cap. */
   const size = quizSize(Array.from({ length: n }, (_, i) => ({ facts: facts(i) })));
   return { userId, examId, pages, topicId, sessionId, topic, doc1, doc2, size };
 }
 const count = (purpose: string) => calls.filter((c) => c.purpose === purpose).length;
+/** A stored three-question quiz stamped with an older version (null = before versions existed). */
+const storeOldQuiz = (topicId: number, version: number | null) =>
+  db.prepare("UPDATE topics SET checks_json = ?, checks_version = ? WHERE id = ?").run(
+    JSON.stringify(
+      [0, 1, 2].map((i) => ({ id: `old${i}`, question: `Old ${i}?`, options: ["a", "b", "c", "d"], correct_index: 0, explanation: "e", concept: "C", option_notes: ["r", "w", "w", "w"], kind: "recall" })),
+    ),
+    version,
+    topicId,
+  );
 const writes = () => calls.filter((c) => c.purpose === "section quiz");
 const slotCount = (content: string) => [...content.matchAll(/^Q\d+:/gm)].length;
 const factsIn = (content: string) => [...content.matchAll(/^Q\d+: .* — fact: "(.*)" — /gm)].map((m) => m[1]);
@@ -128,7 +137,31 @@ describe("coverage-first section quiz (one question per distinct fact)", () => {
     for (const p of w.pages) expect(tested.has(p), `slide ${p}`).toBe(true);
     expect(qs.every((q) => q.kind)).toBe(true);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(QUIZ_VERSION).toBe(3);
+    expect(QUIZ_VERSION).toBe(4);
+  });
+
+  it("a version-3 quiz is kept when its section has 5-25 facts (written the same way), rewritten once when it was padded (<5) or cut (>25)", async () => {
+    for (const [n, kept] of [
+      [2, false], // 4 facts: padded to 5 → repeats → rewrite
+      [3, true], // 6 facts
+      [12, true], // 24 facts
+      [13, false], // 26 facts: cut at 25 → rewrite
+    ] as const) {
+      const w = world(n);
+      storeOldQuiz(w.topicId, 3);
+      expect(quizIsCurrent(w.topic()), `${n} slides`).toBe(kept);
+      calls.length = 0;
+      const qs = await getSectionQuiz(w.topic());
+      expect(count("section quiz") > 0, `${n} slides`).toBe(!kept);
+      expect(qs.length).toBe(kept ? 3 : w.size);
+      expect(w.topic().checks_version).toBe(kept ? 3 : QUIZ_VERSION);
+    }
+    // version 2 and unversioned quizzes are always rewritten, whatever the fact count
+    const w = world(5);
+    storeOldQuiz(w.topicId, 2);
+    expect(quizIsCurrent(w.topic())).toBe(false);
+    storeOldQuiz(w.topicId, null);
+    expect(quizIsCurrent(w.topic())).toBe(false);
   });
 
   it("an odd size splits into halves that differ by one", async () => {
@@ -161,24 +194,22 @@ describe("coverage-first section quiz (one question per distinct fact)", () => {
     expect(new Set(facts.map(norm)).size).toBe(facts.length);
   });
 
-  it("25 slides × 2 facts: capped at 25 questions, the starred slide's facts survive the cut", async () => {
+  it("25 slides × 2 facts: all 50 facts get a question (no cap), the starred slide's included", async () => {
     const w = world(25, { starred: [24] });
-    expect(w.size).toBe(QUIZ_MAX);
+    expect(w.size).toBe(50);
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(QUIZ_MAX);
+    expect(qs).toHaveLength(50);
     expect(qs.filter((q) => q.source_page_id === w.pages[24])).toHaveLength(2);
     const facts = writes().flatMap((c) => factsIn(c.content));
     expect(facts).toEqual(expect.arrayContaining(["fact a24", "fact b24"]));
-    expect(new Set(facts).size).toBe(QUIZ_MAX);
+    expect(new Set(facts).size).toBe(50);
   });
 
-  it("never longer than 25, never shorter than 5 when the topic has slides", async () => {
-    for (const n of [2, 3, 13, 40]) {
+  it("exactly one question per fact, however few or many: 2 × slides here", async () => {
+    for (const n of [1, 2, 3, 13, 40]) {
       const w = world(n);
       const qs = await getSectionQuiz(w.topic());
-      expect(qs.length, `${n} slides`).toBe(Math.min(QUIZ_MAX, Math.max(QUIZ_MIN, 2 * n)));
-      expect(qs.length).toBeLessThanOrEqual(QUIZ_MAX);
-      expect(qs.length).toBeGreaterThanOrEqual(QUIZ_MIN);
+      expect(qs.length, `${n} slides`).toBe(2 * n);
     }
   });
 

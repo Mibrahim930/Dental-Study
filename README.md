@@ -4,7 +4,7 @@ A study tool for dental students, built around their own lecture PDFs. Many stud
 
 - **Access:** a site passcode, then email + password accounts. Each user adds their own **Claude or ChatGPT API key** (stored encrypted) and pays for their own usage. There's a step-by-step guide at `/help/api-keys`.
 - **Exam workspaces:** upload lecture PDFs. Every slide (images, radiographs, handwritten notes) is read once by AI. Claude users go through the Batch API at half price.
-- **Topic map, study sessions with tutor chat, practice exams (recall / INBDE-style case / image), daily spaced review, progress.**
+- **Topic map, study sessions with slide-by-slide lessons and section quizzes, practice exams (recall / INBDE-style case / image), daily spaced review, progress.**
 - **Memory across exams:** each user's concept mastery, slide library and session summaries carry over from one exam to the next.
 - **Spending tracker:** Settings shows each user's estimated AI spend.
 - **Calendar and study planner:** year and month calendar with exams (each one is an exam workspace) and busy days. A paced day-by-day plan across all upcoming exams, "Today's plan" on the home page, tasks that tick themselves off, and a calendar subscription link for Google or Apple Calendar.

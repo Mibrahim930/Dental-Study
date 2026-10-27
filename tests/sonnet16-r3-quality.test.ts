@@ -45,7 +45,7 @@ vi.mock("@/lib/user", async (orig) => ({
 
 import { db, getMeta, resetSectionQuiz, type Topic } from "@/lib/db";
 import { getSectionQuiz, getLesson, lessonIsCurrent, lessonText, LESSON_VERSION, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
-import { normStem, planQuizByFacts, quizSize, QUIZ_MAX, QUIZ_MIN, type FactSlide } from "@/lib/quizPlan";
+import { normStem, planQuizByFacts, quizSize, type FactSlide } from "@/lib/quizPlan";
 import { clearQuizAnswers, migrateSessionChecks, quizAnswers, recordQuizAnswer } from "@/lib/quizProgress";
 import { coveredFacts, keyWords } from "@/lib/lessonCoverage";
 import { optionNotes } from "@/lib/attemptView";
@@ -126,9 +126,9 @@ afterEach(() => {
 // B — quizSize / planQuizByFacts
 // ---------------------------------------------------------------------------------------------------------------
 describe("B: quizSize", () => {
-  it("0 slides and 1 slide with nothing listed give the floor", () => {
-    expect(quizSize([])).toBe(QUIZ_MIN);
-    expect(quizSize([{ facts: [] }])).toBe(QUIZ_MIN);
+  it("0 slides and 1 slide with nothing listed give one question (no floor any more)", () => {
+    expect(quizSize([])).toBe(1);
+    expect(quizSize([{ facts: [] }])).toBe(1);
   });
   it("whitespace, case and punctuation variants are one fact", () => {
     expect(quizSize([{ facts: ["Pulp  chamber.", "pulp chamber", "  PULP-CHAMBER!! "] }, { facts: ["x1", "x2", "x3", "x4", "x5"] }])).toBe(6);
@@ -136,15 +136,15 @@ describe("B: quizSize", () => {
   it("facts that normalise to nothing count like a slide with no facts (1)", () => {
     expect(quizSize([{ facts: ["—", "  ", "!!!"] }, { facts: [] }, { facts: ["real fact"] }, { facts: ["a"] }, { facts: ["b"] }, { facts: ["c"] }])).toBe(6);
   });
-  it("exactly 5 / 25 / 26 distinct facts", () => {
+  it("exactly 4 / 5 / 25 / 26 distinct facts: one question each, no clamp", () => {
     const f = (n: number) => [{ facts: Array.from({ length: n }, (_, i) => `fact number ${i}`) }];
     expect(quizSize(f(5))).toBe(5);
     expect(quizSize(f(25))).toBe(25);
-    expect(quizSize(f(26))).toBe(25);
-    expect(quizSize(f(4))).toBe(5);
+    expect(quizSize(f(26))).toBe(26);
+    expect(quizSize(f(4))).toBe(4);
   });
   it("a slide that lists the same fact twice counts it once", () => {
-    expect(quizSize([{ facts: ["a1", "a1", "a1"] }])).toBe(QUIZ_MIN);
+    expect(quizSize([{ facts: ["a1", "a1", "a1"] }])).toBe(1);
     expect(quizSize([{ facts: Array.from({ length: 8 }, () => "same") }, { facts: ["b", "c", "d", "e", "f", "g"] }])).toBe(7);
   });
   it("unicode and numbers are facts (not stripped to empty)", () => {
@@ -155,19 +155,16 @@ describe("B: quizSize", () => {
 describe("B: planQuizByFacts", () => {
   const nonNullFacts = (slots: { fact: string | null }[]) => slots.map((s) => s.fact).filter((f): f is string => f != null);
 
-  it("0 slides: the floor, all page null, angles cycle", () => {
+  it("0 slides: one general slot, page null", () => {
     const s = planQuizByFacts([]);
-    expect(s).toHaveLength(5);
+    expect(s).toHaveLength(1);
     expect(s.every((x) => x.page === null && x.fact === null)).toBe(true);
-    expect(new Set(s.map((x) => x.angle)).size).toBe(3);
   });
 
-  it("1 slide with 1 fact reaches the floor and varies the angles", () => {
+  it("1 slide with 1 fact: one slot, nothing padded", () => {
     const s = planQuizByFacts([slide(7, ["only fact"])]);
-    expect(s).toHaveLength(5);
-    expect(s.every((x) => x.page === 7)).toBe(true);
-    expect(nonNullFacts(s)).toEqual(["only fact"]);
-    expect(new Set(s.map((x) => x.angle)).size).toBeGreaterThanOrEqual(3);
+    expect(s).toHaveLength(1);
+    expect(s[0]).toMatchObject({ page: 7, fact: "only fact" });
   });
 
   it("BUG: a fact listed twice on the same slide gets two slots (no two slots may share a fact)", () => {
@@ -186,29 +183,30 @@ describe("B: planQuizByFacts", () => {
     expect(nonNullFacts(s).map(normStem).filter((f) => f === "pulp chamber roof")).toHaveLength(1);
   });
 
-  it("exactly 5 / 25 / 26 facts", () => {
+  it("exactly 5 / 25 / 26 facts: one slot each, no cap, in listed order", () => {
     const mk = (n: number) => [slide(1, Array.from({ length: n }, (_, i) => `fact number ${i}`))];
     expect(planQuizByFacts(mk(5))).toHaveLength(5);
     expect(planQuizByFacts(mk(25))).toHaveLength(25);
     const s26 = planQuizByFacts(mk(26));
-    expect(s26).toHaveLength(25);
-    expect(nonNullFacts(s26)).toEqual(Array.from({ length: 25 }, (_, i) => `fact number ${i}`)); // first 25 in listed order
+    expect(s26).toHaveLength(26);
+    expect(nonNullFacts(s26)).toEqual(Array.from({ length: 26 }, (_, i) => `fact number ${i}`));
   });
 
-  it("a stressed slide with 30 facts alone is cut to 25, in order, all from that slide", () => {
+  it("a stressed slide with 30 facts alone gets all 30, in order, all from that slide", () => {
     const s = planQuizByFacts([slide(9, Array.from({ length: 30 }, (_, i) => `fact number ${i}`), { emphasized: true })]);
-    expect(s).toHaveLength(25);
+    expect(s).toHaveLength(30);
     expect(new Set(s.map((x) => x.page))).toEqual(new Set([9]));
-    expect(nonNullFacts(s)[24]).toBe("fact number 24");
+    expect(nonNullFacts(s)[29]).toBe("fact number 29");
   });
 
-  it("ceiling cut: stressed first, then case slides, then slide order; output stays in slide order", () => {
+  it("an explicit smaller size cuts: stressed first, then case slides, then slide order; output stays in slide order", () => {
     const slides = [
       ...Array.from({ length: 10 }, (_, i) => slide(i + 1, [`p${i}a`, `p${i}b`, `p${i}c`])), // plain
       slide(11, ["case1", "case2", "case3"], { hasCase: true }),
       slide(12, ["star1", "star2", "star3"], { emphasized: true }),
-    ]; // 36 facts → 25
-    const s = planQuizByFacts(slides);
+    ]; // 36 facts → 25 when 25 are asked for (the default is all 36)
+    expect(planQuizByFacts(slides)).toHaveLength(36);
+    const s = planQuizByFacts(slides, 25);
     expect(s).toHaveLength(25);
     const facts = nonNullFacts(s);
     for (const f of ["star1", "star2", "star3", "case1", "case2", "case3"]) expect(facts).toContain(f);
@@ -218,13 +216,13 @@ describe("B: planQuizByFacts", () => {
     expect(facts.filter((f) => f.startsWith("p"))).toEqual(Array.from({ length: 19 }, (_, i) => `p${Math.floor(i / 3)}${"abc"[i % 3]}`));
   });
 
-  it("emphasized+case outranks emphasized-only and case-only when cutting", () => {
+  it("emphasized+case outranks emphasized-only and case-only when an explicit size cuts", () => {
     const slides = [
       slide(1, Array.from({ length: 10 }, (_, i) => `a${i}`), { emphasized: true }),
       slide(2, Array.from({ length: 10 }, (_, i) => `b${i}`), { hasCase: true }),
       slide(3, Array.from({ length: 10 }, (_, i) => `c${i}`), { emphasized: true, hasCase: true }),
     ];
-    const f = nonNullFacts(planQuizByFacts(slides));
+    const f = nonNullFacts(planQuizByFacts(slides, 25));
     expect(f.filter((x) => x.startsWith("c"))).toHaveLength(10);
     expect(f.filter((x) => x.startsWith("a"))).toHaveLength(10);
     expect(f.filter((x) => x.startsWith("b"))).toHaveLength(5);
@@ -241,8 +239,7 @@ describe("B: planQuizByFacts", () => {
       const size = quizSize(slides);
       const s = planQuizByFacts(slides);
       expect(s.length, JSON.stringify(slides)).toBe(size);
-      expect(size).toBeGreaterThanOrEqual(QUIZ_MIN);
-      expect(size).toBeLessThanOrEqual(QUIZ_MAX);
+      expect(size).toBeGreaterThanOrEqual(1);
       const facts = nonNullFacts(s).map(normStem);
       expect(new Set(facts).size, JSON.stringify(slides)).toBe(facts.length);
       for (const x of s) {
@@ -257,19 +254,6 @@ describe("B: planQuizByFacts", () => {
     expect(new Set(s.map((x) => x.angle))).toEqual(new Set(["recall", "apply", "compare"]));
   });
 
-  it("floor: a 5-fact list slide gets a 'not' extra only when the slide is a list (4+ facts)", () => {
-    const withList = planQuizByFacts([slide(1, ["a1", "a2", "a3", "a4"])]);
-    expect(withList).toHaveLength(5);
-    const noList = planQuizByFacts([slide(1, ["a1", "a2", "a3"])]);
-    expect(noList.some((x) => x.angle === "not")).toBe(false);
-  });
-
-});
-
-// ---------------------------------------------------------------------------------------------------------------
-// B — generateSectionQuiz with a mocked writer
-// ---------------------------------------------------------------------------------------------------------------
-describe("B: generateSectionQuiz", () => {
   it("names each fact once in the prompts, writers use the quality tier, the checker does not", async () => {
     const w = world(5);
     await getSectionQuiz(w.topic());
@@ -320,12 +304,12 @@ describe("B: generateSectionQuiz", () => {
     expect(prompt.match(/^Q99:/gm)).toBeNull();
   });
 
-  it("0 content slides (empty topic): 5 general questions, page null, no crash", async () => {
+  it("0 content slides (empty topic): one general question, page null, no crash", async () => {
     const userId = makeUser();
     const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
     const topicId = Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, 0, 'T', 's', '[]')").run(examId).lastInsertRowid);
     const qs = await getSectionQuiz(db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId) as Topic);
-    expect(qs).toHaveLength(5);
+    expect(qs).toHaveLength(1);
     expect(qs.every((q) => q.source_page_id == null)).toBe(true);
     expect(calls[0].content).toMatch(/Q1: the section — /);
   });

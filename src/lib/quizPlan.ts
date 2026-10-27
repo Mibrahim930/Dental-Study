@@ -78,12 +78,12 @@ export type FactSlide = PlanSlide & { facts: string[] };
 /** One planned question: the slide, the exact fact it must test (null = the slide in general), and the angle. */
 export type FactSlot = { page: number | null; fact: string | null; angle: Angle };
 
-export const QUIZ_MIN = 5;
-export const QUIZ_MAX = 25;
-
-/** Distinct facts across the slides (a slide with no listed facts counts as one), clamped to [QUIZ_MIN, QUIZ_MAX]. */
-export function quizSize(slides: Pick<FactSlide, "facts">[], min = QUIZ_MIN, max = QUIZ_MAX): number {
-  if (slides.length === 0) return min;
+/**
+ * How many questions a section quiz has: one per distinct fact across its slides (a slide with no listed facts counts
+ * as one), at least one. No floor and no cap: a section with little material gets a short quiz, and a big one is covered
+ * whole (padding a small section used to make the writer repeat itself).
+ */
+export function quizSize(slides: Pick<FactSlide, "facts">[]): number {
   const seen = new Set<string>();
   let n = 0;
   for (const s of slides) {
@@ -95,14 +95,13 @@ export function quizSize(slides: Pick<FactSlide, "facts">[], min = QUIZ_MIN, max
       n++;
     }
   }
-  return Math.min(max, Math.max(min, n));
+  return Math.max(1, n);
 }
 
 /**
- * One slot per distinct fact, in slide order (facts in the order the slide lists them). When the ceiling cuts, the
- * facts of professor-stressed slides survive first, then case slides, then slide order. When there are fewer facts than
- * the floor, the most important slides get extra slots that take a different angle on the slide as a whole (fact null);
- * the writer is told not to repeat an earlier fact.
+ * One slot per distinct fact, in slide order (facts in the order the slide lists them). A smaller `size` keeps the most
+ * important facts (professor-stressed slides first, then case slides, then slide order). Never more slots than facts:
+ * extra slots with no fact pinned only made the writer repeat itself.
  */
 export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): FactSlot[] {
   if (size <= 0) return [];
@@ -150,18 +149,6 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): F
     angle: x.slide.hasCase ? "apply" : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall",
   }));
 
-  // Too few facts for the floor: extra slots on the most important slides, cycling through the other angles, no fact
-  // pinned (the writer is told not to repeat a fact). Always reaches the floor: only "not" is ever skipped.
-  if (slots.length < size) {
-    const ranked = byImportance(slides);
-    const extra: Angle[] = ["apply", "compare", "not", "recall"];
-    for (let k = 0; slots.length < size; k++) {
-      const s = ranked[k % ranked.length];
-      const angle = extra[Math.floor(k / ranked.length) % extra.length];
-      if (angle === "not" && !isList(s)) continue;
-      slots.push({ page: s.id, fact: null, angle });
-    }
-  }
   return slots;
 }
 

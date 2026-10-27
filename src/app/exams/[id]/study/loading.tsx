@@ -1,4 +1,4 @@
-/** Study page skeleton: topic list (desktop), topic hero + lesson shimmer, and the tutor column (desktop). */
+/** Study page skeleton: topic list (desktop), topic hero + lesson shimmer. */
 export default function Loading() {
   return (
     <div className="flex flex-col gap-2.5 sm:gap-4" aria-busy="true">
@@ -11,7 +11,7 @@ export default function Loading() {
       </div>
       <div className="shimmer h-2 w-full rounded-full lg:hidden bg-muted-strong" />
 
-      <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,1fr)_380px]">
+      <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,860px)] lg:justify-center">
         <div className="card hidden flex-col gap-2 p-2.5 lg:flex">
           {[0, 1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="shimmer h-10 w-full rounded-[16px]" />
@@ -34,8 +34,6 @@ export default function Loading() {
             <div className="shimmer h-[54px] rounded-[18px] bg-muted-strong" />
           </div>
         </div>
-
-        <div className="hidden h-[calc(100vh-2rem)] rounded-[28px] bg-nav lg:block" />
       </div>
     </div>
   );

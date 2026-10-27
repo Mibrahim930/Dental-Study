@@ -1,20 +1,20 @@
-// Release 3, Job B: a section quiz has about one question per distinct fact (floor 5, ceiling 25), never the same fact twice.
+// Release 3, Job B: a section quiz has exactly one question per distinct fact (no floor, no cap since the repeat-question fix), never the same fact twice.
 import { describe, expect, it } from "vitest";
-import { planQuizByFacts, QUIZ_MAX, QUIZ_MIN, quizSize, type FactSlide } from "@/lib/quizPlan";
+import { planQuizByFacts, quizSize, type FactSlide } from "@/lib/quizPlan";
 
 const slide = (id: number, facts: string[], extra: Partial<FactSlide> = {}): FactSlide => ({ id, keyFacts: facts.length, emphasized: false, hasCase: false, facts, ...extra });
 
 describe("quizSize", () => {
-  it("counts distinct facts, floor 5, ceiling 25", () => {
-    expect(quizSize([])).toBe(QUIZ_MIN);
-    expect(quizSize([slide(1, ["a", "b"])])).toBe(QUIZ_MIN);
+  it("counts distinct facts: no floor (a small section gets a short quiz), no cap (a big one is covered whole), at least 1", () => {
+    expect(quizSize([])).toBe(1);
+    expect(quizSize([slide(1, ["a", "b"])])).toBe(2);
     expect(quizSize([slide(1, ["a", "b", "c"]), slide(2, ["d", "e", "f", "g"])])).toBe(7);
     const dense = Array.from({ length: 10 }, (_, i) => slide(i + 1, ["p", "q", "r", "s"].map((f) => `${f}${i}`)));
-    expect(quizSize(dense)).toBe(QUIZ_MAX);
+    expect(quizSize(dense)).toBe(40);
   });
 
   it("the same fact on two slides counts once; a slide with no facts counts once", () => {
-    expect(quizSize([slide(1, ["Apical constriction is 0.5-1 mm from the foramen"]), slide(2, ["apical constriction is 0.5-1 mm from the foramen!"]), slide(3, [])])).toBe(QUIZ_MIN);
+    expect(quizSize([slide(1, ["Apical constriction is 0.5-1 mm from the foramen"]), slide(2, ["apical constriction is 0.5-1 mm from the foramen!"]), slide(3, [])])).toBe(2);
     const six = [slide(1, ["a", "b", "c"]), slide(2, ["A", "d", "e"]), slide(3, ["f"]), slide(4, [])];
     expect(quizSize(six)).toBe(7); // a b c d e f + one for the empty slide
   });
@@ -36,7 +36,7 @@ describe("planQuizByFacts", () => {
     expect(slots.map((s) => s.fact)).toEqual(["x", "y", "z"]);
   });
 
-  it("when the ceiling cuts, stressed slides' facts survive first, then case slides, back in slide order", () => {
+  it("with an explicit smaller size, stressed slides' facts survive first, then case slides, back in slide order", () => {
     const slides = [
       slide(1, ["a1", "a2", "a3"]),
       slide(2, ["b1", "b2"], { emphasized: true }),
@@ -51,25 +51,18 @@ describe("planQuizByFacts", () => {
     expect(facts.indexOf("b1")).toBeLessThan(facts.indexOf("c1"));
   });
 
-  it("below the floor, extra slots take other angles on the most important slides without pinning a fact", () => {
+  it("never more slots than facts: a small section gets a short quiz, nothing is padded (padding made the writer repeat itself)", () => {
     const slots = planQuizByFacts([slide(1, ["only fact"], { emphasized: true }), slide(2, [])]);
-    expect(slots).toHaveLength(QUIZ_MIN);
-    expect(slots.filter((s) => s.fact === "only fact")).toHaveLength(1);
-    const extras = slots.slice(2);
-    expect(extras.every((s) => s.fact === null)).toBe(true);
-    expect(extras[0].page).toBe(1); // the stressed slide first
-    expect(extras.every((s) => s.angle !== "not")).toBe(true); // "which is NOT" only for list slides (4+ facts)
+    expect(slots).toHaveLength(2); // the fact, plus the fact-less slide in general
+    expect(slots[0]).toMatchObject({ page: 1, fact: "only fact" });
+    expect(slots[1]).toMatchObject({ page: 2, fact: null });
+    expect(planQuizByFacts([slide(1, ["a", "b"])])).toHaveLength(2);
+    expect(planQuizByFacts([slide(1, [])])).toHaveLength(1);
+    expect(planQuizByFacts([slide(1, ["a", "b"])], 10)).toHaveLength(2); // an explicit size can't add questions either
   });
 
-  it("a one-slide section still reaches the floor (BUG found by QA: the extra-slot loop used to give up early)", () => {
-    expect(planQuizByFacts([slide(1, ["a", "b"])])).toHaveLength(QUIZ_MIN);
-    expect(planQuizByFacts([slide(1, [])])).toHaveLength(QUIZ_MIN);
-    const two = planQuizByFacts([slide(1, ["only"]), slide(2, [])]);
-    expect(two).toHaveLength(QUIZ_MIN);
-    expect(two.every((s) => s.page === 1 || s.page === 2)).toBe(true);
-  });
-
-  it("with no slides, slots test the topic in general", () => {
+  it("with no slides, one slot tests the topic in general (more only when a size is asked for)", () => {
+    expect(planQuizByFacts([])).toHaveLength(1);
     const slots = planQuizByFacts([], 5);
     expect(slots).toHaveLength(5);
     expect(slots.every((s) => s.page === null && s.fact === null)).toBe(true);
@@ -77,7 +70,7 @@ describe("planQuizByFacts", () => {
 
   it("respects an explicit size and never exceeds it", () => {
     const dense = Array.from({ length: 10 }, (_, i) => slide(i + 1, ["p", "q", "r", "s"].map((f) => `${f}${i}`)));
-    expect(planQuizByFacts(dense)).toHaveLength(QUIZ_MAX);
+    expect(planQuizByFacts(dense)).toHaveLength(40);
     expect(planQuizByFacts(dense, 8)).toHaveLength(8);
     expect(planQuizByFacts(dense, 0)).toEqual([]);
   });
