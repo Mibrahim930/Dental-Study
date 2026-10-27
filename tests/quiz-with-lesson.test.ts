@@ -51,7 +51,7 @@ import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { makeUser } from "./helpers";
 
 const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: ["a", "b"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`a${i}`, `b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
 
 function world(topics = 2) {
   const userId = makeUser();

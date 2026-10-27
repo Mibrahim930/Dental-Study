@@ -106,7 +106,7 @@ import { examProgress } from "@/lib/readiness";
 import { makeUser } from "./helpers";
 
 const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: ["a", "b"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`a${i}`, `b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
 
 function quizWorld(topics = 2) {
   const userId = makeUser();
@@ -257,7 +257,8 @@ describe("job 2: quiz started with the lesson, under concurrency", () => {
   it("a prefetch of a topic with an out-of-date quiz (older QUIZ_VERSION) does not rewrite it; a real open does, once", async () => {
     const w = quizWorld();
     const old = JSON.stringify([{ id: "old1", question: "q", options: ["a", "b"], correct_index: 0, explanation: "e", concept: "C", source_page_id: null, image_page_id: null, kind: "recall" }]);
-    db.prepare("UPDATE topics SET checks_json = ?, checks_version = ? WHERE id = ?").run(old, QUIZ_VERSION - 1, w.topicIds[1]);
+    // Version 2: always rewritten (a version-3 quiz on a section with 5-25 facts, like this one, is kept on purpose).
+    db.prepare("UPDATE topics SET checks_json = ?, checks_version = 2 WHERE id = ?").run(old, w.topicIds[1]);
     expect((await lesson(w.sessionId, 1, true)).status).toBe(200);
     await tick();
     expect(quizWrites()).toBe(0);

@@ -116,15 +116,20 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): F
     // Whitespace collapsed (a fact is one line in the writer's plan); a fact repeated on this or an earlier slide, or one
     // that is only punctuation, is not a slot.
     const facts: string[] = [];
+    let listed = 0; // real facts on this slide, repeats included
     for (const raw of s.facts) {
       const f = raw.replace(/\s+/g, " ").trim();
       const key = normStem(f);
-      if (!key || seen.has(key)) continue;
+      if (!key) continue;
+      listed++;
+      if (seen.has(key)) continue;
       seen.add(key);
       facts.push(f);
     }
+    // A slide with no real facts is tested in general (one slot). A recap slide whose facts all repeat earlier slides
+    // adds nothing: its facts already have their slots (quizSize counts it the same way).
     if (facts.length === 0) {
-      all.push({ slide: s, fact: null });
+      if (listed === 0) all.push({ slide: s, fact: null });
       continue;
     }
     for (const f of facts) all.push({ slide: s, fact: f });

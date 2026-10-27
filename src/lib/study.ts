@@ -459,7 +459,8 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   };
 
   const all = slots.map((_, i) => i);
-  const halves = [all.slice(0, Math.ceil(all.length / 2)), all.slice(Math.ceil(all.length / 2))].filter((h) => h.length);
+  // Two writer calls run side by side for a quiz of any size; a small one (up to 4 questions) is one call.
+  const halves = all.length <= 4 ? [all] : [all.slice(0, Math.ceil(all.length / 2)), all.slice(Math.ceil(all.length / 2))];
   const settled = await Promise.allSettled(halves.map((h) => write(h, [])));
   const first = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
   if (first.length === 0 && settled.every((r) => r.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;

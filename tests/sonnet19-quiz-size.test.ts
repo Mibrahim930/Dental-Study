@@ -155,7 +155,7 @@ describe("quizSize / planQuizByFacts edge cases", () => {
     expect(mixed.every((s) => s.angle !== ("not" as string))).toBe(true);
   });
 
-  it("BUG: a slide whose every fact repeats an earlier slide adds a phantom general slot, so the default plan cuts a real fact", () => {
+  it("a slide whose every fact repeats an earlier slide (a recap) adds no slot, so no real fact is cut", () => {
     // quizSize counts 2 (a, b); planQuizByFacts lists a, b plus a fact-less slot for slide 2 = 3 > size, then cuts one.
     const slides = [slide(1, ["a"]), slide(2, ["a"]), slide(3, ["b"])];
     expect(quizSize(slides)).toBe(2);
