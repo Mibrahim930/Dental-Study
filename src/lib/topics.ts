@@ -5,7 +5,7 @@ import { rebuildPlan } from "./planner";
 import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { upsertConcept } from "./memory";
-import { cleanTopics, matchTopics, sameSlides, type SlideRef } from "./topicMerge";
+import { capSections, cleanTopics, matchTopics, MAX_SECTIONS, sameSlides, type SlideRef } from "./topicMerge";
 
 const TopicFields = {
   title: z.string().describe("Short, specific name for what this section teaches"),
@@ -21,6 +21,7 @@ const TopicMap = z.object({ topics: z.array(z.object(TopicFields)).describe("The
 const SYSTEM = `You split ONE lecture of a dental student's slides into study sections. The student studies the exam lecture by lecture, section by section.
 Rules:
 - Split this lecture into sections that follow the lecture's own structure (its headings/agenda). Typically 3-10 slides per section; a short lecture may be one section.
+- At most ${MAX_SECTIONS} sections per lecture. A long lecture gets bigger sections (its main chapters) so it still fits in ${MAX_SECTIONS}; never more.
 - Sections stay in slide order: list them in the order the lecture teaches them, each one a run of neighbouring slides.
 - Every slide ID listed must appear in exactly one section. Skip none, and use only the IDs listed.
 - Concepts are short canonical names (e.g. "Symptomatic irreversible pulpitis", "Cvek pulpotomy", "Inferior alveolar nerve block").
@@ -142,7 +143,8 @@ const existingConcepts = (userId: number) =>
 
 /**
  * One AI call for one lecture, with only that lecture's slides. Ids outside the lecture are dropped and every slide
- * of it lands in exactly one section (`cleanTopics`); sections come back in slide order with their slides in order.
+ * of it lands in exactly one section (`cleanTopics`); sections come back in slide order with their slides in order,
+ * and never more than MAX_SECTIONS of them (`capSections` joins neighbours when the AI over-splits anyway).
  * Returns [] when the AI placed nothing usable.
  */
 async function mapLecture(userId: number, lecture: Lecture, concepts: string[]): Promise<Section[]> {
@@ -157,7 +159,7 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
       `Existing concepts from earlier exams (${concepts.length}):\n${concepts.join("\n") || "(none yet)"}\n\n` +
       `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}`,
   });
-  return inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture);
+  return capSections(inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture));
 }
 
 /** Sort a lecture's sections (and the slides inside each) by slide number, and tag them with the lecture. */

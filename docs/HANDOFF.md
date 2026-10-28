@@ -142,8 +142,10 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   (`notes_json` per page: title, summary, key_facts, emphasis, case prompt, image description/crop box), lecture removal.
   `pdf.ts` also sniffs file types, re-encodes photos to JPEG and refuses pictures over 40 megapixels before decoding.
 - `src/lib/topics.ts` + `topicMerge.ts` + `lectures.ts` — the topic map **by lecture** (one AI call per lecture, sections in
-  slide order, `topics.document_id`), "auto" after an upload maps only new lectures, "full" (Rebuild) keeps matching
-  topic ids, `rebuildLectureMaps` one-time start-up upgrade (retried up to 3 starts), `refileQuestions`.
+  slide order, `topics.document_id`, at most `MAX_SECTIONS` = 10 per lecture: the prompt says so and `capSections`
+  joins the smallest neighbouring pairs if the AI over-splits anyway), "auto" after an upload maps only new lectures,
+  "full" (Rebuild) keeps matching topic ids, `rebuildLectureMaps` one-time start-up upgrade (retried up to 3 starts),
+  `refileQuestions`. Lectures mapped before the cap keep their sections until Rebuild is pressed on that exam.
 - `src/lib/study.ts` — lessons (`LESSON_VERSION` 3 stored inside `lesson_json`: `{ intro, slides: [{ page_id,
   explanation }], key_points, connections }`, written and shown slide by slide in plain words; a slide with facts that
   gets no entry triggers one repair call; coverage helpers in `lessonCoverage.ts`), section quizzes (`QUIZ_VERSION` 3: one question per distinct fact,

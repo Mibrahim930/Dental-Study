@@ -52,6 +52,36 @@ export function cleanTopics<T>(topics: DraftTopic<T>[], slides: SlideRef[]): Dra
   return out.filter((t) => t.page_ids.length > 0);
 }
 
+/** The most sections one lecture may have. */
+export const MAX_SECTIONS = 10;
+
+type Mergeable = { title: string; summary: string; page_ids: number[]; emphasized: boolean; concepts: string[] };
+
+/**
+ * No more than `max` sections per lecture. While there are too many, the two neighbouring sections with the fewest
+ * slides between them become one (so the sections stay about even and in slide order): its slides run on, the titles
+ * join with " & ", the summaries follow each other, the concepts pool. `sections` must be in slide order.
+ */
+export function capSections<T extends Mergeable>(sections: T[], max = MAX_SECTIONS): T[] {
+  const out = sections.map((s) => ({ ...s }));
+  while (out.length > Math.max(1, max)) {
+    let at = 0;
+    for (let i = 1; i < out.length - 1; i++) {
+      if (out[i].page_ids.length + out[i + 1].page_ids.length < out[at].page_ids.length + out[at + 1].page_ids.length) at = i;
+    }
+    const [a, b] = [out[at], out[at + 1]];
+    out.splice(at, 2, {
+      ...a,
+      title: `${a.title.trim()} & ${b.title.trim()}`,
+      summary: [a.summary.trim(), b.summary.trim()].filter(Boolean).join(" "),
+      page_ids: [...a.page_ids, ...b.page_ids],
+      emphasized: a.emphasized || b.emphasized,
+      concepts: [...new Set([...a.concepts, ...b.concepts])],
+    });
+  }
+  return out;
+}
+
 /**
  * Which old topic each new topic continues. A pair matches when they share at least half of each one's slides;
  * each old topic is used at most once, biggest overlaps first. Returns new-topic index -> old topic id.
