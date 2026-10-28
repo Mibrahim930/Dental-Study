@@ -136,11 +136,11 @@ describe("B: quizSize", () => {
   it("facts that normalise to nothing count like a slide with no facts (1)", () => {
     expect(quizSize([{ facts: ["—", "  ", "!!!"] }, { facts: [] }, { facts: ["real fact"] }, { facts: ["a"] }, { facts: ["b"] }, { facts: ["c"] }])).toBe(6);
   });
-  it("exactly 4 / 5 / 25 / 26 distinct facts: one question each, no clamp", () => {
+  it("exactly 4 / 5 / 25 / 26 distinct facts: one question each up to the cap of 25", () => {
     const f = (n: number) => [{ facts: Array.from({ length: n }, (_, i) => `fact number ${i}`) }];
     expect(quizSize(f(5))).toBe(5);
     expect(quizSize(f(25))).toBe(25);
-    expect(quizSize(f(26))).toBe(26);
+    expect(quizSize(f(26))).toBe(25);
     expect(quizSize(f(4))).toBe(4);
   });
   it("a slide that lists the same fact twice counts it once", () => {
@@ -183,20 +183,22 @@ describe("B: planQuizByFacts", () => {
     expect(nonNullFacts(s).map(normStem).filter((f) => f === "pulp chamber roof")).toHaveLength(1);
   });
 
-  it("exactly 5 / 25 / 26 facts: one slot each, no cap, in listed order", () => {
+  it("exactly 5 / 25 / 26 facts: one slot each up to 25; the 26th is condensed into a two-fact slot, listed order kept", () => {
     const mk = (n: number) => [slide(1, Array.from({ length: n }, (_, i) => `fact number ${i}`))];
     expect(planQuizByFacts(mk(5))).toHaveLength(5);
     expect(planQuizByFacts(mk(25))).toHaveLength(25);
     const s26 = planQuizByFacts(mk(26));
-    expect(s26).toHaveLength(26);
-    expect(nonNullFacts(s26)).toEqual(Array.from({ length: 26 }, (_, i) => `fact number ${i}`));
+    expect(s26).toHaveLength(25);
+    expect(s26.flatMap((x) => x.facts)).toEqual(Array.from({ length: 26 }, (_, i) => `fact number ${i}`));
+    expect(s26.filter((x) => x.facts.length === 2)).toHaveLength(1);
   });
 
-  it("a stressed slide with 30 facts alone gets all 30, in order, all from that slide", () => {
+  it("a stressed slide with 30 facts alone: 25 slots, all from that slide, all 30 facts in order", () => {
     const s = planQuizByFacts([slide(9, Array.from({ length: 30 }, (_, i) => `fact number ${i}`), { emphasized: true })]);
-    expect(s).toHaveLength(30);
+    expect(s).toHaveLength(25);
     expect(new Set(s.map((x) => x.page))).toEqual(new Set([9]));
-    expect(nonNullFacts(s)[29]).toBe("fact number 29");
+    expect(s.flatMap((x) => x.facts).at(-1)).toBe("fact number 29");
+    expect(s.flatMap((x) => x.facts)).toHaveLength(30);
   });
 
   it("an explicit smaller size cuts: stressed first, then case slides, then slide order; output stays in slide order", () => {
@@ -204,9 +206,9 @@ describe("B: planQuizByFacts", () => {
       ...Array.from({ length: 10 }, (_, i) => slide(i + 1, [`p${i}a`, `p${i}b`, `p${i}c`])), // plain
       slide(11, ["case1", "case2", "case3"], { hasCase: true }),
       slide(12, ["star1", "star2", "star3"], { emphasized: true }),
-    ]; // 36 facts → 25 when 25 are asked for (the default is all 36)
-    expect(planQuizByFacts(slides)).toHaveLength(36);
-    const s = planQuizByFacts(slides, 25);
+    ]; // 36 facts → 25 slots (condensed by default; cut when asked for)
+    expect(planQuizByFacts(slides).flatMap((x) => x.facts)).toHaveLength(36);
+    const s = planQuizByFacts(slides, 25, "cut");
     expect(s).toHaveLength(25);
     const facts = nonNullFacts(s);
     for (const f of ["star1", "star2", "star3", "case1", "case2", "case3"]) expect(facts).toContain(f);
@@ -222,13 +224,13 @@ describe("B: planQuizByFacts", () => {
       slide(2, Array.from({ length: 10 }, (_, i) => `b${i}`), { hasCase: true }),
       slide(3, Array.from({ length: 10 }, (_, i) => `c${i}`), { emphasized: true, hasCase: true }),
     ];
-    const f = nonNullFacts(planQuizByFacts(slides, 25));
+    const f = nonNullFacts(planQuizByFacts(slides, 25, "cut"));
     expect(f.filter((x) => x.startsWith("c"))).toHaveLength(10);
     expect(f.filter((x) => x.startsWith("a"))).toHaveLength(10);
     expect(f.filter((x) => x.startsWith("b"))).toHaveLength(5);
   });
 
-  it("invariants over 4000 random section shapes: exact size, floor/ceiling, unique facts, 'not' only on 4+-fact slides", () => {
+  it("invariants over 4000 random section shapes: exact size, cap, every fact in one slot, unique facts, 'not' only on multi-fact slots", () => {
     let seed = 12345;
     const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n);
     for (let t = 0; t < 4000; t++) {
@@ -240,11 +242,12 @@ describe("B: planQuizByFacts", () => {
       const s = planQuizByFacts(slides);
       expect(s.length, JSON.stringify(slides)).toBe(size);
       expect(size).toBeGreaterThanOrEqual(1);
-      const facts = nonNullFacts(s).map(normStem);
+      expect(size).toBeLessThanOrEqual(25);
+      const facts = s.flatMap((x) => x.facts).map(normStem);
       expect(new Set(facts).size, JSON.stringify(slides)).toBe(facts.length);
       for (const x of s) {
         if (n > 0) expect(slides.some((sl) => sl.id === x.page)).toBe(true);
-        if (x.angle === "not") expect(slides.find((sl) => sl.id === x.page)!.facts.length).toBeGreaterThanOrEqual(4);
+        if (x.angle === "not") expect(x.facts.length).toBeGreaterThanOrEqual(2);
       }
     }
   });

@@ -69,7 +69,7 @@ import { makeUser } from "./helpers";
 const notes = (i: number) =>
   JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact a${i}`, `fact b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
 /** The planned quiz size for an n-slide world. */
-const sizeFor = (n: number) => (n === 0 ? 1 : 2 * n);
+const sizeFor = (n: number) => (n === 0 ? 1 : Math.min(25, 2 * n));
 function world(n: number, userId = makeUser()) {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
   const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status) VALUES (?, 'L1.pdf', 'done')").run(examId).lastInsertRowid);
@@ -98,14 +98,14 @@ afterEach(() => {
 });
 
 describe("quiz sizes", () => {
-  // [slides, expected size, slides tested]: exactly two questions per slide, every slide tested, however many.
+  // [slides, expected size, slides tested]: two questions per slide up to 25, then condensed; every slide still tested.
   for (const [n, size, tested] of [
     [1, 2, 1],
     [2, 4, 2],
     [3, 6, 3],
     [12, 24, 12],
-    [13, 26, 13],
-    [21, 42, 21],
+    [13, 25, 13],
+    [21, 25, 21],
   ]) {
     it(`${n}-slide topic gives ${size} distinct questions, all citing the topic's slides`, async () => {
       expect(sizeFor(n)).toBe(size);
@@ -224,7 +224,7 @@ describe("the checking pass", () => {
     expect(qs).toHaveLength(half);
     expect(calls.filter((c) => c.purpose === "section quiz")).toHaveLength(3);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(QUIZ_VERSION).toBe(4);
+    expect(QUIZ_VERSION).toBe(5);
   });
 
   it("judge rejects ok:false for the same question twice in verdicts - no double count", async () => {

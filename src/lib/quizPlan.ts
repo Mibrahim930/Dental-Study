@@ -75,15 +75,18 @@ export function planQuiz(slides: PlanSlide[], size: number): Slot[] {
 /** A slide with the facts its notes list. */
 export type FactSlide = PlanSlide & { facts: string[] };
 
-/** One planned question: the slide, the exact fact it must test (null = the slide in general), and the angle. */
-export type FactSlot = { page: number | null; fact: string | null; angle: Angle };
-
 /**
- * How many questions a section quiz has: one per distinct fact across its slides (a slide with no listed facts counts
- * as one), at least one. No floor and no cap: a section with little material gets a short quiz, and a big one is covered
- * whole (padding a small section used to make the writer repeat itself).
+ * One planned question: the slide, the fact(s) it must test, and the angle. `facts` is empty for "the slide in
+ * general"; with several facts the writer makes one question that needs all of them. `fact` is the first of them (or
+ * null), kept for the single-fact case. `pages` lists every slide the facts come from when a slot spans two.
  */
-export function quizSize(slides: Pick<FactSlide, "facts">[]): number {
+export type FactSlot = { page: number | null; pages?: number[]; fact: string | null; facts: string[]; angle: Angle };
+
+/** The most questions a section quiz has: a denser section condenses several facts into one question. */
+export const QUIZ_MAX = 25;
+
+/** Distinct facts across the slides (a slide with no listed facts counts as one), at least one. */
+export function distinctFacts(slides: Pick<FactSlide, "facts">[]): number {
   const seen = new Set<string>();
   let n = 0;
   for (const s of slides) {
@@ -99,19 +102,42 @@ export function quizSize(slides: Pick<FactSlide, "facts">[]): number {
 }
 
 /**
- * One slot per distinct fact, in slide order (facts in the order the slide lists them). A smaller `size` keeps the most
- * important facts (professor-stressed slides first, then case slides, then slide order). Never more slots than facts:
- * extra slots with no fact pinned only made the writer repeat itself.
+ * How many questions a section quiz has: one per distinct fact, up to QUIZ_MAX. No floor (a section with little
+ * material gets a short quiz; padding made the writer repeat itself). Past the cap the material is still covered whole:
+ * the planner condenses it, several related facts to a question, so a dense section is 25 questions, not 48.
  */
-export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): FactSlot[] {
-  if (size <= 0) return [];
+export function quizSize(slides: Pick<FactSlide, "facts">[]): number {
+  return Math.min(QUIZ_MAX, distinctFacts(slides));
+}
+
+type Entry = { slide: FactSlide; fact: string | null };
+
+/** `n` consecutive chunks of a list, as even as possible, in order. */
+function chunks<T>(list: T[], n: number): T[][] {
+  const out: T[][] = [];
+  const size = list.length / n;
+  for (let i = 0; i < n; i++) out.push(list.slice(Math.round(i * size), Math.round((i + 1) * size)));
+  return out.filter((c) => c.length > 0);
+}
+
+/**
+ * The plan: every distinct fact once, in slide order (facts in the order the slide lists them), one slot each when they
+ * fit in `size`. When there are more facts than slots, the facts are condensed, not dropped: each slide gets slots in
+ * proportion to its facts (at least one), and a slot holding several facts asks for one question that needs all of
+ * them. A section with more fact-bearing slides than slots condenses across neighbouring slides instead.
+ * `mode: "cut"` keeps the old behaviour for a smaller size: the most important facts survive (professor-stressed
+ * slides first, then case slides, then slide order), the rest are left out.
+ */
+export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides), mode: "condense" | "cut" = "condense"): FactSlot[] {
+  if (!(size > 0)) return [];
+  size = Math.floor(size);
   if (slides.length === 0) {
-    return Array.from({ length: size }, (_, i) => ({ page: null, fact: null, angle: (["recall", "apply", "compare"] as Angle[])[i % 3] }));
+    return Array.from({ length: size }, (_, i) => ({ page: null, fact: null, facts: [], angle: (["recall", "apply", "compare"] as Angle[])[i % 3] }));
   }
 
   // Every distinct fact once, remembering which slide first listed it.
   const seen = new Set<string>();
-  const all: { slide: FactSlide; fact: string | null }[] = [];
+  const all: Entry[] = [];
   for (const s of slides) {
     // Whitespace collapsed (a fact is one line in the writer's plan); a fact repeated on this or an earlier slide, or one
     // that is only punctuation, is not a slot.
@@ -127,7 +153,7 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): F
       facts.push(f);
     }
     // A slide with no real facts is tested in general (one slot). A recap slide whose facts all repeat earlier slides
-    // adds nothing: its facts already have their slots (quizSize counts it the same way).
+    // adds nothing: its facts already have their slots (distinctFacts counts it the same way).
     if (facts.length === 0) {
       if (listed === 0) all.push({ slide: s, fact: null });
       continue;
@@ -135,26 +161,62 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides)): F
     for (const f of facts) all.push({ slide: s, fact: f });
   }
 
-  let chosen = all;
-  if (all.length > size) {
+  let groups: Entry[][];
+  if (all.length <= size) {
+    groups = all.map((e) => [e]);
+  } else if (mode === "cut") {
     // Keep the `size` most important (stressed slides first, then case slides, then slide order), back in slide order.
-    const rank = (x: (typeof all)[number]) => (x.slide.emphasized ? 0 : 2) + (x.slide.hasCase ? 0 : 1);
-    chosen = all
+    const rank = (x: Entry) => (x.slide.emphasized ? 0 : 2) + (x.slide.hasCase ? 0 : 1);
+    groups = all
       .map((x, i) => ({ x, i }))
       .sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i)
       .slice(0, size)
       .sort((a, b) => a.i - b.i)
-      .map((a) => a.x);
+      .map((a) => [a.x]);
+  } else {
+    // Condense. Entries per slide, in order.
+    const bySlide: Entry[][] = [];
+    for (const e of all) {
+      const last = bySlide[bySlide.length - 1];
+      if (last && last[0].slide.id === e.slide.id) last.push(e);
+      else bySlide.push([e]);
+    }
+    if (bySlide.length > size) {
+      // More fact-bearing slides than slots: neighbouring slides share a question.
+      groups = chunks(all, size);
+    } else {
+      // Slots per slide in proportion to its facts, at least one each, adding up to `size` (largest remainders first).
+      const quota = bySlide.map((g) => (g.length * size) / all.length);
+      const slots = quota.map((q) => Math.max(1, Math.floor(q)));
+      let left = size - slots.reduce((a, b) => a + b, 0);
+      const order = quota.map((q, i) => ({ i, r: q - Math.floor(q) })).sort((a, b) => b.r - a.r || a.i - b.i);
+      for (let k = 0; left > 0; k = (k + 1) % order.length) {
+        const i = order[k].i;
+        if (slots[i] < bySlide[i].length) {
+          slots[i]++;
+          left--;
+        } else if (order.every((o) => slots[o.i] >= bySlide[o.i].length)) break;
+      }
+      for (; left < 0; ) {
+        // Rounding gave too many (every slide got its floor of one): take from the slides with the most slots per fact.
+        const i = slots.map((n, i) => ({ i, spare: n - 1, ratio: n / bySlide[i].length })).filter((x) => x.spare > 0).sort((a, b) => b.ratio - a.ratio)[0]?.i;
+        if (i == null) break;
+        slots[i]--;
+        left++;
+      }
+      groups = bySlide.flatMap((g, i) => chunks(g, Math.min(slots[i], g.length)));
+    }
   }
 
   // Vary the angle so a quiz isn't all recall: every second fact is applied, every third compared; case slides apply.
-  const slots: FactSlot[] = chosen.map((x, i) => ({
-    page: x.slide.id,
-    fact: x.fact,
-    angle: x.slide.hasCase ? "apply" : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall",
-  }));
-
-  return slots;
+  // A slot with several facts takes an angle that can hold them all: a comparison, "which is NOT", a vignette.
+  return groups.map((g, i) => {
+    const pages = [...new Set(g.map((e) => e.slide.id))];
+    const facts = g.map((e) => e.fact).filter((f): f is string => f != null);
+    const multi = facts.length > 1;
+    const angle: Angle = g[0].slide.hasCase ? "apply" : multi ? (["compare", "not", "apply"] as Angle[])[i % 3] : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall";
+    return { page: pages[0], ...(pages.length > 1 ? { pages } : {}), fact: facts[0] ?? null, facts, angle };
+  });
 }
 
 /** Normalised question text, to spot the same question written twice. */
@@ -164,5 +226,5 @@ export const ANGLE_TEXT: Record<Angle, string> = {
   recall: "recall of a key fact",
   apply: "apply it: a short clinical vignette or 'which finding / next step'",
   compare: "compare or distinguish it from a related item on the slides",
-  not: "'which is NOT …' over the slide's list",
+  not: "'which is NOT …' / 'all EXCEPT' over the listed facts",
 };

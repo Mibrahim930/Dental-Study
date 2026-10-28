@@ -5,12 +5,12 @@ import { planQuizByFacts, quizSize, type FactSlide } from "@/lib/quizPlan";
 const slide = (id: number, facts: string[], extra: Partial<FactSlide> = {}): FactSlide => ({ id, keyFacts: facts.length, emphasized: false, hasCase: false, facts, ...extra });
 
 describe("quizSize", () => {
-  it("counts distinct facts: no floor (a small section gets a short quiz), no cap (a big one is covered whole), at least 1", () => {
+  it("counts distinct facts: no floor (a small section gets a short quiz), capped at 25 (a bigger one is condensed), at least 1", () => {
     expect(quizSize([])).toBe(1);
     expect(quizSize([slide(1, ["a", "b"])])).toBe(2);
     expect(quizSize([slide(1, ["a", "b", "c"]), slide(2, ["d", "e", "f", "g"])])).toBe(7);
     const dense = Array.from({ length: 10 }, (_, i) => slide(i + 1, ["p", "q", "r", "s"].map((f) => `${f}${i}`)));
-    expect(quizSize(dense)).toBe(40);
+    expect(quizSize(dense)).toBe(25);
   });
 
   it("the same fact on two slides counts once; a slide with no facts counts once", () => {
@@ -43,7 +43,7 @@ describe("planQuizByFacts", () => {
       slide(3, ["c1", "c2"], { hasCase: true }),
       slide(4, ["d1", "d2", "d3"]),
     ];
-    const slots = planQuizByFacts(slides, 5);
+    const slots = planQuizByFacts(slides, 5, "cut");
     expect(slots).toHaveLength(5);
     const facts = slots.map((s) => s.fact);
     expect(facts).toEqual(expect.arrayContaining(["b1", "b2", "c1", "c2"]));
@@ -68,10 +68,17 @@ describe("planQuizByFacts", () => {
     expect(slots.every((s) => s.page === null && s.fact === null)).toBe(true);
   });
 
-  it("respects an explicit size and never exceeds it", () => {
+  it("respects an explicit size and never exceeds it; past the cap the facts are condensed, not dropped", () => {
     const dense = Array.from({ length: 10 }, (_, i) => slide(i + 1, ["p", "q", "r", "s"].map((f) => `${f}${i}`)));
-    expect(planQuizByFacts(dense)).toHaveLength(40);
-    expect(planQuizByFacts(dense, 8)).toHaveLength(8);
+    const all = planQuizByFacts(dense);
+    expect(all).toHaveLength(25);
+    expect(all.flatMap((s) => s.facts)).toHaveLength(40); // every fact is in some slot
+    expect(all.filter((s) => s.facts.length > 1)).toHaveLength(15); // 15 slots carry two facts, 10 carry one
+    expect(all.every((s) => s.facts.length <= 2)).toBe(true);
+    expect(new Set(all.map((s) => s.page)).size).toBe(10); // every slide gets at least one
+    const eight = planQuizByFacts(dense, 8);
+    expect(eight).toHaveLength(8);
+    expect(eight.flatMap((s) => s.facts)).toHaveLength(40);
     expect(planQuizByFacts(dense, 0)).toEqual([]);
   });
 });

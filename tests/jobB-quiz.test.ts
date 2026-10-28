@@ -14,7 +14,7 @@ vi.mock("@/lib/ai", async (orig) => ({
     calls.push({ purpose: opts.purpose, content: opts.content, tier: opts.tier });
     if (opts.purpose === "section quiz") {
       tryNo++;
-      const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]) }));
+      const slots = [...opts.content.matchAll(/^Q(\d+): slides? P(\d+)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]) }));
       return {
         questions: slots.map((s) => ({
           slot: s.n,
@@ -137,7 +137,7 @@ describe("coverage-first section quiz (one question per distinct fact)", () => {
     for (const p of w.pages) expect(tested.has(p), `slide ${p}`).toBe(true);
     expect(qs.every((q) => q.kind)).toBe(true);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(QUIZ_VERSION).toBe(4);
+    expect(QUIZ_VERSION).toBe(5);
   });
 
   it("a version-3 quiz is kept when its section has 5-25 facts (written the same way), rewritten once when it was padded (<5) or cut (>25)", async () => {
@@ -194,22 +194,22 @@ describe("coverage-first section quiz (one question per distinct fact)", () => {
     expect(new Set(facts.map(norm)).size).toBe(facts.length);
   });
 
-  it("25 slides × 2 facts: all 50 facts get a question (no cap), the starred slide's included", async () => {
+  it("25 slides × 2 facts: condensed to 25 questions that still name all 50 facts (two per question), the starred slide's included", async () => {
     const w = world(25, { starred: [24] });
-    expect(w.size).toBe(50);
+    expect(w.size).toBe(25);
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(50);
-    expect(qs.filter((q) => q.source_page_id === w.pages[24])).toHaveLength(2);
-    const facts = writes().flatMap((c) => factsIn(c.content));
-    expect(facts).toEqual(expect.arrayContaining(["fact a24", "fact b24"]));
-    expect(new Set(facts).size).toBe(50);
+    expect(qs).toHaveLength(25);
+    expect(qs.filter((q) => q.source_page_id === w.pages[24])).toHaveLength(1);
+    const prompts = writes().map((c) => c.content).join("\n");
+    for (let i = 0; i < 25; i++) for (const f of [`fact a${i}`, `fact b${i}`]) expect(prompts.match(new RegExp(`"${f}"`, "g"))).toHaveLength(1);
+    expect(prompts).toMatch(/facts: "fact a24"; "fact b24" \(one question that needs all of them\)/);
   });
 
-  it("exactly one question per fact, however few or many: 2 × slides here", async () => {
+  it("one question per fact up to 25, then condensed: 2 × slides here, capped at 25", async () => {
     for (const n of [1, 2, 3, 13, 40]) {
       const w = world(n);
       const qs = await getSectionQuiz(w.topic());
-      expect(qs.length, `${n} slides`).toBe(2 * n);
+      expect(qs.length, `${n} slides`).toBe(Math.min(25, 2 * n));
     }
   });
 

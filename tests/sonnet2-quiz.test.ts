@@ -106,7 +106,7 @@ describe("getSectionQuiz", () => {
     }
     expect(new Set(qs.map((q) => q.id)).size).toBe(SIZE);
     expect(JSON.parse(w.topic().checks_json!)).toEqual(qs);
-    expect(QUIZ_VERSION).toBe(4);
+    expect(QUIZ_VERSION).toBe(5);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
     await getSectionQuiz(w.topic());
     // Two writing calls splitting the plan in halves, and one checking pass, once.

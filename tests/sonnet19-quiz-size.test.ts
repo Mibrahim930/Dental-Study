@@ -112,7 +112,7 @@ describe("quizSize / planQuizByFacts edge cases", () => {
       expect(slots, `size ${size}`).toHaveLength(3);
       expect(slots.every((s) => s.fact !== null)).toBe(true);
     }
-    expect(planQuizByFacts([slide(1, ["only"])])).toEqual([{ page: 1, fact: "only", angle: "recall" }]);
+    expect(planQuizByFacts([slide(1, ["only"])])).toEqual([{ page: 1, fact: "only", facts: ["only"], angle: "recall" }]);
   });
 
   it("explicit size 0, negative and NaN: no crash", () => {
@@ -127,7 +127,7 @@ describe("quizSize / planQuizByFacts edge cases", () => {
   });
 
   it("no slides: size general slots (default 1) with page and fact null, angles cycle", () => {
-    expect(planQuizByFacts([])).toEqual([{ page: null, fact: null, angle: "recall" }]);
+    expect(planQuizByFacts([])).toEqual([{ page: null, fact: null, facts: [], angle: "recall" }]);
     const four = planQuizByFacts([], 4);
     expect(four.map((s) => s.angle)).toEqual(["recall", "apply", "compare", "recall"]);
     expect(four.every((s) => s.page === null && s.fact === null)).toBe(true);
@@ -142,10 +142,10 @@ describe("quizSize / planQuizByFacts edge cases", () => {
 
   it("smaller explicit size: stressed slides' facts first, then case slides, then slide order, kept in slide order", () => {
     const slides = [slide(1, ["a1", "a2"]), slide(2, ["b1"], { hasCase: true }), slide(3, ["c1", "c2"], { emphasized: true }), slide(4, ["d1"])];
-    expect(planQuizByFacts(slides, 3).map((s) => s.fact)).toEqual(["b1", "c1", "c2"]);
-    expect(planQuizByFacts(slides, 1).map((s) => s.fact)).toEqual(["c1"]);
-    expect(planQuizByFacts(slides, 5).map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2"]);
-    expect(planQuizByFacts(slides, 6).map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2", "d1"]);
+    expect(planQuizByFacts(slides, 3, "cut").map((s) => s.fact)).toEqual(["b1", "c1", "c2"]);
+    expect(planQuizByFacts(slides, 1, "cut").map((s) => s.fact)).toEqual(["c1"]);
+    expect(planQuizByFacts(slides, 5, "cut").map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2"]);
+    expect(planQuizByFacts(slides, 6, "cut").map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2", "d1"]);
   });
 
   it("angle variety: a 9-fact section uses recall, apply and compare; 'not' appears only on list slides (4+ facts)", () => {
@@ -179,14 +179,15 @@ describe("quizSize / planQuizByFacts edge cases", () => {
 });
 
 describe("80-fact section", () => {
-  it("all 80 facts planned: two writer calls of 40, every fact exactly once in the prompts, 80 questions", async () => {
+  it("80 facts: condensed to 25 questions in two writer calls (13 + 12), every fact exactly once in the prompts, three or four to a question", async () => {
     const w = world(distinct(20, 4));
     const qs = await getSectionQuiz(w.topic());
-    expect(qs).toHaveLength(80);
-    expect(writes().map((c) => slotsOf(c.content))).toEqual([40, 40]);
-    const facts = writes().flatMap((c) => factsIn(c.content));
-    expect(facts.sort()).toEqual(distinct(20, 4).flat().sort());
-    expect(w.topic().checks_version).toBe(4);
+    expect(qs).toHaveLength(25);
+    expect(writes().map((c) => slotsOf(c.content))).toEqual([13, 12]);
+    const prompts = writes().map((c) => c.content).join("\n");
+    for (const f of distinct(20, 4).flat()) expect(prompts.match(new RegExp(`"${f}"`, "g")), f).toHaveLength(1);
+    expect(prompts.match(/one question that needs all of them/g)).toHaveLength(25);
+    expect(w.topic().checks_version).toBe(5);
   });
 
   it("1-fact section: one slot, one question", async () => {
@@ -229,7 +230,7 @@ describe("quizIsCurrent boundaries", () => {
     expect(quizIsCurrent(w4.topic())).toBe(false);
   });
 
-  it("v3 with checks_json null is never current; v2/null never; v4 and v5 always, whatever the facts", () => {
+  it("v3 with checks_json null is never current; v2/null never; v5 always; v4 only up to 25 facts (an uncapped 40-question quiz is condensed once)", () => {
     const w = world(distinct(7));
     db.prepare("UPDATE topics SET checks_json = NULL, checks_version = 3 WHERE id = ?").run(w.topicId);
     expect(quizIsCurrent(w.topic())).toBe(false);
@@ -240,6 +241,8 @@ describe("quizIsCurrent boundaries", () => {
     }
     const big = world(distinct(40));
     storeQuiz(big.topicId, 4);
+    expect(quizIsCurrent(big.topic())).toBe(false);
+    storeQuiz(big.topicId, 5);
     expect(quizIsCurrent(big.topic())).toBe(true);
   });
 
@@ -337,13 +340,13 @@ describe("quiz route with tiny quizzes", () => {
 });
 
 describe("Write new questions on a kept v3 quiz", () => {
-  it("rewrites at the new size (one per distinct fact) and stamps version 4", async () => {
+  it("rewrites at the new size (one per distinct fact) and stamps the current version", async () => {
     const w = world(distinct(7)); // 7 facts: v3 kept
     storeQuiz(w.topicId, 3);
     expect(quizIsCurrent(w.topic())).toBe(true);
     const res = await post(regenPOST, w.sessionId, { topicId: w.topicId });
     expect(await res.json()).toEqual({ ok: true, count: 7 });
-    expect(w.topic().checks_version).toBe(4);
+    expect(w.topic().checks_version).toBe(5);
     expect(JSON.parse(w.topic().checks_json!)).toHaveLength(7);
     expect(writes().map((c) => slotsOf(c.content)).reduce((a, b) => a + b, 0)).toBe(7);
   });

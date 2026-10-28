@@ -6,7 +6,7 @@ import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
 import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
-import { ANGLE_TEXT, normStem, planQuizByFacts, quizSize, type Angle, type FactSlide } from "./quizPlan";
+import { ANGLE_TEXT, distinctFacts, normStem, planQuizByFacts, QUIZ_MAX, type Angle, type FactSlide } from "./quizPlan";
 import { coveredFacts } from "./lessonCoverage";
 import { clearTopicQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK, NO_COVER_CHECK, NO_COVER_RULE } from "./examStyle";
@@ -50,9 +50,10 @@ const LESSON_COVERAGE = 0.8;
 
 /** Stored in topics.checks_version. Quizzes written by an older version are rewritten once on next open.
  *  3 = one question per distinct fact (5-25), per-option notes, quality-tier writer.
- *  4 = one question per distinct fact with no floor and no cap (a version-3 quiz whose section has 5-25 facts was
- *      written the same way and is kept; see quizIsCurrent). */
-export const QUIZ_VERSION = 4;
+ *  4 = one question per distinct fact with no floor and no cap.
+ *  5 = at most QUIZ_MAX questions: a denser section condenses several facts into one question (a version-3 or -4 quiz
+ *      whose section has at most 25 facts, and at least 5 for version 3, was written the same way and is kept). */
+export const QUIZ_VERSION = 5;
 
 const SectionQuiz = z.object({
   questions: z.array(
@@ -284,18 +285,18 @@ function factSlides(pages: ReturnType<typeof topicPages>): FactSlide[] {
 }
 
 /**
- * The current quiz is up to date; older ones are rewritten once on next open. A version-3 quiz is kept when its
- * section has 5 to 25 distinct facts: version 3 wrote exactly one question per fact there too. Only sections that
- * were padded to 5 (repeated questions) or cut at 25 (material left out) are rewritten, so the rewrite costs
- * nothing where nothing would change.
+ * The current quiz is up to date; older ones are rewritten once on next open. A quiz written by version 3 or 4 is
+ * kept when its section has at most 25 distinct facts (and at least 5 for version 3): those versions wrote exactly one
+ * question per fact there too. Only sections that were padded to 5 (repeated questions), cut at 25 (material left
+ * out) or left uncapped (48 questions) are rewritten, so the rewrite costs nothing where nothing would change.
  */
 export function quizIsCurrent(topic: Pick<Topic, "checks_json" | "checks_version" | "page_ids">): boolean {
   if (!topic.checks_json) return false;
   const v = topic.checks_version ?? 0;
   if (v >= QUIZ_VERSION) return true;
-  if (v !== 3) return false;
-  const n = quizSize(factSlides(topicPages(topic as Topic)));
-  return n >= 5 && n <= 25;
+  if (v !== 3 && v !== 4) return false;
+  const n = distinctFacts(factSlides(topicPages(topic as Topic)));
+  return n <= QUIZ_MAX && (v === 4 || n >= 5);
 }
 
 /** The section quiz after a lesson: written once per topic and cached, like the lesson. */
@@ -312,6 +313,7 @@ export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
 const QUIZ_SYSTEM = `You write end-of-section quiz questions for a dental student's guided study session, based strictly on their lecture slides.
 You are given a numbered list of planned questions: each names the slide it must test, usually the exact fact it must test, and its angle. Write exactly one question for each, and set slot to its Q number and source_page_id to that slide.
 - A question with a listed fact tests exactly that fact and nothing else. A question without one tests its slide from the given angle without repeating a fact another question already tests. Never ask the same fact twice in different words.
+- A question with several listed facts tests them together in ONE question: a list ("which of the following is NOT…", "all of the following EXCEPT…"), a comparison, or a short vignette that can only be answered by knowing each of them; each wrong option should turn on one of those facts. Never split them into separate questions.
 - Single best answer, 4 options. Exactly one option is defensibly correct from the slides.
 - Use "EXCEPT"/"NOT" only when the angle says so. Don't test citations, authors, years or slide numbers.
 - ${NO_COVER_RULE}
@@ -356,7 +358,10 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       .map((i) => {
         const s = slots[i];
         const where = s.page != null ? `slide P${s.page}` : "the section";
-        return `Q${i + 1}: ${where}${s.fact ? ` — fact: "${s.fact.replace(/\s+/g, " ").replace(/"/g, "'")}"` : ""} — ${ANGLE_TEXT[s.angle]}`;
+        const tidy = (f: string) => `"${f.replace(/\s+/g, " ").replace(/"/g, "'")}"`;
+        const pages = s.pages && s.pages.length > 1 ? `slides ${s.pages.map((p) => `P${p}`).join(", ")}` : where;
+        const facts = s.facts.length > 1 ? ` — facts: ${s.facts.map(tidy).join("; ")} (one question that needs all of them)` : s.fact ? ` — fact: ${tidy(s.fact)}` : "";
+        return `Q${i + 1}: ${pages}${facts} — ${ANGLE_TEXT[s.angle]}`;
       })
       .join("\n");
     const out = await generate({

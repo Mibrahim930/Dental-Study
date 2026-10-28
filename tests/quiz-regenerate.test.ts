@@ -97,7 +97,7 @@ describe("a section quiz only changes through \"Write new questions\"", () => {
     expect(fresh).toHaveLength(12);
     expect(fresh.map((q) => q.id)).not.toEqual(first.map((q) => q.id));
     expect(fresh.every((q) => !first.some((f) => f.question === q.question))).toBe(true); // really new text
-    expect(w.topic().checks_version).toBe(4);
+    expect(w.topic().checks_version).toBe(5);
     const rows = db.prepare("SELECT check_index FROM session_checks WHERE session_id = ?").all(w.sessionId) as { check_index: number | null }[];
     expect(rows).toEqual([{ check_index: null }]); // kept for history, no longer tied to a question
   });

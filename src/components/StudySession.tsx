@@ -671,7 +671,7 @@ function SectionQuiz({
       {strip}
       {index === 0 && !answered && (
         <p className="px-1 text-[13px] font-semibold text-muted-foreground">
-          {total === 1 ? "One question" : `${total} questions`}, one for each fact on this section&apos;s {quiz.slides} {quiz.slides === 1 ? "slide" : "slides"}.
+          {total === 1 ? "One question" : `${total} questions`} covering every fact on this section&apos;s {quiz.slides} {quiz.slides === 1 ? "slide" : "slides"}.
         </p>
       )}
       <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered || rewriting} chosen={chosen} picked={picked} onPick={setPicked} />
