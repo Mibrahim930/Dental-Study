@@ -331,8 +331,13 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
       if (!r) return;
       // A finished round with misses opens the next on the server: fetch the quiz again so the new round is here.
       if (r.finished === false && quiz.kind === "lecture" && shown.every((x) => x.at === item.at || x.q.chosen != null)) {
-        const fresh = await call<QuizMeView>(`/api/quizme/${id}`);
-        if (fresh) return setQuiz((q) => (q && q.id === id ? fresh : q));
+        try {
+          const fresh = await call<QuizMeView>(`/api/quizme/${id}`);
+          if (fresh) return setQuiz((q) => (q && q.id === id ? fresh : q));
+        } catch {
+          // The answer is saved; only the next round didn't load. Check again fetches it (the answer stands).
+          return setError("Your answer is saved, but the next round didn't load. Check your connection and tap Check answer again.");
+        }
       }
       setQuiz((q) => (q && q.id === id ? withAnswer(q, item.at, r) : q));
     } catch (err) {
@@ -349,13 +354,20 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
   }
 
   function back() {
-    setIndex((i) => Math.max(0, i - 1));
+    // From the first question of a later round, back goes to the last question of the round before it.
+    if (index === 0 && round > 1 && quiz) {
+      setRound(round - 1);
+      setIndex(Math.max(0, ofRound(quiz, round - 1).length - 1));
+    } else {
+      setIndex((i) => Math.max(0, i - 1));
+    }
     setPicked(null);
     setError("");
   }
 
-  /** Round `round` is answered and the quiz holds a later one: the page in between. */
-  const nextRound = quiz && quiz.kind === "lecture" && quiz.round > round && ofRound(quiz, round).every((x) => x.q.chosen != null) ? ofRound(quiz, round + 1) : null;
+  /** Round `round` is answered and the quiz holds a later one with questions in it: the page in between. */
+  const later = quiz && quiz.kind === "lecture" && quiz.round > round && ofRound(quiz, round).every((x) => x.q.chosen != null) ? ofRound(quiz, round + 1) : [];
+  const nextRound = later.length > 0 ? later : null;
 
   function done() {
     close();
@@ -377,12 +389,21 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     if (!r?.quiz) return;
     setPicked(null);
     setQuiz((q) => (q && q.id === id ? r.quiz : q));
+    // Reporting can empty the round on screen (its last copy is gone): fall back to the latest round that is left.
+    if (r.quiz.round < round) {
+      setRound(r.quiz.round);
+      setIndex(firstOpen(r.quiz, r.quiz.round));
+    }
   }
 
   const total = shown.length;
   const right = shown.filter((x) => x.q.chosen != null && x.q.chosen === x.q.correct_index).length;
   const firstRound = quiz ? ofRound(quiz, 1) : [];
   const firstRight = firstRound.filter((x) => x.q.chosen === x.q.correct_index).length;
+  // Lecture review score: the first pass is what counts; later rounds say how much of it she has since got right.
+  const latest = quiz ? ofRound(quiz, quiz.round) : [];
+  const stillMissed = latest.filter((x) => x.q.chosen != null && x.q.chosen !== x.q.correct_index).length;
+  const laterRight = quiz ? quiz.questions.filter((x) => !x.hidden && x.round > 1 && x.chosen != null && x.chosen === x.correct_index).length : 0;
 
   let body: React.ReactNode = null;
   if (stage === "writing") {
@@ -423,15 +444,16 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
       </div>
     );
   } else if (stage === "quiz" && quiz && index >= total) {
-    const retried = quiz.kind === "lecture" && quiz.round > 1;
+    const lecture = quiz.kind === "lecture";
+    const retried = lecture && quiz.round > 1;
     body = (
       <div className="flex flex-col gap-4">
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
           <div className="text-[13px] font-extrabold text-hero-accent">Your score</div>
           <div className="mt-1 text-[22px] font-extrabold tracking-tight">
-            {retried
+            {lecture
               ? firstRound.length > 0
-                ? `${Math.round((firstRight / firstRound.length) * 100)}% · ${firstRight}/${firstRound.length} right on the first pass.`
+                ? `${Math.round((firstRight / firstRound.length) * 100)}% · ${firstRight}/${firstRound.length} right${retried ? " on the first pass" : ""}.`
                 : "Nothing to score."
               : total > 0
                 ? `${Math.round((right / total) * 100)}% · ${right}/${total} right.`
@@ -439,7 +461,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
           </div>
           {retried && (
             <p className="mt-1 text-[14px] font-semibold">
-              {quiz.questions.filter((x) => !x.hidden && x.round > 1 && x.chosen === x.correct_index).length} got right on a later try · {right < total ? `${total - right} still missed` : "all done"}
+              {laterRight} got right on a later try · {stillMissed > 0 ? `${stillMissed} still missed` : "all done"}
             </p>
           )}
           <p className="mt-1 text-[14px] font-medium opacity-85">
@@ -462,7 +484,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     const { q, at } = shown[index];
     const answered = q.chosen != null;
     // Back and forth between the questions she has answered; forward only past an answered one.
-    const canBack = index > 0;
+    const canBack = index > 0 || round > 1;
     const canForward = answered || shown[index + 1]?.q.chosen != null;
     body = (
       <div className="flex flex-col gap-3.5">

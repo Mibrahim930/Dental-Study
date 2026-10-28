@@ -367,7 +367,7 @@ function view(row: Row): QuizMeView {
     answers,
     left,
     finished: row.finished_at != null || left === 0,
-    round: Math.max(1, ...questions.map((q) => q.round ?? 1)),
+    round: roundOf(questions),
   };
 }
 
@@ -406,6 +406,38 @@ export type QuizMeAnswer = {
   already?: boolean;
 };
 
+/** The round a quiz is on: the highest among the questions still shown (hidden ones don't count), 1 at least. */
+function roundOf(questions: QuizMeQuestion[]): number {
+  return Math.max(1, ...questions.filter((q) => !q.hidden).map((q) => q.round ?? 1));
+}
+
+/**
+ * Whether the quiz is finished after a change to `questions` / `answers` (both may be extended here). Finished once
+ * every question that can still be shown is answered. In a lecture review, finishing a round with misses opens the
+ * next instead: the missed ones come back (options reshuffled) until she gets them right, up to REVIEW_MAX_ROUNDS.
+ * Used after an answer and after a report, so the two can't disagree about when the next round opens.
+ */
+function settle(row: Row, questions: QuizMeQuestion[], answers: (number | null)[]): boolean {
+  const left = questions.filter((q, i) => !q.hidden && answers[i] == null && !(q.image_page_id != null && !pictureForIds(q.image_page_id, null))).length;
+  if (left > 0) return false;
+  if (row.kind !== "lecture") return true;
+  const round = roundOf(questions);
+  const again = questions.map((x, i) => ({ x, i })).filter(({ x, i }) => (x.round ?? 1) === round && !x.hidden && answers[i] != null && answers[i] !== x.correct_index);
+  if (again.length === 0 || round >= REVIEW_MAX_ROUNDS) return true;
+  for (const { x } of again) {
+    const order = shuffle(x.options.map((_, k) => k));
+    questions.push({
+      ...x,
+      options: order.map((k) => x.options[k]),
+      correct_index: order.indexOf(x.correct_index),
+      option_notes: x.option_notes ? order.map((k) => x.option_notes![k]) : null,
+      round: round + 1,
+    });
+    answers.push(null);
+  }
+  return false;
+}
+
 /**
  * Record one answer. Correctness is decided here. The first answer to a question stands; a second one (another tab,
  * a double tap) changes nothing and gets the first one's result back. Null when the quiz isn't this student's.
@@ -432,27 +464,7 @@ export function answerQuizMe(input: { userId: number; id: number; index: number;
 
     answers[index] = chosen;
     const correct = chosen === q.correct_index;
-    // Finished once every question that can still be shown is answered. In a lecture review, finishing a round with
-    // misses opens the next: the missed ones come back (options reshuffled) until she gets them right, up to a limit.
-    let finished = view({ ...row, answers_json: JSON.stringify(answers) }).left === 0;
-    if (finished && row.kind === "lecture") {
-      const round = Math.max(1, ...questions.map((x) => x.round ?? 1));
-      const again = questions.map((x, i) => ({ x, i })).filter(({ x, i }) => (x.round ?? 1) === round && !x.hidden && answers[i] != null && answers[i] !== x.correct_index);
-      if (again.length > 0 && round < REVIEW_MAX_ROUNDS) {
-        for (const { x } of again) {
-          const order = shuffle(x.options.map((_, k) => k));
-          questions.push({
-            ...x,
-            options: order.map((k) => x.options[k]),
-            correct_index: order.indexOf(x.correct_index),
-            option_notes: x.option_notes ? order.map((k) => x.option_notes![k]) : null,
-            round: round + 1,
-          });
-          answers.push(null);
-        }
-        finished = false;
-      }
-    }
+    const finished = settle(row, questions, answers);
     db.prepare(`UPDATE quizme SET questions_json = ?, answers_json = ?${finished ? ", finished_at = datetime('now')" : ""} WHERE id = ?`).run(
       JSON.stringify(questions),
       JSON.stringify(answers),
@@ -481,9 +493,21 @@ export function hideQuizMeQuestion(userId: number, id: number, index: number, re
     const q = Number.isInteger(index) && index >= 0 ? questions[index] : undefined;
     if (!q || q.hidden) return null;
     questions[index] = { ...q, hidden: true };
-    const finished = view({ ...row, questions_json: JSON.stringify(questions) }).left === 0 && answers.some((a) => a != null);
-    db.prepare(`UPDATE quizme SET questions_json = ?${finished ? ", finished_at = COALESCE(finished_at, datetime('now'))" : ""} WHERE id = ?`).run(
+    // In a lecture review the same question may sit in several rounds (the original and its copies): a reported
+    // question leaves all of them, whichever one she pressed Report on.
+    if (row.kind === "lecture") {
+      const stem = normStem(q.question);
+      for (let i = 0; i < questions.length; i++) {
+        const x = questions[i];
+        if (!x.hidden && (q.ref ? x.ref === q.ref : normStem(x.question) === stem)) questions[i] = { ...x, hidden: true };
+      }
+    }
+    // Hiding the last open question ends the round like answering it would (the next round opens if there are misses).
+    // A review with nothing answered at all isn't stamped finished: there is nothing to score yet.
+    const finished = settle(row, questions, answers) && answers.some((a) => a != null);
+    db.prepare(`UPDATE quizme SET questions_json = ?, answers_json = ?${finished ? ", finished_at = COALESCE(finished_at, datetime('now'))" : ""} WHERE id = ?`).run(
       JSON.stringify(questions),
+      JSON.stringify(answers),
       id,
     );
     // In a lecture review the question came from a section quiz or a "quiz me" quiz: hide it there too (and wherever

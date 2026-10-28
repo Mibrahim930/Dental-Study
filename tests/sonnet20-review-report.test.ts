@@ -426,7 +426,8 @@ describe("openLectureReview", () => {
     hideQuizMeQuestion(b.userId, vb.id, 1);
     expect(quizMeRow(vb.id).finished_at).not.toBeNull();
     expect(lectureReviewStatus(b.userId, b.examId, b.doc1)).toEqual({ missed: 0, open: null });
-    // (c) one answered WRONG, the other reported: finished, and the wrong one is the one miss left for the next review
+    // (c) one answered WRONG, the other reported: the round is over with a miss, so (since review rounds) the wrong one
+    // comes back as round 2 of the same review rather than the review finishing
     const c = world();
     recordQuizAnswer(c.userId, c.t1, 0, 1, false);
     recordQuizAnswer(c.userId, c.t1, 1, 1, false);
@@ -434,8 +435,11 @@ describe("openLectureReview", () => {
     const wrongRef = quizMeQs(vc.id)[0].ref!;
     answerQuizMe({ userId: c.userId, id: vc.id, index: 0, chosen: wrongIdx(vc.id, 0) });
     hideQuizMeQuestion(c.userId, vc.id, 1);
-    expect(quizMeRow(vc.id).finished_at).not.toBeNull();
-    expect(lectureReviewStatus(c.userId, c.examId, c.doc1)).toEqual({ missed: 1, open: null });
+    expect(quizMeRow(vc.id).finished_at).toBeNull();
+    const status = lectureReviewStatus(c.userId, c.examId, c.doc1);
+    expect(status.missed).toBe(1);
+    expect(status.open).toMatchObject({ id: vc.id, round: 2, left: 1 });
+    expect(quizMeQs(vc.id).map((q) => [q.round ?? 1, !!q.hidden, q.ref])).toEqual([[1, false, wrongRef], [1, true, expect.any(String)], [2, false, wrongRef]]);
     expect(refsOf(c.userId, c.examId, c.doc1)).toEqual([wrongRef]);
   });
 
