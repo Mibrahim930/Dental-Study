@@ -54,11 +54,11 @@ export function segments(text: string, ranges: Range[]): { text: string; start: 
 }
 
 /**
- * Which marks can be stored: a practice-exam question, a section-quiz question by its id, or a block of lesson text
+ * Which marks can be stored: a practice-exam question, a section-quiz question by its id, a block of lesson text
  * ("lesson:<topic>:<slide>:<text length>", slide 0 for the intro; the length changes when the lesson is rewritten, so
- * old marks never land on new text).
+ * old marks never land on new text), or a question of a "quiz me" / lecture-review quiz ("quizme:<quiz>:<index>").
  */
-export const MARKS_KEY = /^(attempt:\d{1,12}:\d{1,12}|quiz:[0-9a-f]{8}|lesson:\d{1,12}:\d{1,12}:\d{1,7})$/;
+export const MARKS_KEY = /^(attempt:\d{1,12}:\d{1,12}|quiz:[0-9a-f]{8}|lesson:\d{1,12}:\d{1,12}:\d{1,7}|quizme:\d{1,12}:\d{1,4})$/;
 
 /** Pieces of text marks are kept on: a question's stem, case and options; a lesson block's highlights and underlines. */
 const FIELD = /^(stem|case|opt[0-9]|text|under)$/;

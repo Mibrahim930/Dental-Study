@@ -42,7 +42,7 @@ vi.mock("next/headers", async () => {
 
 import { sessionToken } from "@/lib/auth";
 import { db, FILES_DIR, type Topic } from "@/lib/db";
-import { answerQuizMe, lectureMisses, lectureReviewStatus, openLectureReview, QuizMeError, type QuizMeQuestion } from "@/lib/quizMe";
+import { answerQuizMe, getQuizMe, lectureMisses, lectureReviewStatus, openLectureReview, QuizMeError, REVIEW_MAX_ROUNDS, type QuizMeQuestion } from "@/lib/quizMe";
 import { recordQuizAnswer } from "@/lib/quizProgress";
 import { getSectionQuiz, QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
 import { answerQuestion, finishAttempt, reportAttemptQuestion } from "@/lib/practice";
@@ -211,16 +211,23 @@ describe("the lecture review", () => {
     const right0 = stored[0].options.indexOf("right");
     expect(stored[0].correct_index).toBe(right0);
     expect(stored[0].ref).toBe(`quiz:${w.t1}:0`);
-    // right on the first, wrong on the second
+    // right on the first, wrong on the second: the second comes round again (round 2) before the review is done
     expect(answerQuizMe({ userId: w.userId, id: v.id, index: 0, chosen: right0 })).toMatchObject({ correct: true, finished: false });
     const wrong1 = stored[1].options.indexOf("w1");
-    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 1, chosen: wrong1 })).toMatchObject({ correct: false, finished: true });
-    // the first miss is dealt with; the second comes back in the next review
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 1, chosen: wrong1 })).toMatchObject({ correct: false, finished: false });
+    // the first miss is dealt with; the second is still a miss, waiting in the open review's second round
     expect(refsOf(w.userId, w.examId, w.doc1)).toEqual([`quiz:${w.t2}:1`]);
-    expect(lectureReviewStatus(w.userId, w.examId, w.doc1)).toEqual({ missed: 1, open: null });
-    const v2 = openLectureReview(w.userId, w.examId, w.doc1);
-    expect(v2.id).not.toBe(v.id);
-    expect(v2.questions.map((q) => q.question)).toEqual(["b question 1?"]);
+    expect(lectureReviewStatus(w.userId, w.examId, w.doc1)).toMatchObject({ missed: 1, open: { id: v.id, round: 2 } });
+    expect(openLectureReview(w.userId, w.examId, w.doc1).id).toBe(v.id); // resumed, not a new one
+    // missed again in round 2 → round 3; right there → done, and the next review has nothing
+    const again = JSON.parse((db.prepare("SELECT questions_json FROM quizme WHERE id = ?").get(v.id) as { questions_json: string }).questions_json) as QuizMeQuestion[];
+    expect(again[2]).toMatchObject({ question: "b question 1?", round: 2 });
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 2, chosen: again[2].options.indexOf("w2") })).toMatchObject({ correct: false, finished: false });
+    const third = JSON.parse((db.prepare("SELECT questions_json FROM quizme WHERE id = ?").get(v.id) as { questions_json: string }).questions_json) as QuizMeQuestion[];
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 3, chosen: third[3].options.indexOf("right") })).toMatchObject({ correct: true, finished: true });
+    expect(refsOf(w.userId, w.examId, w.doc1)).toEqual([]);
+    expect(lectureReviewStatus(w.userId, w.examId, w.doc1)).toEqual({ missed: 0, open: null });
+    expect(() => openLectureReview(w.userId, w.examId, w.doc1)).toThrow(QuizMeError);
     // the section quiz's own answer is untouched (progress stays as she scored it)
     expect(db.prepare("SELECT correct FROM quiz_answers WHERE user_id = ? AND topic_id = ? AND check_index = 0").get(w.userId, w.t1)).toEqual({ correct: 0 });
   });
@@ -256,6 +263,80 @@ describe("the lecture review", () => {
     expect((await lecturePOST(post({ examId: w.examId, documentId: w.doc1 }))).status).toBe(404);
     signIn(null);
     expect((await lecturePOST(post({ examId: w.examId, documentId: w.doc1 }))).status).toBe(401);
+  });
+});
+
+describe("review rounds", () => {
+  const stored = (id: number) => JSON.parse((db.prepare("SELECT questions_json FROM quizme WHERE id = ?").get(id) as { questions_json: string }).questions_json) as QuizMeQuestion[];
+  const rightIdx = (id: number, i: number) => stored(id)[i].options.indexOf("right");
+  const wrongIdx = (id: number, i: number) => stored(id)[i].options.indexOf("w1");
+
+  it("a round finished with misses opens the next round: copies of the missed ones, options reshuffled, answers empty, not finished", () => {
+    const w = world();
+    recordQuizAnswer(w.userId, w.t1, 0, 1, false);
+    recordQuizAnswer(w.userId, w.t1, 1, 1, false);
+    recordQuizAnswer(w.userId, w.t2, 0, 1, false);
+    const v = openLectureReview(w.userId, w.examId, w.doc1);
+    expect(v.round).toBe(1);
+    expect(v.questions.map((q) => q.round)).toEqual([1, 1, 1]);
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 0, chosen: rightIdx(v.id, 0) })).toMatchObject({ correct: true, finished: false });
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 1, chosen: wrongIdx(v.id, 1) })).toMatchObject({ correct: false, finished: false });
+    const last = answerQuizMe({ userId: w.userId, id: v.id, index: 2, chosen: wrongIdx(v.id, 2) })!;
+    expect(last).toMatchObject({ correct: false, finished: false }); // misses → round 2, so not finished
+    const qs = stored(v.id);
+    expect(qs).toHaveLength(5);
+    expect(qs.slice(3).map((q) => q.round)).toEqual([2, 2]);
+    expect(qs.slice(3).map((q) => q.question)).toEqual([qs[1].question, qs[2].question]);
+    expect(qs.slice(3).map((q) => q.ref)).toEqual([qs[1].ref, qs[2].ref]);
+    for (const q of qs.slice(3)) {
+      expect(q.options.indexOf("right")).toBe(q.correct_index);
+      expect(q.option_notes![q.correct_index]).toBe("r");
+    }
+    const view = getQuizMe(w.userId, v.id)!;
+    expect(view).toMatchObject({ round: 2, left: 2, finished: false });
+    expect(view.questions.slice(3).every((q) => q.chosen == null && q.correct_index === undefined)).toBe(true);
+    expect(db.prepare("SELECT 1 FROM quizme WHERE id = ? AND finished_at IS NULL").get(v.id)).toBeTruthy();
+    // the status card counts what's left in the open review
+    expect(lectureReviewStatus(w.userId, w.examId, w.doc1)).toMatchObject({ missed: 2, open: { id: v.id } });
+    // round 2: one right (retired), one wrong again → round 3 with just that one
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 3, chosen: rightIdx(v.id, 3) })).toMatchObject({ correct: true, finished: false });
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 4, chosen: wrongIdx(v.id, 4) })).toMatchObject({ correct: false, finished: false });
+    expect(stored(v.id).map((q) => q.round)).toEqual([1, 1, 1, 2, 2, 3]);
+    expect(refsOf(w.userId, w.examId, w.doc1)).toEqual([`quiz:${w.t2}:0`]); // only the one still wrong
+    // round 3 right: finished, everything retired
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 5, chosen: rightIdx(v.id, 5) })).toMatchObject({ correct: true, finished: true });
+    expect(getQuizMe(w.userId, v.id)).toMatchObject({ finished: true, left: 0, round: 3 });
+    expect(refsOf(w.userId, w.examId, w.doc1)).toEqual([]);
+  });
+
+  it("all right in the first round: finished at once, no second round; a hidden (reported) question never comes back", async () => {
+    const w = world();
+    recordQuizAnswer(w.userId, w.t1, 0, 1, false);
+    recordQuizAnswer(w.userId, w.t1, 1, 1, false);
+    const v = openLectureReview(w.userId, w.examId, w.doc1);
+    signIn(w.userId);
+    expect((await quizmeReportPOST(post({ index: 1, reason: "bad" }), ctx(v.id))).status).toBe(200);
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: 0, chosen: rightIdx(v.id, 0) })).toMatchObject({ correct: true, finished: true });
+    expect(stored(v.id)).toHaveLength(2);
+    expect(getQuizMe(w.userId, v.id)).toMatchObject({ finished: true, round: 1 });
+  });
+
+  it("rounds stop at the limit, and a 'quiz me' quiz never gets a second round", () => {
+    const w = world();
+    recordQuizAnswer(w.userId, w.t1, 0, 1, false);
+    const v = openLectureReview(w.userId, w.examId, w.doc1);
+    let at = 0;
+    for (let round = 1; round < REVIEW_MAX_ROUNDS; round++) {
+      expect(answerQuizMe({ userId: w.userId, id: v.id, index: at, chosen: wrongIdx(v.id, at) })).toMatchObject({ correct: false, finished: false });
+      at++;
+    }
+    expect(stored(v.id)).toHaveLength(REVIEW_MAX_ROUNDS);
+    expect(answerQuizMe({ userId: w.userId, id: v.id, index: at, chosen: wrongIdx(v.id, at) })).toMatchObject({ correct: false, finished: true });
+    expect(stored(v.id)).toHaveLength(REVIEW_MAX_ROUNDS);
+    const qm = quizMeOn(w.userId, w.examId, w.t1, [null, null]);
+    expect(answerQuizMe({ userId: w.userId, id: qm, index: 0, chosen: 1 })).toMatchObject({ correct: false, finished: false });
+    expect(answerQuizMe({ userId: w.userId, id: qm, index: 1, chosen: 1 })).toMatchObject({ correct: false, finished: true });
+    expect(stored(qm)).toHaveLength(2);
   });
 });
 

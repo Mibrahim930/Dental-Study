@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import type { QuizMeAnswer, QuizMeView } from "@/lib/quizMe";
 import { OptionRow } from "./OptionRow";
+import { Highlightable } from "./Highlightable";
+import { useMarks } from "./useMarks";
 import { SlideImage } from "./SlideImage";
 import { Icon, ICONS, type OptionState } from "./ui";
 import { failureText, jsonOf, ServerMessage, signedOut } from "./clientFetch";
@@ -18,6 +20,7 @@ const MIN_WORDS = 3;
 
 type Pill = { left: number; top: number; text: string };
 type Stage = "choose" | "writing" | "quiz";
+type Range = [number, number];
 
 /** A JSON request through the shared helpers: null when signed out (already handled), ServerMessage on a refusal. */
 async function call<T>(url: string, init?: RequestInit): Promise<T | null> {
@@ -37,9 +40,13 @@ function tidy(raw: string): { text: string; cut: boolean } {
   return { text: (space > MAX_CHARS * 0.8 ? head.slice(0, space) : head).trim(), cut: true };
 }
 
-const firstOpen = (q: QuizMeView) => {
-  const shown = q.questions.filter((x) => !x.hidden);
-  const i = shown.findIndex((x) => x.chosen == null);
+/** The questions of one round, in order, each with its index in the stored list. */
+const ofRound = (q: QuizMeView, round: number) => q.questions.map((x, at) => ({ q: x, at })).filter((x) => !x.q.hidden && x.q.round === round);
+
+/** Where to pick a round up: its first unanswered question, or its end. */
+const firstOpen = (q: QuizMeView, round = q.round) => {
+  const shown = ofRound(q, round);
+  const i = shown.findIndex((x) => x.q.chosen == null);
   return i === -1 ? shown.length : i;
 };
 
@@ -50,6 +57,83 @@ function withAnswer(q: QuizMeView, at: number, r: QuizMeAnswer): QuizMeView {
   );
   const left = questions.filter((x) => !x.hidden && x.chosen == null).length;
   return { ...q, questions, answers: questions.map((x) => x.chosen), left, finished: r.finished || left === 0 };
+}
+
+/**
+ * One question of the panel: the stem and options can be highlighted and crossed out like a section-quiz question
+ * (saved to her account under the quiz and question), with the notes and explanation once answered.
+ */
+function QuizMeQuestion({
+  quizId,
+  at,
+  q,
+  picked,
+  onPick,
+  saving,
+}: {
+  quizId: number;
+  at: number;
+  q: QuizMeView["questions"][number];
+  picked: number | null;
+  onPick: (i: number) => void;
+  saving: boolean;
+}) {
+  const [marks, setMarks] = useMarks(`quizme:${quizId}:${at}`);
+  const setHl = (field: string) => (r: Range[]) => setMarks((m) => ({ ...m, hl: { ...m.hl, [field]: r } }));
+  const toggleCross = (i: number) => setMarks((m) => ({ ...m, crossed: m.crossed.includes(i) ? m.crossed.filter((x) => x !== i) : [...m.crossed, i].sort() }));
+  const answered = q.chosen != null;
+  const stateOf = (i: number): OptionState =>
+    answered ? (i === q.correct_index ? "correct" : i === q.chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
+  const noteClass = (i: number) =>
+    i === q.correct_index ? "rounded-[14px] bg-mint px-3 py-2 text-on-mint" : i === q.chosen ? "rounded-[14px] bg-coral px-3 py-2 text-on-coral" : "px-3 text-muted-foreground";
+  return (
+    <>
+      {q.image && (
+        <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
+          <SlideImage pageId={q.image.page_id} aspect={q.image.aspect} crop={answered ? null : q.image.crop} alt="Picture for this question" />
+        </figure>
+      )}
+      <p className="px-1 text-[18px] leading-snug font-bold break-words">
+        <Highlightable text={q.question} ranges={marks.hl.stem ?? []} onChange={setHl("stem")} />
+      </p>
+      <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2">
+        {q.options.map((o, i) => (
+          <Fragment key={i}>
+            <OptionRow
+              index={i}
+              text={o}
+              state={stateOf(i)}
+              checked={answered ? i === q.chosen : i === picked}
+              onSelect={
+                answered || saving
+                  ? undefined
+                  : () => {
+                      if (marks.crossed.includes(i)) toggleCross(i);
+                      onPick(i);
+                    }
+              }
+              crossed={marks.crossed.includes(i)}
+              onToggleCross={!answered && i === picked ? undefined : () => toggleCross(i)}
+              ranges={marks.hl[`opt${i}`] ?? []}
+              onRanges={setHl(`opt${i}`)}
+              chips={
+                <>
+                  {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+                  {answered && i === q.chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
+                </>
+              }
+            />
+            {answered && q.option_notes?.[i] && (
+              <p className={`-mt-0.5 mb-1 ml-3 text-[14px] leading-snug font-semibold break-words ${noteClass(i)}`}>
+                <span className="sr-only">Option {String.fromCharCode(65 + i)}: </span>
+                {q.option_notes[i]}
+              </p>
+            )}
+          </Fragment>
+        ))}
+      </div>
+    </>
+  );
 }
 
 /**
@@ -70,6 +154,8 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
   const [writingSize, setWritingSize] = useState(5);
   const [quiz, setQuiz] = useState<QuizMeView | null>(null);
   const [index, setIndex] = useState(0);
+  // Lecture review: the round on screen. When a finished round opens the next one, a page in between says so first.
+  const [round, setRound] = useState(1);
   const [picked, setPicked] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -85,6 +171,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
       const q = (e as CustomEvent<QuizMeView>).detail;
       if (!q || q.examId !== examId) return;
       setQuiz(q);
+      setRound(q.round);
       setIndex(firstOpen(q));
       setPicked(null);
       setError("");
@@ -194,6 +281,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
 
   function resume() {
     if (!quiz) return;
+    setRound(quiz.round);
     setIndex(firstOpen(quiz));
     setPicked(null);
     setError("");
@@ -214,6 +302,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
       });
       if (!q) return;
       setQuiz(q);
+      setRound(q.round);
       setIndex(firstOpen(q));
       setPicked(null);
       setStage("quiz");
@@ -225,7 +314,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     }
   }
 
-  const shown = quiz ? quiz.questions.map((q, at) => ({ q, at })).filter((x) => !x.q.hidden) : [];
+  const shown = quiz ? ofRound(quiz, round) : [];
 
   async function check() {
     const item = shown[index];
@@ -240,6 +329,11 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
         body: JSON.stringify({ index: item.at, chosen: picked }),
       });
       if (!r) return;
+      // A finished round with misses opens the next on the server: fetch the quiz again so the new round is here.
+      if (r.finished === false && quiz.kind === "lecture" && shown.every((x) => x.at === item.at || x.q.chosen != null)) {
+        const fresh = await call<QuizMeView>(`/api/quizme/${id}`);
+        if (fresh) return setQuiz((q) => (q && q.id === id ? fresh : q));
+      }
       setQuiz((q) => (q && q.id === id ? withAnswer(q, item.at, r) : q));
     } catch (err) {
       setError(failureText(err, "Couldn't save that answer. Check your connection and try again."));
@@ -253,6 +347,15 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     setPicked(null);
     setError("");
   }
+
+  function back() {
+    setIndex((i) => Math.max(0, i - 1));
+    setPicked(null);
+    setError("");
+  }
+
+  /** Round `round` is answered and the quiz holds a later one: the page in between. */
+  const nextRound = quiz && quiz.kind === "lecture" && quiz.round > round && ofRound(quiz, round).every((x) => x.q.chosen != null) ? ofRound(quiz, round + 1) : null;
 
   function done() {
     close();
@@ -278,6 +381,8 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
 
   const total = shown.length;
   const right = shown.filter((x) => x.q.chosen != null && x.q.chosen === x.q.correct_index).length;
+  const firstRound = quiz ? ofRound(quiz, 1) : [];
+  const firstRight = firstRound.filter((x) => x.q.chosen === x.q.correct_index).length;
 
   let body: React.ReactNode = null;
   if (stage === "writing") {
@@ -292,77 +397,82 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
         <div className="shimmer h-14 w-full" />
       </div>
     );
+  } else if (stage === "quiz" && quiz && index >= total && nextRound) {
+    // Between rounds of a lecture review: what she missed again comes round once more.
+    body = (
+      <div className="flex flex-col gap-4">
+        <div className="rounded-[22px] bg-lilac p-5 text-on-lilac">
+          <div className="text-[13px] font-extrabold opacity-75">Round {round} done · {Math.round((right / total) * 100)}% · {right}/{total} right</div>
+          <div className="mt-1 text-[22px] font-extrabold tracking-tight">
+            {nextRound.length === 1 ? "One question you missed again." : `${nextRound.length} questions you missed again.`}
+          </div>
+          <p className="mt-1 text-[14px] font-medium opacity-85">They come round once more, with the answers in a new order. Get one right and it&apos;s done.</p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary btn-lg"
+          onClick={() => {
+            setRound(round + 1);
+            setIndex(firstOpen(quiz, round + 1));
+            setPicked(null);
+            setError("");
+          }}
+        >
+          Next →
+        </button>
+      </div>
+    );
   } else if (stage === "quiz" && quiz && index >= total) {
+    const retried = quiz.kind === "lecture" && quiz.round > 1;
     body = (
       <div className="flex flex-col gap-4">
         <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
           <div className="text-[13px] font-extrabold text-hero-accent">Your score</div>
           <div className="mt-1 text-[22px] font-extrabold tracking-tight">
-            {total > 0 ? `${Math.round((right / total) * 100)}% · ${right}/${total} right.` : "Nothing to score."}
+            {retried
+              ? firstRound.length > 0
+                ? `${Math.round((firstRight / firstRound.length) * 100)}% · ${firstRight}/${firstRound.length} right on the first pass.`
+                : "Nothing to score."
+              : total > 0
+                ? `${Math.round((right / total) * 100)}% · ${right}/${total} right.`
+                : "Nothing to score."}
           </div>
+          {retried && (
+            <p className="mt-1 text-[14px] font-semibold">
+              {quiz.questions.filter((x) => !x.hidden && x.round > 1 && x.chosen === x.correct_index).length} got right on a later try · {right < total ? `${total - right} still missed` : "all done"}
+            </p>
+          )}
           <p className="mt-1 text-[14px] font-medium opacity-85">
             {quiz.kind === "lecture"
               ? "These answers count toward your mastery. What you got right won't come back; what you missed will be in this lecture's next review."
               : "These answers count toward your mastery."}
           </p>
         </div>
-        <button type="button" className="btn-primary btn-lg" onClick={done}>
-          Done
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-secondary btn-lg" onClick={() => { setIndex(0); setPicked(null); }}>
+            ← Look back
+          </button>
+          <button type="button" className="btn-primary btn-lg" onClick={done}>
+            Done
+          </button>
+        </div>
       </div>
     );
   } else if (stage === "quiz" && quiz && shown[index]) {
-    const { q } = shown[index];
+    const { q, at } = shown[index];
     const answered = q.chosen != null;
-    const stateOf = (i: number): OptionState =>
-      answered ? (i === q.correct_index ? "correct" : i === q.chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
-    const noteClass = (i: number) =>
-      i === q.correct_index
-        ? "rounded-[14px] bg-mint px-3 py-2 text-on-mint"
-        : i === q.chosen
-          ? "rounded-[14px] bg-coral px-3 py-2 text-on-coral"
-          : "px-3 text-muted-foreground";
+    // Back and forth between the questions she has answered; forward only past an answered one.
+    const canBack = index > 0;
+    const canForward = answered || shown[index + 1]?.q.chosen != null;
     body = (
       <div className="flex flex-col gap-3.5">
         <div className="flex items-center justify-between gap-2">
           <div className="text-[13px] font-bold text-muted-foreground">
-            Question {index + 1} of {total}
+            {quiz.kind === "lecture" && quiz.round > 1 ? `Round ${round} · ` : ""}Question {index + 1} of {total}
           </div>
           <ReportQuestion onReport={report} />
         </div>
-        {q.image && (
-          <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
-            <SlideImage pageId={q.image.page_id} aspect={q.image.aspect} crop={answered ? null : q.image.crop} alt="Picture for this question" />
-          </figure>
-        )}
-        <p className="px-1 text-[18px] leading-snug font-bold break-words">{q.question}</p>
-        <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2">
-          {q.options.map((o, i) => (
-            <Fragment key={i}>
-              <OptionRow
-                index={i}
-                text={o}
-                state={stateOf(i)}
-                checked={answered ? i === q.chosen : i === picked}
-                onSelect={answered || saving ? undefined : () => setPicked(i)}
-                crossed={false}
-                ranges={[]}
-                chips={
-                  <>
-                    {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
-                    {answered && i === q.chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
-                  </>
-                }
-              />
-              {answered && q.option_notes?.[i] && (
-                <p className={`-mt-0.5 mb-1 ml-3 text-[14px] leading-snug font-semibold break-words ${noteClass(i)}`}>
-                  <span className="sr-only">Option {String.fromCharCode(65 + i)}: </span>
-                  {q.option_notes[i]}
-                </p>
-              )}
-            </Fragment>
-          ))}
-        </div>
+        <QuizMeQuestion key={`${quiz.id}:${at}`} quizId={quiz.id} at={at} q={q} picked={picked} onPick={setPicked} saving={saving} />
         {error && (
           <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
             {error}
@@ -378,15 +488,25 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
             </div>
           </div>
         )}
-        {answered ? (
-          <button type="button" className="btn-primary btn-lg" onClick={next}>
-            {index + 1 < total ? "Next →" : "See my score"}
+        <div className="flex items-center gap-2">
+          <button type="button" className="btn-secondary btn-lg" disabled={!canBack} onClick={back} aria-label="Previous question">
+            ←
           </button>
-        ) : (
-          <button type="button" className="btn-primary btn-lg" disabled={picked == null || saving} onClick={check}>
-            {saving ? "Checking…" : "Check answer"}
-          </button>
-        )}
+          {answered ? (
+            <button type="button" className="btn-primary btn-lg flex-1" onClick={next}>
+              {index + 1 < total ? "Next →" : nextRound || (quiz.kind === "lecture" && quiz.round > round) ? "Next →" : "See my score"}
+            </button>
+          ) : (
+            <button type="button" className="btn-primary btn-lg flex-1" disabled={picked == null || saving} onClick={check}>
+              {saving ? "Checking…" : "Check answer"}
+            </button>
+          )}
+          {!answered && canForward && (
+            <button type="button" className="btn-secondary btn-lg" onClick={next} aria-label="Next question">
+              →
+            </button>
+          )}
+        </div>
       </div>
     );
   } else {

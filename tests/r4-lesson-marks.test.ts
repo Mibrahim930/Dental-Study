@@ -29,7 +29,8 @@ beforeEach(() => {
 
 describe("lesson marks", () => {
   it("keys: lesson:<topic>:<slide> is accepted (slide 0 for the intro); junk shapes are not", () => {
-    for (const k of ["lesson:1:0:120", "lesson:12:345:0", "lesson:999999999999:1:9999999"]) expect(MARKS_KEY.test(k), k).toBe(true);
+    for (const k of ["lesson:1:0:120", "lesson:12:345:0", "lesson:999999999999:1:9999999", "quizme:3:0", "quizme:123456789012:9999"]) expect(MARKS_KEY.test(k), k).toBe(true);
+    for (const k of ["quizme:3", "quizme:a:1", "quizme:3:12345", "quizme:3:1:2"]) expect(MARKS_KEY.test(k), k).toBe(false);
     for (const k of ["lesson:1:2", "lesson:1", "lesson:a:1:2", "lesson:1:2:3:4", "lesson:-1:2:3", " lesson:1:2:3", "lesson:1:2:3 ", "lesson:1234567890123:1:2", "lesson:1:2:12345678"]) expect(MARKS_KEY.test(k), k).toBe(false);
   });
 

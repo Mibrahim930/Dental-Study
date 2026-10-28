@@ -42,12 +42,20 @@ CREATE TABLE IF NOT EXISTS lecture_review_done (
   done_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (user_id, ref)
 );`);
-const doneColumns = (db.prepare("PRAGMA table_info(lecture_review_done)").all() as { name: string }[]).map((c) => c.name);
-if (!doneColumns.includes("stem")) db.exec("ALTER TABLE lecture_review_done ADD COLUMN stem TEXT"); // normalised question text: the same question from another quiz is done too
-// Columns added after the table first shipped.
-const quizmeColumns = (db.prepare("PRAGMA table_info(quizme)").all() as { name: string }[]).map((c) => c.name);
-if (!quizmeColumns.includes("kind")) db.exec("ALTER TABLE quizme ADD COLUMN kind TEXT NOT NULL DEFAULT 'highlight'"); // highlight | lecture
-if (!quizmeColumns.includes("document_id")) db.exec("ALTER TABLE quizme ADD COLUMN document_id INTEGER"); // the lecture, for a lecture review
+addColumn("lecture_review_done", "stem", "TEXT"); // normalised question text: the same question from another quiz is done too
+// Columns added after the table first shipped. Two processes can open the same database at once (next build's
+// workers, or two app instances), so a column another one just added is not an error.
+function addColumn(table: string, column: string, definition: string) {
+  const have = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+  if (have.includes(column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (err) {
+    if (!/duplicate column/i.test(String(err))) throw err;
+  }
+}
+addColumn("quizme", "kind", "TEXT NOT NULL DEFAULT 'highlight'"); // highlight | lecture
+addColumn("quizme", "document_id", "INTEGER"); // the lecture, for a lecture review
 
 export type QuizMeKind = "highlight" | "lecture";
 
@@ -71,7 +79,12 @@ export type QuizMeQuestion = {
   ref?: string;
   /** Lecture review only, for a section-quiz question: its stable id there (a rewritten quiz changes positions). */
   source_qid?: string;
+  /** Lecture review only: 1 for the first pass; a question missed again comes back as a copy in the next round. */
+  round?: number;
 };
+
+/** The most times a lecture review asks a question she keeps missing. */
+export const REVIEW_MAX_ROUNDS = 5;
 
 /** What the browser gets for a question. The key, explanation and notes only once it's answered. */
 export type QuizMeQuestionView = {
@@ -84,6 +97,8 @@ export type QuizMeQuestionView = {
   correct_index?: number;
   explanation?: string;
   option_notes?: string[] | null;
+  /** Lecture review: which round this question belongs to (1 = the first pass). */
+  round: number;
 };
 
 export type QuizMeView = {
@@ -101,6 +116,8 @@ export type QuizMeView = {
   /** Questions still to answer (hidden ones don't count). */
   left: number;
   finished: boolean;
+  /** Lecture review: the latest round (1 = the first pass); the questions carry theirs. */
+  round: number;
 };
 
 type Row = {
@@ -332,7 +349,7 @@ function view(row: Row): QuizMeView {
   const shown: QuizMeQuestionView[] = questions.map((q, i) => {
     const image = q.image_page_id != null ? pictureForIds(q.image_page_id, null) : null;
     const chosen = answers[i];
-    const base: QuizMeQuestionView = { question: q.question, options: q.options, image, chosen };
+    const base: QuizMeQuestionView = { question: q.question, options: q.options, image, chosen, round: q.round ?? 1 };
     if (q.hidden || (q.image_page_id != null && !image)) base.hidden = true;
     if (chosen != null) Object.assign(base, { correct_index: q.correct_index, explanation: q.explanation, option_notes: q.option_notes });
     return base;
@@ -350,6 +367,7 @@ function view(row: Row): QuizMeView {
     answers,
     left,
     finished: row.finished_at != null || left === 0,
+    round: Math.max(1, ...questions.map((q) => q.round ?? 1)),
   };
 }
 
@@ -414,9 +432,32 @@ export function answerQuizMe(input: { userId: number; id: number; index: number;
 
     answers[index] = chosen;
     const correct = chosen === q.correct_index;
-    // Finished once every question that can still be shown is answered.
-    const finished = view({ ...row, answers_json: JSON.stringify(answers) }).left === 0;
-    db.prepare(`UPDATE quizme SET answers_json = ?${finished ? ", finished_at = datetime('now')" : ""} WHERE id = ?`).run(JSON.stringify(answers), id);
+    // Finished once every question that can still be shown is answered. In a lecture review, finishing a round with
+    // misses opens the next: the missed ones come back (options reshuffled) until she gets them right, up to a limit.
+    let finished = view({ ...row, answers_json: JSON.stringify(answers) }).left === 0;
+    if (finished && row.kind === "lecture") {
+      const round = Math.max(1, ...questions.map((x) => x.round ?? 1));
+      const again = questions.map((x, i) => ({ x, i })).filter(({ x, i }) => (x.round ?? 1) === round && !x.hidden && answers[i] != null && answers[i] !== x.correct_index);
+      if (again.length > 0 && round < REVIEW_MAX_ROUNDS) {
+        for (const { x } of again) {
+          const order = shuffle(x.options.map((_, k) => k));
+          questions.push({
+            ...x,
+            options: order.map((k) => x.options[k]),
+            correct_index: order.indexOf(x.correct_index),
+            option_notes: x.option_notes ? order.map((k) => x.option_notes![k]) : null,
+            round: round + 1,
+          });
+          answers.push(null);
+        }
+        finished = false;
+      }
+    }
+    db.prepare(`UPDATE quizme SET questions_json = ?, answers_json = ?${finished ? ", finished_at = datetime('now')" : ""} WHERE id = ?`).run(
+      JSON.stringify(questions),
+      JSON.stringify(answers),
+      id,
+    );
     if (q.concept?.trim()) recordConceptResult(upsertConcept(userId, q.concept), correct);
     // Got it right in a lecture review: that miss is dealt with and won't be in the next review of the lecture (nor
     // will the same question asked by another quiz).
@@ -596,6 +637,7 @@ export function openLectureReview(userId: number, examId: number, documentId: nu
       correct_index: order.indexOf(m.question.correct_index),
       option_notes: m.question.option_notes ? order.map((i) => m.question.option_notes![i]) : null,
       ref: m.ref,
+      round: 1,
     };
   });
   const id = Number(
