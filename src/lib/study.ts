@@ -7,7 +7,7 @@ import { parseNotes } from "./processing";
 import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, distinctFacts, normStem, planQuizByFacts, QUIZ_MAX, type Angle, type FactSlide } from "./quizPlan";
-import { coveredFacts, quotedFacts } from "./lessonCoverage";
+import { coveredFacts, quotedFacts, trimRamble } from "./lessonCoverage";
 import { clearTopicQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK, NO_COVER_CHECK, NO_COVER_RULE } from "./examStyle";
 import { reportedStems } from "./reportedQuestions";
@@ -178,7 +178,7 @@ export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json" | "page_ids">):
 };
 
 export function getLesson(topic: Topic): Promise<Lesson> {
-  if (lessonIsCurrent(topic)) return Promise.resolve(JSON.parse(topic.lesson_json!) as Lesson);
+  if (lessonIsCurrent(topic)) return Promise.resolve(cleanStoredLesson(topic, JSON.parse(topic.lesson_json!) as Lesson));
   let p = inflight.get(topic.id);
   if (!p) {
     p = generateLesson(topic)
@@ -188,7 +188,7 @@ export function getLesson(topic: Topic): Promise<Lesson> {
         const old = storedSlideLesson(topic);
         if (!old) throw err;
         console.error(`Rewriting the lesson for topic ${topic.id} failed; showing the stored one`, err);
-        return old;
+        return cleanStoredLesson(topic, old);
       })
       .finally(() => inflight.delete(topic.id));
     inflight.set(topic.id, p);
@@ -215,17 +215,45 @@ function tidyLesson(raw: Lesson, pages: PageRow[]): Lesson {
   const order = new Map(pages.map((p, i) => [p.id, i]));
   const byPage = new Map<number, string>();
   for (const s of Array.isArray(raw.slides) ? raw.slides : []) {
-    if (!s || !order.has(s.page_id) || typeof s.explanation !== "string" || !s.explanation.trim()) continue;
-    const text = s.explanation.trim();
+    if (!s || !order.has(s.page_id) || typeof s.explanation !== "string") continue;
+    // A writer that drifts into "Done. Ok. Stop. Bye." at the end of a long explanation: that part goes. An entry
+    // that was nothing but filler is dropped (the slide then counts as left out and gets a repair).
+    const text = trimRamble(s.explanation).text.trim();
+    if (!text) continue;
     byPage.set(s.page_id, byPage.has(s.page_id) ? `${byPage.get(s.page_id)}\n\n${text}` : text);
   }
   return {
     ...raw,
-    intro: typeof raw.intro === "string" ? raw.intro.trim() : "",
+    intro: typeof raw.intro === "string" ? trimRamble(raw.intro).text.trim() : "",
     slides: [...byPage].sort((a, b) => order.get(a[0])! - order.get(b[0])!).map(([page_id, explanation]) => ({ page_id, explanation })),
     key_points: Array.isArray(raw.key_points) ? raw.key_points : [],
     connections: typeof raw.connections === "string" ? raw.connections : null,
   };
+}
+
+/**
+ * A stored lesson with filler the writer drifted into (lessons written before the trim existed): the filler is cut
+ * when the lesson is served and the clean lesson saved back, with no AI call. Returns the lesson to show.
+ */
+function cleanStoredLesson(topic: Pick<Topic, "id">, lesson: Lesson): Lesson {
+  let changed = false;
+  const slides = (Array.isArray(lesson.slides) ? lesson.slides : [])
+    .map((s) => {
+      if (!s || typeof s.explanation !== "string") return s;
+      const t = trimRamble(s.explanation);
+      if (!t.trimmed) return s;
+      changed = true;
+      return { ...s, explanation: t.text.trim() };
+    })
+    .filter((s) => !s || typeof s.explanation !== "string" || s.explanation.trim());
+  if (slides.length !== (Array.isArray(lesson.slides) ? lesson.slides.length : 0)) changed = true;
+  const intro = typeof lesson.intro === "string" ? trimRamble(lesson.intro) : null;
+  if (intro?.trimmed) changed = true;
+  if (!changed) return lesson;
+  const clean: Lesson = { ...lesson, slides, intro: intro ? intro.text.trim() : lesson.intro };
+  console.warn(`Lesson for topic ${topic.id}: filler cut from the stored lesson`);
+  db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(clean), topic.id);
+  return clean;
 }
 
 async function generateLesson(topic: Topic): Promise<Lesson> {
@@ -328,7 +356,8 @@ Teach only from the student's slides provided (plus standard dental knowledge ne
 - Say it in plain words first, then give the term in **bold**: "the nerve and blood vessels inside the tooth — the **pulp**". Define every term the first time it appears. Short sentences, short paragraphs, one idea at a time. The intro is one sentence saying what the section is about.
 - Don't cite slide numbers: the slide is right above its explanation. Point at what is on it when that helps ("the arrow", "the left radiograph").
 - Slides marked ★IMPORTANT or with annotations are ones the student marked as important in her own notes: say so in that slide's explanation ("★ you emphasized this") and put them first in the key points.
-- Numbers, ranges, names and classifications are given exactly as the slides give them; the words around them are yours.`;
+- Numbers, ranges, names and classifications are given exactly as the slides give them; the words around them are yours.
+- An entry ends when the slide is explained. No closing words ("Done", "End of slide", "Thanks"), no filler lines, nothing after the last fact.`;
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 

@@ -69,6 +69,66 @@ export function quotedFacts(text: string, facts: string[]): { quoted: string[]; 
   return { quoted, judged, ratio: judged === 0 ? 0 : quoted.length / judged };
 }
 
+/** How many filler lines in a row mark the point where an explanation stopped teaching. */
+export const RAMBLE_RUN = 3;
+
+/**
+ * A line that says nothing: at most three words of plain prose ("Done.", "Ok.", "(Keep going.)", "End of slide."), or
+ * only punctuation. Headings, list items, table rows, quotes and lead-ins that end in ":" are never filler, nor is
+ * a line with a number in it.
+ */
+function isFiller(line: string): boolean {
+  const t = line.trim();
+  if (t === "") return false;
+  // A whole line in parentheses is an aside the drifting writer is fond of ("(Keep going.)", "(Note: …)"); on its
+  // own it stays, in a run it goes.
+  if (/^\(.*\)$/.test(t)) return true;
+  if (/^([#>|]|[-*+]\s|\d+[.)]\s)/.test(t) || t.endsWith(":")) return false;
+  const words = t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+  if (words.some((w) => /\d/.test(w))) return false;
+  return words.length <= 3;
+}
+
+/**
+ * Cut the filler a writer can drift into at the end of a long explanation ("Done. Ok. Stop. . . End of slide. Bye."):
+ * everything from the first run of RAMBLE_RUN filler lines in a row to the end goes, and so do filler lines left
+ * trailing at the end. Real explanations are sentences, so a short plain line is rare and three in a row never happen.
+ */
+export function trimRamble(text: string): { text: string; trimmed: boolean } {
+  const lines = text.split("\n");
+  // Lines inside a code fence are whatever they are, never filler.
+  let inFence = false;
+  const filler = lines.map((l) => {
+    if (/^\s*(```|~~~)/.test(l)) {
+      inFence = !inFence;
+      return false;
+    }
+    return !inFence && isFiller(l);
+  });
+  // A text with nothing but short lines: a genuinely short explanation ("See the picture.") stays; a run of filler
+  // and nothing else is all filler.
+  if (!lines.some((l, i) => l.trim() !== "" && !filler[i])) {
+    const short = filler.filter(Boolean).length;
+    return short >= RAMBLE_RUN ? { text: "", trimmed: true } : { text: text.trimEnd(), trimmed: false };
+  }
+  let cut = lines.length;
+  for (let i = 0, run = 0, runStart = 0; i < lines.length; i++) {
+    if (lines[i].trim() === "") continue; // blank lines don't break a run (paragraphs are separated by them)
+    if (!filler[i]) {
+      run = 0;
+      continue;
+    }
+    if (run === 0) runStart = i;
+    if (++run >= RAMBLE_RUN) {
+      cut = runStart;
+      break;
+    }
+  }
+  while (cut > 0 && (lines[cut - 1].trim() === "" || filler[cut - 1])) cut--;
+  const kept = lines.slice(0, cut).join("\n").trimEnd();
+  return { text: kept, trimmed: kept !== text.trimEnd() };
+}
+
 /**
  * A crude stem: drops common English endings so "pulpal"/"pulps" meet "pulp" and "fractures"/"nerves" meet
  * "fracture"/"nerve" (a trailing e goes too, on both sides). Numbers and short words are left alone.
