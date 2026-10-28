@@ -54,3 +54,31 @@ export function migrateSessionChecks(): number {
     return n;
   })();
 }
+
+type StoredQuiz = { id?: string; hidden?: boolean; report_note?: string | null }[];
+
+/**
+ * Hides a section-quiz question (by its stable id) in this topic and in the same section of every copy of the exam:
+ * the exam it was shared from and every exam added from it (copies keep question ids). The question stays in place so
+ * positions, and the answers that refer to them, never shift. Returns how many quizzes changed.
+ */
+export function hideQuizQuestionEverywhere(topicId: number, questionId: string, note: string | null): number {
+  const topic = db.prepare("SELECT exam_id FROM topics WHERE id = ?").get(topicId) as { exam_id: number } | undefined;
+  if (!topic) return 0;
+  const exam = db.prepare("SELECT id, source_exam_id FROM exams WHERE id = ?").get(topic.exam_id) as { id: number; source_exam_id: number | null };
+  const root = exam.source_exam_id ?? exam.id;
+  const topics = db
+    .prepare("SELECT t.id, t.checks_json FROM topics t JOIN exams e ON e.id = t.exam_id WHERE (e.id = ? OR e.source_exam_id = ?) AND t.checks_json IS NOT NULL")
+    .all(root, root) as { id: number; checks_json: string }[];
+  const update = db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?");
+  let n = 0;
+  for (const t of topics) {
+    const qs = JSON.parse(t.checks_json) as StoredQuiz;
+    const i = qs.findIndex((q) => q.id === questionId);
+    if (i === -1 || qs[i].hidden) continue;
+    qs[i] = { ...qs[i], hidden: true, report_note: qs[i].report_note ?? note };
+    update.run(JSON.stringify(qs), t.id);
+    n++;
+  }
+  return n;
+}

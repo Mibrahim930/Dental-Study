@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS attempt_questions (
   correct INTEGER,
   confidence TEXT,                                 -- guess | unsure | sure, given before the answer is revealed
   option_order TEXT,                               -- JSON display order of options, for questions retried from an earlier exam
+  reported INTEGER NOT NULL DEFAULT 0,             -- reported mid-exam: out of this exam and its score
   PRIMARY KEY (attempt_id, question_id)
 );
 
@@ -347,6 +348,7 @@ function migrate(db: Database.Database) {
   }
   if (!columns(db, "exams").includes("source_exam_id")) db.exec("ALTER TABLE exams ADD COLUMN source_exam_id INTEGER");
   if (!columns(db, "attempts").includes("task_id")) db.exec("ALTER TABLE attempts ADD COLUMN task_id INTEGER");
+  if (!columns(db, "attempt_questions").includes("reported")) db.exec("ALTER TABLE attempt_questions ADD COLUMN reported INTEGER NOT NULL DEFAULT 0");
   if (!columns(db, "exams").includes("kind")) db.exec("ALTER TABLE exams ADD COLUMN kind TEXT NOT NULL DEFAULT 'block'");
   if (!columns(db, "documents").includes("backed_up")) db.exec("ALTER TABLE documents ADD COLUMN backed_up INTEGER NOT NULL DEFAULT 0");
   if (!columns(db, "users").includes("is_admin")) {

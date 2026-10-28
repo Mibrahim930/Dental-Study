@@ -15,3 +15,8 @@ export const EXAM_STYLE = `How this student's real exams are written. Match this
 
 /** What the checking pass rejects on top of a wrong answer key: options a student could dismiss without knowing the material. */
 export const EXAM_STYLE_CHECK = `Also mark ok = false when the wrong options are not the same kind of thing as the keyed answer, come from a different topic, or are obviously unrelated to the question (a student could rule them out without knowing the material), when any wrong option is absurd or trivially dismissible, when a wrong option is also a correct answer or a rewording of the keyed one, when the stem gives the answer away, when the correct option is clearly the longest or most detailed one, or when the question tests the same fact as an earlier question in the list (same answer for the same reason).`;
+
+/** Never a question: the lecture's cover and housekeeping. Shared by every question writer. */
+export const NO_COVER_RULE = `Never ask about the lecture itself rather than its content: its title, number or course code, the lecturer's name, institution, department, the date or year, the objectives or outline slide, references, or "thank you" / "questions?" slides. A question whose answer is such a detail is worthless to the student.`;
+/** The checker's version of the same rule. */
+export const NO_COVER_CHECK = `Mark ok = false for any question about the lecture's cover or housekeeping rather than its content: the title, number, course code, lecturer, institution, date, objectives, outline or references.`;

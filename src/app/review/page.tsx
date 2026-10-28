@@ -208,7 +208,19 @@ export default function ReviewPage() {
         </span>
       </div>
       <Strip total={cards.length} filled={index} className="px-1" />
-      <QuestionCard key={c.card_id} q={q} onChoose={chosen == null ? setChosen : undefined} />
+      <QuestionCard
+        key={c.card_id}
+        q={q}
+        onChoose={chosen == null ? setChosen : undefined}
+        onReport={async (reason) => {
+          const res = await fetch(`/api/questions/${c.id}/flag`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason, source: "review" }) });
+          if (signedOut(res)) return;
+          if (!res.ok) throw new Error(String(res.status));
+          // Out of today's list (and never back: it's flagged). The next card slides into this spot.
+          setChosen(null);
+          setCards((cs) => cs && cs.filter((x) => x.card_id !== c.card_id));
+        }}
+      />
       {chosen != null && (
         <section className="card flex flex-col gap-2.5">
           {correct ? (

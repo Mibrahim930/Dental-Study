@@ -6,8 +6,8 @@ import { type OptionState } from "./ui";
 import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
-import { toast } from "./Toaster";
 import { signedOut } from "./clientFetch";
+import { ReportQuestion } from "./ReportQuestion";
 
 export type QuestionData = {
   id: number;
@@ -56,6 +56,7 @@ export function QuestionCard({
   belowOptions,
   practice = false,
   marksKey = null,
+  onReport,
 }: {
   q: QuestionData;
   onChoose?: (i: number) => void;
@@ -68,11 +69,24 @@ export function QuestionCard({
   practice?: boolean;
   /** Where the student's highlights and cross-outs on this question are saved (e.g. "attempt:12:345"). */
   marksKey?: string | null;
+  /**
+   * What "Report" does: the caller removes the question from where it's shown (and its score). Without it, the
+   * question is flagged everywhere (daily review, an old results page) and the card hides itself.
+   */
+  onReport?: (reason: string) => Promise<void>;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
   const [showSource, setShowSource] = useState(false);
   const [flagged, setFlagged] = useState(q.flagged);
+  const report =
+    onReport ??
+    (async (reason: string) => {
+      const res = await fetch(`/api/questions/${q.id}/flag`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) });
+      if (signedOut(res)) return;
+      if (!res.ok) throw new Error(String(res.status));
+      setFlagged(true);
+    });
   const [marks, setMarks] = useMarks(marksKey);
   const hl = (field: string) => ({
     ranges: marks.hl[field] ?? [],
@@ -87,25 +101,16 @@ export function QuestionCard({
     onChoose?.(i);
   };
 
-  async function flag() {
-    const note = window.prompt("What's wrong with this question? (optional)") ?? undefined;
-    try {
-      const res = await fetch(`/api/questions/${q.id}/flag`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note }),
-      });
-      if (signedOut(res)) return;
-      if (!res.ok) throw new Error(String(res.status));
-      setFlagged(true);
-    } catch {
-      // Only say "Reported" when the report actually arrived.
-      toast("The report didn't go through. Check your connection and try again.", "error");
-    }
-  }
-
   const stateOf = (i: number): OptionState =>
     revealed ? (i === q.correct_index ? "correct" : i === selected ? "wrong" : "dim") : i === selected ? "selected" : "default";
+
+  if (flagged && !q.flagged) {
+    return (
+      <section className="card">
+        <p className="text-[15px] font-semibold text-muted-foreground">Reported. This question won&apos;t be shown again.</p>
+      </section>
+    );
+  }
 
   return (
     <>
@@ -176,6 +181,9 @@ export function QuestionCard({
           ))}
         </div>
         {belowOptions}
+        <div className="-mb-1 flex justify-end">
+          <ReportQuestion onReport={report} />
+        </div>
       </section>
 
       {revealed && (
@@ -198,9 +206,7 @@ export function QuestionCard({
             ) : (
               <span />
             )}
-            <button className="text-[13px] font-semibold text-hero-muted underline-offset-4 hover:underline" onClick={flag} disabled={flagged}>
-              {flagged ? "Reported. Thanks!" : "Report a problem"}
-            </button>
+            <span />
           </div>
           {q.concept && <div className="mt-2 text-[13px] text-hero-muted">Concept: {q.concept}</div>}
           {showSource && q.source && (

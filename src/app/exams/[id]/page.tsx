@@ -8,6 +8,8 @@ import { Uploader } from "@/components/Uploader";
 import { PracticeForm } from "@/components/PracticeForm";
 import { ActionButton } from "@/components/ActionButton";
 import { RemoveLectureButton } from "@/components/RemoveLectureButton";
+import { LectureReviewCard } from "@/components/LectureReviewCard";
+import { QuizMe } from "@/components/QuizMe";
 import { setArchived, updateExam } from "@/app/actions";
 import { requireUser } from "@/lib/user";
 import { plannerSettings, todayIn } from "@/lib/planner";
@@ -132,6 +134,8 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   return (
     <div className="flex flex-col gap-2.5 sm:gap-4">
       <AutoRefresh active={processing} ms={refreshMs} />
+      {/* The panel the lecture review opens in (no text-selection pill here: nothing on this page to be quizzed on). */}
+      <QuizMe examId={exam.id} selection={false} />
       <div className="flex items-center justify-between gap-3 px-1">
         <Link href="/" className="flex items-center gap-1.5 text-[15px] font-bold text-muted-foreground hover:text-foreground">
           <Icon d={ICONS.arrowLeft} size={18} /> All exams
@@ -349,7 +353,11 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                         <SectionRow key={t.id} topic={t} n={k + 1} {...mapRow} />
                       ))}
                     </ol>
-                    <div className="flex justify-end">{remove}</div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {/* Missed questions from this lecture's quizzes, as one review quiz (opens in the Quiz me panel). */}
+                      <LectureReviewCard examId={exam.id} documentId={d.id} lecture={name} compact />
+                      {remove}
+                    </div>
                   </div>
                 </details>
               );

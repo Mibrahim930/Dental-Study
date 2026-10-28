@@ -8,6 +8,7 @@ import { SlideImage } from "./SlideImage";
 import { Icon, ICONS, type OptionState } from "./ui";
 import { failureText, jsonOf, ServerMessage, signedOut } from "./clientFetch";
 import { toast } from "./Toaster";
+import { ReportQuestion } from "./ReportQuestion";
 
 /** Keep in step with lib/quizMe.ts. */
 const SIZES = [3, 5, 10] as const;
@@ -57,7 +58,7 @@ function withAnswer(q: QuizMeView, at: number, r: QuizMeAnswer): QuizMeView {
  * slides, answered one at a time with a note on every option. Answers count toward mastery. An unfinished quiz is
  * kept and offered again ("Resume your quiz") the next time this exam's pages open.
  */
-export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }) {
+export function QuizMe({ examId, topicId, selection = true }: { examId: number; topicId?: number; /** Offer "Quiz me on this" on a text selection (off on pages with nothing to quiz on). */ selection?: boolean }) {
   const [pill, setPill] = useState<Pill | null>(null);
   const onPill = useRef(false);
 
@@ -77,6 +78,28 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
   useEffect(() => {
     openRef.current = open;
   }, [open]);
+
+  // Another part of the page (the lecture review card) hands over a quiz to run here.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const q = (e as CustomEvent<QuizMeView>).detail;
+      if (!q || q.examId !== examId) return;
+      setQuiz(q);
+      setIndex(firstOpen(q));
+      setPicked(null);
+      setError("");
+      setStage("quiz");
+      setOpen(true);
+    };
+    window.addEventListener("quizme-open", onOpen);
+    return () => window.removeEventListener("quizme-open", onOpen);
+  }, [examId]);
+
+  // Cards that count misses refresh when the panel closes.
+  const close = () => {
+    setOpen(false);
+    window.dispatchEvent(new Event("quizme-closed"));
+  };
 
   // An unfinished quiz for this exam is offered again.
   useEffect(() => {
@@ -98,6 +121,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
 
   // The pill: shown under a selection of three or more words inside the page's <main>.
   useEffect(() => {
+    if (!selection) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const update = () => {
       if (onPill.current) return; // tapping the pill can clear the selection first on phones
@@ -141,13 +165,17 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
       window.removeEventListener("resize", hide);
       window.removeEventListener("keydown", onKey);
     };
-  }, []);
+  }, [selection]);
 
   // The panel closes on Escape and takes focus when it opens.
   useEffect(() => {
     if (!open) return;
     panel.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      window.dispatchEvent(new Event("quizme-closed"));
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
@@ -227,10 +255,25 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
   }
 
   function done() {
-    setOpen(false);
+    close();
     setQuiz(null);
     setStage("choose");
     setDraft(null);
+  }
+
+  // Report: the question leaves this quiz and its score; the owner gets the record.
+  async function report(reason: string) {
+    const item = shown[index];
+    if (!quiz || !item) return;
+    const id = quiz.id;
+    const r = await call<{ ok: boolean; quiz: QuizMeView | null }>(`/api/quizme/${id}/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: item.at, reason }),
+    });
+    if (!r?.quiz) return;
+    setPicked(null);
+    setQuiz((q) => (q && q.id === id ? r.quiz : q));
   }
 
   const total = shown.length;
@@ -257,7 +300,11 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
           <div className="mt-1 text-[22px] font-extrabold tracking-tight">
             {total > 0 ? `${Math.round((right / total) * 100)}% · ${right}/${total} right.` : "Nothing to score."}
           </div>
-          <p className="mt-1 text-[14px] font-medium opacity-85">These answers count toward your mastery.</p>
+          <p className="mt-1 text-[14px] font-medium opacity-85">
+            {quiz.kind === "lecture"
+              ? "These answers count toward your mastery. What you got right won't come back; what you missed will be in this lecture's next review."
+              : "These answers count toward your mastery."}
+          </p>
         </div>
         <button type="button" className="btn-primary btn-lg" onClick={done}>
           Done
@@ -277,8 +324,11 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
           : "px-3 text-muted-foreground";
     body = (
       <div className="flex flex-col gap-3.5">
-        <div className="text-[13px] font-bold text-muted-foreground">
-          Question {index + 1} of {total}
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[13px] font-bold text-muted-foreground">
+            Question {index + 1} of {total}
+          </div>
+          <ReportQuestion onReport={report} />
         </div>
         {q.image && (
           <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
@@ -372,7 +422,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
     );
   }
 
-  const title = stage === "quiz" && quiz ? "Quiz on what you highlighted" : "Quiz me on this";
+  const title = stage === "quiz" && quiz ? (quiz.kind === "lecture" ? `Lecture review · ${quiz.text}` : "Quiz on what you highlighted") : "Quiz me on this";
   const showResume = !open && (stage === "writing" || (quiz != null && !quiz.finished && quiz.left > 0));
 
   return (
@@ -410,7 +460,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
           >
             <Icon d={ICONS.review} size={16} />
             <span className="truncate">
-              {stage === "writing" ? "Writing your quiz…" : `Resume your quiz (${quiz!.left} of ${quiz!.questions.filter((x) => !x.hidden).length} left)`}
+              {stage === "writing" ? "Writing your quiz…" : `Resume your ${quiz!.kind === "lecture" ? "lecture review" : "quiz"} (${quiz!.left} of ${quiz!.questions.filter((x) => !x.hidden).length} left)`}
             </span>
           </button>,
           document.body,
@@ -418,7 +468,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
       {open &&
         createPortal(
           <div data-quizme>
-            <div className="fixed inset-0 z-40 bg-black/30 sm:bg-black/10" onClick={() => setOpen(false)} aria-hidden />
+            <div className="fixed inset-0 z-40 bg-black/30 sm:bg-black/10" onClick={close} aria-hidden />
             <div
               ref={panel}
               role="dialog"
@@ -431,7 +481,7 @@ export function QuizMe({ examId, topicId }: { examId: number; topicId?: number }
                 <h2 id="quizme-title" className="text-[18px] font-extrabold tracking-tight">
                   {title}
                 </h2>
-                <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
+                <button type="button" onClick={close} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
                   <Icon d={ICONS.close} size={18} />
                 </button>
               </div>

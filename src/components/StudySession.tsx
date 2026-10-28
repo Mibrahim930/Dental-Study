@@ -11,6 +11,8 @@ import { OptionRow } from "./OptionRow";
 import { Highlightable } from "./Highlightable";
 import { useMarks } from "./useMarks";
 import { QuizMe } from "./QuizMe";
+import { ReportQuestion } from "./ReportQuestion";
+import { LectureReviewCard } from "./LectureReviewCard";
 import type { Range } from "@/lib/marks";
 
 /**
@@ -289,6 +291,7 @@ export function StudySession(props: {
               label={byLecture ? `Section ${topic.section}` : `Topic ${position + 1}`}
               nextLabel={nextLabel}
               onNext={() => (isLast ? endSession() : go(position + 1))}
+              lectureReview={(lastInLecture || isLast) && topic.lectureId != null ? { examId, documentId: topic.lectureId, lecture: topic.lecture ?? "" } : null}
             />
           )}
 
@@ -406,6 +409,7 @@ function SectionQuiz({
   label,
   nextLabel,
   onNext,
+  lectureReview,
 }: {
   sessionId: number;
   position: number;
@@ -415,6 +419,8 @@ function SectionQuiz({
   /** "Next section →", "Next lecture →" on a lecture's last section, "Finish session" on the very last. */
   nextLabel: string;
   onNext: () => void;
+  /** Set on a lecture's last section: the end-of-lecture review card goes under the score. */
+  lectureReview: { examId: number; documentId: number; lecture: string } | null;
 }) {
   const [quiz, setQuiz] = useState<{ topicId: number; questions: QuizQ[]; slides: number } | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
@@ -611,6 +617,7 @@ function SectionQuiz({
             </div>
           </div>
         )}
+        {lectureReview && <LectureReviewCard examId={lectureReview.examId} documentId={lectureReview.documentId} lecture={lectureReview.lecture} />}
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
           <div className="flex flex-col gap-2 sm:flex-row">
             <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
@@ -632,6 +639,18 @@ function SectionQuiz({
   const answered = chosen != null;
   const stateOf = (i: number): OptionState =>
     answered ? (i === q.correct_index ? "correct" : i === chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
+  // Report: the question leaves this quiz (and its score) at once; the server hides it in every copy of the exam.
+  const report = async (reason: string) => {
+    const res = await fetch(`/api/sessions/${sessionId}/quiz/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId: quiz.topicId, questionId: q.id, reason }),
+    });
+    if (signedOut(res)) return;
+    if (!res.ok) throw new Error(String(res.status));
+    setPicked(null);
+    setQuiz((z) => (z ? { ...z, questions: z.questions.map((x) => (x.id === q.id ? { ...x, hidden: true } : x)) } : z));
+  };
 
   return (
     <section ref={box} className="card scroll-mt-3 flex flex-col gap-3.5">
@@ -640,6 +659,7 @@ function SectionQuiz({
           Section quiz · {index + 1} of {total}
         </div>
         <div className="flex flex-wrap items-center gap-1">
+          {q.id && <ReportQuestion onReport={report} />}
           {done > 0 && (
             <button className="btn-ghost px-1" onClick={() => goTo(total)}>
               I&apos;m done — see my score
@@ -662,7 +682,6 @@ function SectionQuiz({
           <div className="text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
             <ReactMarkdown>{q.explanation}</ReactMarkdown>
           </div>
-          {q.id && <ReportQuizQuestion key={q.id} sessionId={sessionId} topicId={quiz.topicId} questionId={q.id} />}
         </div>
       )}
       {answered ? (
@@ -809,58 +828,6 @@ function RegenerateQuiz({
         </button>
         <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={() => setState("idle")}>
           Keep these
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** "Report a problem" under a quiz answer: an inline note, then the question is hidden from this quiz from now on. */
-function ReportQuizQuestion({ sessionId, topicId, questionId }: { sessionId: number; topicId: number; questionId: string }) {
-  const [state, setState] = useState<"idle" | "open" | "sending" | "sent" | "error">("idle");
-  const [note, setNote] = useState("");
-
-  async function send() {
-    setState("sending");
-    const res = await fetch(`/api/sessions/${sessionId}/quiz/report`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId, questionId, note }),
-    }).catch(() => null);
-    setState(res?.ok ? "sent" : "error");
-  }
-
-  if (state === "sent") return <p className="mt-3 text-[13px] font-semibold text-hero-muted">Reported. Thanks! This question won&apos;t be shown again.</p>;
-  if (state === "idle") {
-    return (
-      <div className="mt-3 flex justify-end">
-        <button className="text-[13px] font-semibold text-hero-muted underline-offset-4 hover:underline" onClick={() => setState("open")}>
-          Report a problem
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div className="mt-3 flex flex-col gap-2">
-      <label className="text-[13px] font-bold text-hero-muted" htmlFor={`report-${questionId}`}>
-        What&apos;s wrong with this question? (optional)
-      </label>
-      <textarea
-        id={`report-${questionId}`}
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        maxLength={500}
-        rows={2}
-        className="w-full rounded-2xl border-2 border-transparent bg-white/10 px-3 py-2 text-[15px] text-hero-foreground outline-none placeholder:text-hero-muted focus:border-hero-accent"
-        placeholder="e.g. the marked answer is wrong"
-      />
-      {state === "error" && <p className="text-[13px] font-semibold text-hero-accent">Couldn&apos;t send it. Try again.</p>}
-      <div className="flex justify-end gap-2">
-        <button className="btn-ghost btn-sm text-hero-foreground" onClick={() => setState("idle")} disabled={state === "sending"}>
-          Cancel
-        </button>
-        <button className="btn-hero btn-sm" onClick={send} disabled={state === "sending"}>
-          {state === "sending" ? "Sending…" : "Send report"}
         </button>
       </div>
     </div>

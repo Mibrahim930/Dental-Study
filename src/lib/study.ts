@@ -9,7 +9,8 @@ import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, normStem, planQuizByFacts, quizSize, type Angle, type FactSlide } from "./quizPlan";
 import { coveredFacts } from "./lessonCoverage";
 import { clearTopicQuizAnswers } from "./quizProgress";
-import { EXAM_STYLE, EXAM_STYLE_CHECK } from "./examStyle";
+import { EXAM_STYLE, EXAM_STYLE_CHECK, NO_COVER_CHECK, NO_COVER_RULE } from "./examStyle";
+import { reportedStems } from "./reportedQuestions";
 import { markPictures, mentionsPicture, pictureFor, PICTURE_RULES } from "./questionImage";
 
 export const Lesson = z.object({
@@ -313,6 +314,7 @@ You are given a numbered list of planned questions: each names the slide it must
 - A question with a listed fact tests exactly that fact and nothing else. A question without one tests its slide from the given angle without repeating a fact another question already tests. Never ask the same fact twice in different words.
 - Single best answer, 4 options. Exactly one option is defensibly correct from the slides.
 - Use "EXCEPT"/"NOT" only when the angle says so. Don't test citations, authors, years or slide numbers.
+- ${NO_COVER_RULE}
 - The explanation says why the answer is right and why the most tempting wrong answer is wrong, and cites the slide as (Lecture, slide N).
 - option_notes: one short sentence per option, in the same order as options — for the right one why it is right, for each wrong one exactly why it is wrong (which fact or condition it mixes up).
 - ${PICTURE_RULES}
@@ -323,6 +325,7 @@ const JUDGE_SYSTEM = `You check quiz questions written for a dental student agai
 For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
 A question marked "picture shown: slide P" shows the student that slide's picture (the whole slide unless the notes mark a clinical-image crop): mark it ok = false if the answer is printed on that slide in a way the student would simply read off.
 Also say, for every question, whether answering it needs something the student has to see (picture = true): a picture, radiograph, diagram, chart or graph, a slide referred to as such ("on slide 12", "the slide's diagram"), or anything labeled, drawn, circled, shaded or pointed at. A question with no "picture shown" that needs one will be given its slide's picture or dropped, so be honest rather than lenient.
+${NO_COVER_CHECK}
 ${EXAM_STYLE_CHECK}`;
 
 type Draft = Omit<QuizQuestion, "id" | "hidden" | "report_note"> & { slot: number };
@@ -461,7 +464,9 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const all = slots.map((_, i) => i);
   // Two writer calls run side by side for a quiz of any size; a small one (up to 4 questions) is one call.
   const halves = all.length <= 4 ? [all] : [all.slice(0, Math.ceil(all.length / 2)), all.slice(Math.ceil(all.length / 2))];
-  const settled = await Promise.allSettled(halves.map((h) => write(h, [])));
+  // Questions students reported on this section (own copy or a class copy) are named so the writer steers clear of them.
+  const reported = reportedStems(topic.id);
+  const settled = await Promise.allSettled(halves.map((h) => write(h, reported)));
   const first = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
   if (first.length === 0 && settled.every((r) => r.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
   // Check the dedupe first so the checking pass doesn't see the same question twice.

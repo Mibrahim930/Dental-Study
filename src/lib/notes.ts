@@ -8,7 +8,11 @@ export const SlideNotes = z.object({
     .string()
     .nullable()
     .describe("What the radiographs / photos / histology / diagrams show and what to notice. null if no meaningful image"),
-  key_facts: z.array(z.string()).describe("Testable facts from this slide, each one self-contained"),
+  key_facts: z
+    .array(z.string())
+    .describe(
+      "Testable facts from this slide, each one self-contained. Never the lecture's title, number, course, lecturer, institution, date, objectives or outline: those are not facts to learn (a cover slide has none)",
+    ),
   annotations: z
     .array(z.string())
     .describe("Notes the student or professor added on top of the slide: typed notes, handwriting, circled/highlighted text. Transcribe them"),

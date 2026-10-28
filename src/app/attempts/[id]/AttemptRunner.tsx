@@ -30,6 +30,18 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   // "Finish" with questions left asks first (one stray tap shouldn't end a timed exam). Shown next to the button used.
   const [confirmAt, setConfirmAt] = useState<"top" | "bottom" | null>(null);
   const { attempt, questions } = view;
+  // Report: the question leaves this exam and its score (15 questions, one reported, 8 right → 8/14).
+  const report = useCallback(
+    async (questionId: number, reason: string) => {
+      const res = await fetch(`/api/attempts/${attemptId}/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ questionId, reason }) });
+      if (signedOut(res)) return;
+      const json = await jsonOf<AttemptView & { error?: string }>(res);
+      if (!res.ok || !json?.attempt) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      setView(json);
+      setIndex((i) => Math.min(i, Math.max(0, json.questions.length - 1)));
+    },
+    [attemptId],
+  );
   const finished = attempt.status === "finished";
 
   // Moving to another question by her own tap scrolls back to the top (on a phone she'd otherwise land on the bottom
@@ -104,7 +116,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     );
   }
 
-  if (finished) return <Results view={view} />;
+  if (finished) return <Results view={view} onReport={report} />;
 
   const current = questions[index];
   const q = current as QuestionData;
@@ -241,6 +253,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         marksKey={`attempt:${attemptId}:${q.id}`}
         pending={pending[q.id]}
         onChoose={q.chosen_index == null ? choose : undefined}
+        onReport={(reason) => report(q.id, reason)}
         belowOptions={confidence}
         tag={current.retry ? <span className="chip bg-on-lilac text-lilac">↺ Missed last time</span> : undefined}
         header={
@@ -342,7 +355,7 @@ function Timer({ startedAt, limit, onExpire }: { startedAt: string; limit: numbe
   );
 }
 
-function Results({ view }: { view: AttemptView }) {
+function Results({ view, onReport }: { view: AttemptView; onReport: (questionId: number, reason: string) => Promise<void> }) {
   const router = useRouter();
   const { attempt, questions, context } = view;
   const [open, setOpen] = useState<number | null>(null);
@@ -513,7 +526,7 @@ function Results({ view }: { view: AttemptView }) {
               </button>
               {open === i && (
                 <div className="flex flex-col gap-2.5 px-1 pt-1 pb-3">
-                  <QuestionCard q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
+                  <QuestionCard q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} onReport={(reason) => onReport(q.id, reason)} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
                 </div>
               )}
             </div>

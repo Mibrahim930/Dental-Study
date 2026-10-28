@@ -5,6 +5,7 @@ import { AdminUserActions } from "@/components/AdminUserActions";
 import { BackupNowButton } from "@/components/BackupNowButton";
 import { ActionButton } from "@/components/ActionButton";
 import { listReports, unseenReportCount } from "@/lib/reports";
+import { listReportedQuestions } from "@/lib/reportedQuestions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,8 @@ export default async function AdminPage() {
   const backup = lastBackup();
   const reports = listReports();
   const unseen = unseenReportCount();
+  const reportedQuestions = listReportedQuestions(200);
+  const sourceLabel: Record<string, string> = { quiz: "Section quiz", practice: "Practice exam", review: "Daily review", quizme: "Quiz me", lecture_review: "Lecture review" };
 
   return (
     <div className="space-y-6">
@@ -117,6 +120,54 @@ export default async function AdminPage() {
                     <ActionButton url={`/api/admin/reports/${r.id}/seen`} label="Mark seen" className="btn-secondary btn-sm" />
                   </div>
                 )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title ">Reported questions ({reportedQuestions.length})</h2>
+          {reportedQuestions.length > 0 && (
+            <a href="/api/admin/reported-questions" className="btn-secondary btn-sm" download>
+              Download all (JSON)
+            </a>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Questions students removed with the Report button. Each one also sits as a file under the data folder (files/reported-questions/). The writers are
+          told to steer clear of a section&apos;s reported questions next time its quiz is written.
+        </p>
+        {reportedQuestions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {reportedQuestions.map((r) => (
+              <li key={r.id} className="space-y-1.5 py-3 text-sm">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <span className="chip bg-muted">{sourceLabel[r.source] ?? r.source}</span>
+                  <span>{r.email}</span>
+                  <span>· {r.created_at.slice(0, 16).replace("T", " ")}</span>
+                  {r.question.exam && <span>· {r.question.exam}</span>}
+                  {r.question.lecture && (
+                    <span>
+                      · {r.question.lecture}
+                      {r.question.slide != null ? `, slide ${r.question.slide}` : ""}
+                    </span>
+                  )}
+                  {r.question.section && <span>· {r.question.section}</span>}
+                </div>
+                <div className="font-semibold">{r.question.question}</div>
+                <ol className="list-[upper-alpha] pl-6 text-muted-foreground">
+                  {r.question.options.map((o, i) => (
+                    <li key={i} className={i === r.question.correct_index ? "font-semibold text-foreground" : ""}>
+                      {o}
+                      {i === r.question.correct_index ? " (keyed answer)" : ""}
+                    </li>
+                  ))}
+                </ol>
+                {r.reason && <div className="text-foreground">Reason: &ldquo;{r.reason}&rdquo;</div>}
               </li>
             ))}
           </ul>

@@ -72,7 +72,7 @@ export function attemptView(attemptId: number) {
        LEFT JOIN cases cs ON cs.id = q.case_id
        LEFT JOIN topics t ON t.id = q.topic_id LEFT JOIN concepts c ON c.id = q.concept_id
        LEFT JOIN pages sp ON sp.id = q.source_page_id LEFT JOIN documents d ON d.id = sp.document_id
-       WHERE aq.attempt_id = ? ORDER BY aq.position`,
+       WHERE aq.attempt_id = ? AND aq.reported = 0 ORDER BY aq.position`,
     )
     .all(attemptId) as Row[];
 

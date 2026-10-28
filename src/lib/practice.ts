@@ -24,7 +24,9 @@ import {
 } from "./practicePlan";
 import { credentials } from "./credentials";
 import { examOwner } from "./db";
-import { EXAM_STYLE } from "./examStyle";
+import { EXAM_STYLE, NO_COVER_RULE } from "./examStyle";
+import { flagQuestionEverywhere } from "./classes";
+import { saveReportedQuestion, slideOrigin } from "./reportedQuestions";
 import { markPictures, mentionsPicture, pictureFor, pictureOf, PICTURE_RULES } from "./questionImage";
 
 export type Style = "mixed" | "recall" | "case" | "caseset";
@@ -74,6 +76,8 @@ const SYSTEM = `You write board-quality practice questions for a dental student,
 - ${PICTURE_RULES}
 - Slides marked ★IMPORTANT were emphasized by the professor: when the topic has any, at least a third of the questions must test them. Also prioritize annotated slides. Do not test trivia like citations or years.
 - Every fact in the question and explanation must be supported by the slides.
+
+${NO_COVER_RULE}
 
 ${EXAM_STYLE}`;
 
@@ -400,6 +404,8 @@ diagnosis → what test or finding confirms it → emergency/definitive treatmen
 - If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image.
 - Slides marked ★IMPORTANT were emphasized by the professor: build cases around them first. Also prioritize annotated slides. Every fact must be supported by the slides.
 
+${NO_COVER_RULE}
+
 ${EXAM_STYLE}`;
 
 /** New case sets for an attempt: reuses never-answered cases first. Returns question ids, grouped by case. */
@@ -631,9 +637,9 @@ function focusText(focus: FocusPoint[]): string {
 export function answerQuestion(attemptId: number, questionId: number, chosen: number, confidence: Confidence | null = null) {
   const q = db.prepare("SELECT * FROM questions WHERE id = ?").get(questionId) as Question;
   const row = db
-    .prepare("SELECT chosen_index, option_order FROM attempt_questions WHERE attempt_id = ? AND question_id = ?")
-    .get(attemptId, questionId) as { chosen_index: number | null; option_order: string | null } | undefined;
-  if (!row || row.chosen_index != null) return; // already answered
+    .prepare("SELECT chosen_index, option_order, reported FROM attempt_questions WHERE attempt_id = ? AND question_id = ?")
+    .get(attemptId, questionId) as { chosen_index: number | null; option_order: string | null; reported: number } | undefined;
+  if (!row || row.chosen_index != null || row.reported) return; // already answered, or reported out of the exam
   const optionCount = (JSON.parse(q.options) as string[]).length;
   if (!Number.isInteger(chosen) || chosen < 0 || chosen >= optionCount) return;
   const order = row.option_order ? (JSON.parse(row.option_order) as number[]) : null;
@@ -651,14 +657,57 @@ export function answerQuestion(attemptId: number, questionId: number, chosen: nu
   if (!correct) addReviewCard(questionId);
 }
 
-export function finishAttempt(attemptId: number) {
+/**
+ * Report a question from inside a practice exam: it leaves this attempt and its score (15 questions, one reported, 8
+ * right → 8/14), is flagged everywhere like a report from the review page, and the owner gets the record. A finished
+ * exam's stored score is recomputed too, so "8/14" is what the results page and the history show.
+ */
+export function reportAttemptQuestion(userId: number, attemptId: number, questionId: number, reason: string | null): boolean {
+  return db.transaction(() => {
+    const row = db.prepare("SELECT reported FROM attempt_questions WHERE attempt_id = ? AND question_id = ?").get(attemptId, questionId) as { reported: number } | undefined;
+    if (!row || row.reported) return false;
+    db.prepare("UPDATE attempt_questions SET reported = 1 WHERE attempt_id = ? AND question_id = ?").run(attemptId, questionId);
+    flagQuestionEverywhere(questionId, reason);
+    const q = db
+      .prepare(
+        `SELECT q.id, q.exam_id, q.topic_id, q.stem, q.options, q.correct_index, q.explanation, q.option_notes, q.source_page_id, c.name AS concept, e.name AS exam
+         FROM questions q JOIN exams e ON e.id = q.exam_id LEFT JOIN concepts c ON c.id = q.concept_id WHERE q.id = ?`,
+      )
+      .get(questionId) as { exam_id: number; topic_id: number | null; stem: string; options: string; correct_index: number; explanation: string; option_notes: string | null; source_page_id: number | null; concept: string | null; exam: string };
+    saveReportedQuestion({
+      userId,
+      examId: q.exam_id,
+      topicId: q.topic_id,
+      source: "practice",
+      ref: `question:${questionId}`,
+      question: {
+        question: q.stem,
+        options: JSON.parse(q.options) as string[],
+        correct_index: q.correct_index,
+        explanation: q.explanation,
+        option_notes: q.option_notes ? (JSON.parse(q.option_notes) as string[]) : null,
+        concept: q.concept,
+        ...slideOrigin(q.source_page_id, q.topic_id),
+        exam: q.exam,
+      },
+      reason,
+    });
+    const a = db.prepare("SELECT status FROM attempts WHERE id = ?").get(attemptId) as { status: string };
+    if (a.status === "finished") db.prepare("UPDATE attempts SET score = ? WHERE id = ?").run(attemptScore(attemptId), attemptId);
+    return true;
+  })();
+}
+
+/** Right answers over the questions that count (reported ones don't); 0 when none count. */
+function attemptScore(attemptId: number): number {
   const stats = db
-    .prepare("SELECT COUNT(*) total, SUM(correct) n_right FROM attempt_questions WHERE attempt_id = ?")
+    .prepare("SELECT COUNT(*) total, SUM(correct) n_right FROM attempt_questions WHERE attempt_id = ? AND reported = 0")
     .get(attemptId) as { total: number; n_right: number | null };
-  db.prepare("UPDATE attempts SET status = 'finished', finished_at = datetime('now'), score = ? WHERE id = ?").run(
-    stats.total ? (stats.n_right ?? 0) / stats.total : 0,
-    attemptId,
-  );
+  return stats.total ? (stats.n_right ?? 0) / stats.total : 0;
+}
+
+export function finishAttempt(attemptId: number) {
+  db.prepare("UPDATE attempts SET status = 'finished', finished_at = datetime('now'), score = ? WHERE id = ?").run(attemptScore(attemptId), attemptId);
   // Started from the study plan: tick that task off.
   db.prepare(
     "UPDATE plan_tasks SET status = 'done', completed_at = datetime('now') WHERE id = (SELECT task_id FROM attempts WHERE id = ?) AND status = 'todo'",
