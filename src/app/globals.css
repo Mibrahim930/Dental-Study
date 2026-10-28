@@ -488,7 +488,6 @@
 }
 ::highlight(study-ul) {
   text-decoration: underline 2px var(--coral);
-  text-underline-offset: 3px;
 }
 
 /* Text being selected (to highlight it). */

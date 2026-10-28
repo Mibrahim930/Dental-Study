@@ -29,8 +29,8 @@ beforeEach(() => {
 
 describe("lesson marks", () => {
   it("keys: lesson:<topic>:<slide> is accepted (slide 0 for the intro); junk shapes are not", () => {
-    for (const k of ["lesson:1:0", "lesson:12:345", "lesson:999999999999:1"]) expect(MARKS_KEY.test(k), k).toBe(true);
-    for (const k of ["lesson:1", "lesson:a:1", "lesson:1:2:3", "lesson:-1:2", " lesson:1:2", "lesson:1:2 ", "lesson:1234567890123:1"]) expect(MARKS_KEY.test(k), k).toBe(false);
+    for (const k of ["lesson:1:0:120", "lesson:12:345:0", "lesson:999999999999:1:9999999"]) expect(MARKS_KEY.test(k), k).toBe(true);
+    for (const k of ["lesson:1:2", "lesson:1", "lesson:a:1:2", "lesson:1:2:3:4", "lesson:-1:2:3", " lesson:1:2:3", "lesson:1:2:3 ", "lesson:1234567890123:1:2", "lesson:1:2:12345678"]) expect(MARKS_KEY.test(k), k).toBe(false);
   });
 
   it("fields: text (highlights) and under (underlines) are kept, merged and capped; unknown fields are dropped", () => {
@@ -45,20 +45,20 @@ describe("lesson marks", () => {
 
   it("the marks API saves and returns lesson marks for the signed-in student only; empty marks delete the row", async () => {
     const me = signIn();
-    expect((await put({ key: "lesson:7:3", marks: { hl: { text: [[0, 4]], under: [[10, 14]] }, crossed: [] } })).status).toBe(200);
-    const got = (await (await get("lesson:7:3")).json()) as { marks: { hl: Record<string, number[][]> } };
+    expect((await put({ key: "lesson:7:3:400", marks: { hl: { text: [[0, 4]], under: [[10, 14]] }, crossed: [] } })).status).toBe(200);
+    const got = (await (await get("lesson:7:3:400")).json()) as { marks: { hl: Record<string, number[][]> } };
     expect(got.marks.hl).toEqual({ text: [[0, 4]], under: [[10, 14]] });
-    expect(db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ? AND key = 'lesson:7:3'").get(me)).toEqual({ n: 1 });
+    expect(db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ? AND key = 'lesson:7:3:400'").get(me)).toEqual({ n: 1 });
     // another student sees nothing under the same key
     signIn();
-    expect(((await (await get("lesson:7:3")).json()) as { marks: unknown }).marks).toBeNull();
+    expect(((await (await get("lesson:7:3:400")).json()) as { marks: unknown }).marks).toBeNull();
     // back as the first: clearing deletes the row
     jar.cookie = sessionToken(me, 0);
-    expect((await put({ key: "lesson:7:3", marks: { hl: {}, crossed: [] } })).status).toBe(200);
-    expect(db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ? AND key = 'lesson:7:3'").get(me)).toEqual({ n: 0 });
+    expect((await put({ key: "lesson:7:3:400", marks: { hl: {}, crossed: [] } })).status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) n FROM question_marks WHERE user_id = ? AND key = 'lesson:7:3:400'").get(me)).toEqual({ n: 0 });
     // a bad key is a 400
-    expect((await put({ key: "lesson:7", marks: { hl: { text: [[0, 1]] }, crossed: [] } })).status).toBe(400);
+    expect((await put({ key: "lesson:7:3", marks: { hl: { text: [[0, 1]] }, crossed: [] } })).status).toBe(400);
     jar.cookie = undefined;
-    expect((await get("lesson:7:3")).status).toBe(401);
+    expect((await get("lesson:7:3:400")).status).toBe(401);
   });
 });

@@ -8,7 +8,8 @@ import { useMarks } from "./useMarks";
 type Kind = "text" | "under";
 const NAMES: Record<Kind, string> = { text: "study-hl", under: "study-ul" };
 
-type Pill = { x: number; top: number; bottom: number; add: boolean; range: Range; kind?: Kind };
+/** The pill: where it sits, the selected range, and for each kind the existing mark covering it (if any). */
+type Pill = { x: number; top: number; bottom: number; range: Range; covered: Partial<Record<Kind, Range>> };
 
 // The CSS Custom Highlight API (Chrome 105+, Safari 17.2+, Firefox 140+) paints ranges without touching the DOM.
 /** The one registry entry per kind, made on first use; null where the browser has no highlight API. */
@@ -57,27 +58,64 @@ function domRange(nodes: { node: Text; start: number }[], [s, e]: Range): global
   return null;
 }
 
-/** The character offset of a point (text node + offset) inside `el`. */
-function offsetOf(nodes: { node: Text; start: number }[], node: Node, offset: number): number | null {
-  const hit = nodes.find((n) => n.node === node);
-  if (hit) return hit.start + offset;
-  // A boundary on an element: the offset of its first text node (or the end).
-  const el = node as Element;
-  const child = el.childNodes?.[offset];
-  if (child) {
-    const inside = nodes.find((n) => child === n.node || (child as Element).contains?.(n.node));
-    if (inside) return inside.start;
-  }
-  const total = nodes.reduce((n, x) => n + x.node.data.length, 0);
+/** Characters of text inside a node (0 for a <br>, an image or an empty element). */
+function lengthOf(n: Node): number {
+  if (n.nodeType === 3) return (n as Text).data.length;
+  let total = 0;
+  for (const c of Array.from(n.childNodes)) total += lengthOf(c);
   return total;
+}
+
+/**
+ * The character offset of a boundary (node + offset, as a DOM Range gives it) in the block's text. On a text node the
+ * offset is a character; on an element it is a child index, so the text of the children before it counts (a boundary
+ * after a <br>, at the end of a paragraph that isn't the last, or on the block itself all land where they should).
+ * Null for a node outside the block.
+ */
+function offsetOf(nodes: { node: Text; start: number }[], node: Node, offset: number): number | null {
+  // The block: the lowest ancestor of `node` that holds every text node.
+  let root: Node = node;
+  while (root.parentNode && !nodes.every((n) => root.contains(n.node))) root = root.parentNode;
+  let at = 0;
+  let found: number | null = null;
+  const visit = (n: Node): boolean => {
+    if (n === node) {
+      if (n.nodeType === 3) found = at + Math.min(offset, (n as Text).data.length);
+      else {
+        const kids = Array.from(n.childNodes);
+        for (let i = 0; i < Math.min(offset, kids.length); i++) at += lengthOf(kids[i]);
+        found = at;
+      }
+      return true;
+    }
+    if (n.nodeType === 3) {
+      at += (n as Text).data.length;
+      return false;
+    }
+    for (const k of Array.from(n.childNodes)) if (visit(k)) return true;
+    return false;
+  };
+  visit(root);
+  return found;
+}
+
+/** For each kind, the existing mark that covers the range (so the pill offers "Remove" for it and "Add" for the other). */
+function coveredBy(m: { hl: Record<string, Range[]> }, range: Range): Partial<Record<Kind, Range>> {
+  const out: Partial<Record<Kind, Range>> = {};
+  for (const kind of ["text", "under"] as Kind[]) {
+    const c = coveringRange(m.hl[kind] ?? [], range);
+    if (c) out[kind] = c;
+  }
+  return out;
 }
 
 /** Character offsets of a selection inside `el`, trimmed of spaces at either edge; null when it's not inside, or blank. */
 function selectionOffsets(el: HTMLElement, nodes: { node: Text; start: number }[], r: globalThis.Range): Range | null {
-  if (!el.contains(r.startContainer) || !el.contains(r.endContainer)) return null;
+  if (!el.contains(r.startContainer)) return null;
   const text = nodes.map((n) => n.node.data).join("");
   let s = offsetOf(nodes, r.startContainer, r.startOffset);
-  let e = offsetOf(nodes, r.endContainer, r.endOffset);
+  // A triple-click on the block's last paragraph ends at the start of whatever follows the block: that is its end.
+  let e = el.contains(r.endContainer) ? offsetOf(nodes, r.endContainer, r.endOffset) : r.endOffset === 0 ? text.length : null;
   if (s == null || e == null) return null;
   while (s < e && /\s/.test(text[s])) s++;
   while (e > s && /\s/.test(text[e - 1])) e--;
@@ -88,13 +126,16 @@ function selectionOffsets(el: HTMLElement, nodes: { node: Text; start: number }[
  * Rendered lesson text (markdown and all) the student can mark up: select some words and a pill offers Highlight and
  * Underline (the "Quiz me on this" pill sits below the selection, so all three come up together); tap a mark to
  * remove it. Marks are kept as character offsets over the block's text and saved to her account, like the ones on
- * questions. Painted with the browser's highlight API, so the rendered markdown is never rewritten.
+ * questions. Painted with the browser's highlight API, so the rendered markdown is never rewritten (a browser without
+ * that API, iOS before 17.2 or Firefox before 140, gets no pill: nothing could be shown). The key carries the text's
+ * length, so a rewritten lesson starts clean instead of wearing marks at the wrong offsets.
  */
 export function MarkableText({ marksKey, children, className = "" }: { marksKey: string; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [marks, setMarks] = useMarks(marksKey);
   const [pill, setPill] = useState<Pill | null>(null);
   const onPill = useRef(false);
+  const tapped = useRef(false); // the pill came from a tap on a mark (no selection)
   const live = useRef(marks);
   useEffect(() => {
     live.current = marks;
@@ -131,14 +172,13 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
       if (onPill.current) return;
       const sel = window.getSelection();
       const r = sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
-      if (!r) return setPill((p) => (p?.add ? null : p));
+      if (!r) return setPill((p) => (p && p.range[1] - p.range[0] > 0 && !tapped.current ? null : p));
       const nodes = textNodes(el);
       const off = selectionOffsets(el, nodes, r);
-      if (!off) return setPill((p) => (p?.add ? null : p));
+      if (!off || !registry("text")) return setPill(null); // a selection elsewhere clears any pill; no highlight API, no pill
       const rect = r.getBoundingClientRect();
-      const m = live.current;
-      const covered = (["text", "under"] as Kind[]).map((kind) => ({ kind, range: coveringRange(m.hl[kind] ?? [], off) })).find((x) => x.range);
-      setPill({ x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom, add: !covered, range: covered?.range ?? off, kind: covered?.kind });
+      tapped.current = false;
+      setPill({ x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom, range: off, covered: coveredBy(live.current, off) });
     };
     const onSel = () => {
       clearTimeout(t);
@@ -156,12 +196,16 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
       if (at == null) return;
       const m = live.current;
       for (const kind of ["text", "under"] as Kind[]) {
-        const hit = (m.hl[kind] ?? []).find(([s, e2]) => at >= s && at < e2);
-        if (hit) {
-          const rect = (e.target as HTMLElement).getBoundingClientRect();
-          setPill({ x: e.clientX, top: rect.top, bottom: rect.bottom, add: false, range: hit, kind });
-          return;
-        }
+        const hit = (m.hl[kind] ?? []).find(([s, e2]) => at >= s && at <= e2);
+        if (!hit) continue;
+        // Only a tap on the mark itself (not blank space the caret snapped from): the finger must be over its boxes.
+        const dr = domRange(nodes, hit);
+        const boxes = dr ? Array.from(dr.getClientRects()) : [];
+        const box = boxes.find((b) => e.clientX >= b.left - 4 && e.clientX <= b.right + 4 && e.clientY >= b.top - 4 && e.clientY <= b.bottom + 4);
+        if (!box) continue;
+        tapped.current = true;
+        setPill({ x: Math.min(Math.max(e.clientX, box.left), box.right), top: box.top, bottom: box.bottom, range: hit, covered: coveredBy(m, hit) });
+        return;
       }
     };
     const hide = () => setPill(null);
@@ -169,7 +213,10 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
     const onDown = (e: PointerEvent) => {
       if (e.target instanceof Element && e.target.closest("[data-mark-pill]")) return;
       onPill.current = false;
-      setPill((p) => (p && !p.add ? null : p));
+      if (tapped.current) {
+        tapped.current = false;
+        setPill(null);
+      }
     };
     document.addEventListener("selectionchange", onSel);
     document.addEventListener("pointerdown", onDown);
@@ -190,14 +237,17 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
 
   function apply(kind: Kind) {
     if (!pill) return;
-    const { range, add } = pill;
-    setMarks((m) => ({ ...m, hl: { ...m.hl, [kind]: add ? addRange(m.hl[kind] ?? [], range) : removeRangeAt(m.hl[kind] ?? [], range[0]) } }));
+    const existing = pill.covered[kind];
+    setMarks((m) => ({ ...m, hl: { ...m.hl, [kind]: existing ? removeRangeAt(m.hl[kind] ?? [], existing[0]) : addRange(m.hl[kind] ?? [], pill.range) } }));
     window.getSelection()?.removeAllRanges();
     setPill(null);
     onPill.current = false;
+    tapped.current = false;
   }
 
+  // Above the selection, or below it when there's no room at the top; always on screen.
   const above = pill ? pill.top > 64 : true;
+  const pillTop = pill ? Math.min(Math.max(above ? pill.top - 48 : pill.bottom + 8, 8), window.innerHeight - 56) : 0;
   const hold = {
     onPointerDown: (e: React.PointerEvent) => {
       onPill.current = true;
@@ -219,24 +269,16 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
             role="toolbar"
             aria-label="Mark this text"
             className="fixed z-[60] flex -translate-x-1/2 overflow-hidden rounded-full bg-foreground text-background shadow-[0_8px_24px_rgba(0,0,0,.25)] divide-x divide-background/20"
-            style={{ left: Math.min(Math.max(pill.x, 110), window.innerWidth - 110), top: above ? pill.top - 48 : pill.bottom + 8 }}
+            style={{ left: Math.min(Math.max(pill.x, 110), window.innerWidth - 110), top: pillTop }}
           >
-            {pill.add ? (
-              <>
-                <button type="button" {...hold} onClick={() => apply("text")} className={btn}>
-                  <span aria-hidden className="h-3 w-3 rounded-[3px] bg-butter" />
-                  Highlight
-                </button>
-                <button type="button" {...hold} onClick={() => apply("under")} className={btn}>
-                  <span aria-hidden className="h-3 w-3 border-b-2 border-coral" />
-                  Underline
-                </button>
-              </>
-            ) : (
-              <button type="button" {...hold} onClick={() => apply(pill.kind ?? "text")} className={btn}>
-                {pill.kind === "under" ? "Remove underline" : "Remove highlight"}
-              </button>
-            )}
+            <button type="button" {...hold} onClick={() => apply("text")} className={btn}>
+              <span aria-hidden className="h-3 w-3 rounded-[3px] bg-butter" />
+              {pill.covered.text ? "Remove highlight" : "Highlight"}
+            </button>
+            <button type="button" {...hold} onClick={() => apply("under")} className={btn}>
+              <span aria-hidden className="h-3 w-3 border-b-2 border-coral" />
+              {pill.covered.under ? "Remove underline" : "Underline"}
+            </button>
           </div>,
           document.body,
         )}

@@ -322,7 +322,7 @@ function Lesson({ data }: { data: LessonData }) {
     <>
       <section className="card">
         {lesson.intro && (
-          <MarkableText marksKey={`lesson:${data.topic.id}:0`}>
+          <MarkableText marksKey={`lesson:${data.topic.id}:0:${lesson.intro.length}`}>
             <p className="prose-study text-[18px] font-semibold">{lesson.intro}</p>
           </MarkableText>
         )}
@@ -346,7 +346,7 @@ function Lesson({ data }: { data: LessonData }) {
                   </span>
                 </button>
                 {/* Highlight / underline any of the explanation (saved to her account), and "Quiz me on this". */}
-                <MarkableText marksKey={`lesson:${data.topic.id}:${s.page_id}`} className="prose-study">
+                <MarkableText marksKey={`lesson:${data.topic.id}:${s.page_id}:${s.explanation.length}`} className="prose-study">
                   <ReactMarkdown>{s.explanation}</ReactMarkdown>
                 </MarkableText>
               </li>
