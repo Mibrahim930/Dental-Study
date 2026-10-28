@@ -138,10 +138,19 @@ describe("trimRamble", () => {
     expect(trimRamble(text)).toEqual({ text, trimmed: false });
   });
 
-  it("a line of bold words or a term alone counts as filler only in a run", () => {
+  it("bold terms, glossaries and other short real lines are never filler, even three in a row", () => {
     const one = `${GOOD}\n\n**Pulp**\n\nThe soft tissue inside the tooth is the pulp, and it carries the nerve.`;
     expect(trimRamble(one).trimmed).toBe(false);
-    expect(trimRamble(`${GOOD}\n\n**Pulp**\n\n**Dentin**\n\n**Enamel**\n\nthis is lost`).text).toBe(GOOD);
+    const terms = `${GOOD}\n\n**Pulp**\n\n**Dentin**\n\n**Enamel**\n\nthis stays`;
+    expect(trimRamble(terms)).toEqual({ text: terms, trimmed: false });
+    const marker = `${GOOD}\n\n★ you emphasized this`;
+    expect(trimRamble(marker)).toEqual({ text: marker, trimmed: false });
+  });
+
+  it("filler is known by its words: sign-offs in bold, in parentheses or in another case still go", () => {
+    expect(trimRamble(`${GOOD}\n\n**Done**\n\n_Okay_\n\nTHAT'S ALL.`).text).toBe(GOOD);
+    expect(trimRamble(`${GOOD}\n\nThat's all for this slide.`).text).toBe(GOOD);
+    expect(trimRamble(`${GOOD}\n\nEnd of slide.\n\n(Keep going.)`).text).toBe(GOOD);
   });
 
   it("punctuation-only lines are filler; whitespace is trimmed at the end", () => {
@@ -154,7 +163,7 @@ describe("trimRamble", () => {
     expect(trimRamble(RAMBLE)).toEqual({ text: "", trimmed: true });
     expect(trimRamble("Done.\n\nOk.\n\nBye.")).toEqual({ text: "", trimmed: true });
     expect(trimRamble("See the picture.")).toEqual({ text: "See the picture.", trimmed: false });
-    expect(trimRamble("Done.")).toEqual({ text: "Done.", trimmed: false });
+    expect(trimRamble("Done.")).toEqual({ text: "", trimmed: true });
     expect(trimRamble("")).toEqual({ text: "", trimmed: false });
   });
 

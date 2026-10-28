@@ -129,7 +129,7 @@ describe("cleanLesson", () => {
     const c = cleanLesson({ ...lessonWith(1, `${GOOD}\n\n${RAMBLE}`), slides: [{ page_id: 1, explanation: `${GOOD}\n\n${RAMBLE}` }, { page_id: 2, explanation: RAMBLE }, { page_id: 3, explanation: GOOD }], intro: "Hi.\n\nDone.\n\nBye." });
     expect(c).toMatchObject({ changed: true, trimmed: 1, dropped: 1, intro: true });
     expect(c.lesson.slides.map((s) => s.page_id)).toEqual([1, 3]);
-    expect(c.lesson.intro).toBe("");
+    expect(c.lesson.intro).toBe("Hi.");
   });
 });
 

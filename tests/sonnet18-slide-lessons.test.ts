@@ -116,7 +116,7 @@ describe("tidyLesson (through getLesson)", () => {
 
   it("non-object slide entries (null, string, number) do not throw", async () => {
     const w = world(1, () => []);
-    lessonWriter = () => good(w, "", { slides: [null, "abc", 7, undefined, [], { page_id: w.pages[0], explanation: "ok" }] });
+    lessonWriter = () => good(w, "", { slides: [null, "abc", 7, undefined, [], { page_id: w.pages[0], explanation: "fine" }] });
     expect((await getLesson(w.topic())).slides).toHaveLength(1);
   });
 
@@ -297,7 +297,7 @@ describe("repair trigger", () => {
 
   it("when only coverage is low (all slides present) the prompt has no left-out-slides section", async () => {
     const w = world(1, () => Array.from({ length: 5 }, (_, i) => `eps${i}word`));
-    lessonWriter = (n) => (n === 1 ? good(w, "nothing") : good(w, "eps0word eps1word eps2word eps3word eps4word"));
+    lessonWriter = (n) => (n === 1 ? good(w, "unrelated") : good(w, "eps0word eps1word eps2word eps3word eps4word"));
     await getLesson(w.topic());
     expect(repairPrompt()).not.toContain("got no entry");
     expect(repairPrompt()).toContain("- eps0word");

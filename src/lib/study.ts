@@ -178,7 +178,11 @@ export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json" | "page_ids">):
 };
 
 export function getLesson(topic: Topic): Promise<Lesson> {
-  if (lessonIsCurrent(topic)) return Promise.resolve(cleanStoredLesson(topic, JSON.parse(topic.lesson_json!) as Lesson));
+  if (lessonIsCurrent(topic)) {
+    const clean = cleanStoredLesson(topic, JSON.parse(topic.lesson_json!) as Lesson);
+    if (clean) return Promise.resolve(clean);
+    // (the stored lesson was nothing but filler: written again below)
+  }
   let p = inflight.get(topic.id);
   if (!p) {
     p = generateLesson(topic)
@@ -186,9 +190,10 @@ export function getLesson(topic: Topic): Promise<Lesson> {
         // A rewrite that fails (the AI is down, the key is out of credit) doesn't take away the slide-by-slide
         // lesson she already had: that one is shown, and the rewrite is tried again on a later open.
         const old = storedSlideLesson(topic);
-        if (!old) throw err;
+        const clean = old && cleanStoredLesson(topic, old);
+        if (!clean) throw err;
         console.error(`Rewriting the lesson for topic ${topic.id} failed; showing the stored one`, err);
-        return cleanStoredLesson(topic, old);
+        return clean;
       })
       .finally(() => inflight.delete(topic.id));
     inflight.set(topic.id, p);
@@ -235,10 +240,15 @@ function tidyLesson(raw: Lesson, pages: PageRow[]): Lesson {
  * A stored lesson with filler the writer drifted into (lessons written before the trim existed): the filler is cut
  * when the lesson is served and the clean lesson saved back, with no AI call. Returns the lesson to show.
  */
-function cleanStoredLesson(topic: Pick<Topic, "id">, lesson: Lesson): Lesson {
+function cleanStoredLesson(topic: Pick<Topic, "id">, lesson: Lesson): Lesson | null {
   const c = cleanLesson(lesson);
   if (!c.changed) return lesson;
   console.warn(`Lesson for topic ${topic.id}: filler cut from the stored lesson (${c.trimmed} slide(s) trimmed, ${c.dropped} dropped)`);
+  if (c.dropped > 0 && c.lesson.slides.length === 0) {
+    // Nothing but filler: there is no lesson here to show; it is written again on the next open.
+    db.prepare("UPDATE topics SET lesson_json = NULL WHERE id = ?").run(topic.id);
+    return null;
+  }
   db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(c.lesson), topic.id);
   return c.lesson;
 }
@@ -300,7 +310,8 @@ export function scanLessonsForFiller(): LessonScan {
       if (!lesson || typeof lesson !== "object") continue;
       const c = cleanLesson(lesson);
       if (!c.changed) continue;
-      save.run(JSON.stringify(c.lesson), r.id);
+      // A lesson left with no slides at all was nothing but filler: cleared, so it is written again on the next open.
+      save.run(c.dropped > 0 && c.lesson.slides.length === 0 ? null : JSON.stringify(c.lesson), r.id);
       found.push({ topicId: r.id, examId: r.exam_id, exam: r.exam, lecture: r.lecture, section: r.title, trimmed: c.trimmed, dropped: c.dropped, intro: c.intro });
     }
   })();

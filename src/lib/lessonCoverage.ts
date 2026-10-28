@@ -73,26 +73,42 @@ export function quotedFacts(text: string, facts: string[]): { quoted: string[]; 
 export const RAMBLE_RUN = 3;
 
 /**
- * A line that says nothing: at most three words of plain prose ("Done.", "Ok.", "(Keep going.)", "End of slide."), or
- * only punctuation. Headings, list items, table rows, quotes and lead-ins that end in ":" are never filler, nor is
- * a line with a number in it.
+ * The words a drifting writer signs off with. A line is filler only when every word on it is one of these (or it has
+ * no words at all): "Done.", "Ok.", "(Keep going.)", "End of slide.", "That's all.", "Thanks.", "Bye.". A short line
+ * of real words ("Pulp", "★ you emphasized this", "Trauma", "---", a Chinese sentence) is never filler.
  */
+const FILLER_WORDS = new Set(
+  (
+    "done ok okay stop end ending ended enough final finally fin finish finished finito over complete completed " +
+    "bye goodbye thanks thank you cheers keep going continue continued continuing next moving on move let's lets go " +
+    "that's thats that is it all the of this slide section lesson entry here there we are nothing more else to say " +
+    "and so now then well for today part"
+  ).split(" "),
+);
+/** Filler can run to this many words and still be a sign-off ("that's all for this slide"). */
+const FILLER_MAX_WORDS = 6;
+
+/** A sign-off or an empty line of punctuation (see FILLER_WORDS). Blank lines are not filler. */
 function isFiller(line: string): boolean {
   const t = line.trim();
   if (t === "") return false;
-  // A whole line in parentheses is an aside the drifting writer is fond of ("(Keep going.)", "(Note: …)"); on its
-  // own it stays, in a run it goes.
-  if (/^\(.*\)$/.test(t)) return true;
-  if (/^([#>|]|[-*+]\s|\d+[.)]\s)/.test(t) || t.endsWith(":")) return false;
-  const words = t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
-  if (words.some((w) => /\d/.test(w))) return false;
-  return words.length <= 3;
+  // Structure is never filler: headings, quotes, table rows, list items, rules ("---"), lead-ins ending in ":".
+  if (/^([#>|•·]|[-*+]\s|(\d+|[a-z])[.)]\s|[-*_]{3,}\s*$)/i.test(t) || /:\**\s*$/.test(t)) return false;
+  // Markdown around the words doesn't change what they say; a whole line in parentheses is still its words.
+  const words = t.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'’]*/gu) ?? [];
+  // No words: a line of plain punctuation is filler; a symbol or emoji line is not.
+  if (words.length === 0) return !/[\p{S}\p{Extended_Pictographic}]/u.test(t);
+  return words.length <= FILLER_MAX_WORDS && words.every((w) => FILLER_WORDS.has(w.replace(/’/g, "'")));
 }
+
+/** A whole line in parentheses: an aside. Kept on its own, dropped when it sits right before a run of filler. */
+const isAside = (line: string) => /^\(.*\)$/.test(line.trim());
 
 /**
  * Cut the filler a writer can drift into at the end of a long explanation ("Done. Ok. Stop. . . End of slide. Bye."):
- * everything from the first run of RAMBLE_RUN filler lines in a row to the end goes, and so do filler lines left
- * trailing at the end. Real explanations are sentences, so a short plain line is rare and three in a row never happen.
+ * everything from the first run of RAMBLE_RUN filler lines in a row to the end goes (with any filler and asides
+ * directly before the run), and so do filler lines left trailing at the end. Filler is recognised by its words, so
+ * short real lines (a bold term, a glossary, "★ you emphasized this", a horizontal rule) are never cut.
  */
 export function trimRamble(text: string): { text: string; trimmed: boolean } {
   const lines = text.split("\n");
@@ -105,15 +121,10 @@ export function trimRamble(text: string): { text: string; trimmed: boolean } {
     }
     return !inFence && isFiller(l);
   });
-  // A text with nothing but short lines: a genuinely short explanation ("See the picture.") stays; a run of filler
-  // and nothing else is all filler.
-  if (!lines.some((l, i) => l.trim() !== "" && !filler[i])) {
-    const short = filler.filter(Boolean).length;
-    return short >= RAMBLE_RUN ? { text: "", trimmed: true } : { text: text.trimEnd(), trimmed: false };
-  }
+  const blank = (i: number) => lines[i].trim() === "";
   let cut = lines.length;
   for (let i = 0, run = 0, runStart = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "") continue; // blank lines don't break a run (paragraphs are separated by them)
+    if (blank(i)) continue; // blank lines don't break a run (paragraphs are separated by them)
     if (!filler[i]) {
       run = 0;
       continue;
@@ -121,10 +132,12 @@ export function trimRamble(text: string): { text: string; trimmed: boolean } {
     if (run === 0) runStart = i;
     if (++run >= RAMBLE_RUN) {
       cut = runStart;
+      // "End. (Note: …) Done. Ok. Stop.": the sign-off and the aside before the run went with it.
+      while (cut > 0 && (blank(cut - 1) || filler[cut - 1] || isAside(lines[cut - 1]))) cut--;
       break;
     }
   }
-  while (cut > 0 && (lines[cut - 1].trim() === "" || filler[cut - 1])) cut--;
+  while (cut > 0 && (blank(cut - 1) || filler[cut - 1])) cut--;
   const kept = lines.slice(0, cut).join("\n").trimEnd();
   return { text: kept, trimmed: kept !== text.trimEnd() };
 }
