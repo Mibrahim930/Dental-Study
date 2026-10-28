@@ -34,6 +34,15 @@ export async function register() {
     } catch (err) {
       console.error("Reorganising topics by lecture failed", err);
     }
+    // Lessons written before the filler trim: any that end in "Done. Ok. Bye." are cleaned once, and the Admin page
+    // shows which ones were found.
+    try {
+      const { scanLessonsForFiller } = await import("./lib/study");
+      const scan = scanLessonsForFiller();
+      console.log(`Lesson filler check: ${scan.checked} lesson(s) checked, ${scan.found.length} cleaned`);
+    } catch (err) {
+      console.error("Lesson filler check failed", err);
+    }
     // Claude slide batches finish in the background; collect results every minute.
     setInterval(() => void pollBatches(), 60_000);
     // Daily off-disk backup (checked hourly; first check shortly after start).

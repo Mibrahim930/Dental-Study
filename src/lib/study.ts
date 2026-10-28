@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { db, examOwner, type PageRow, type Topic } from "./db";
+import { db, examOwner, getMeta, setMeta, type PageRow, type Topic } from "./db";
 import { generate } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes } from "./processing";
@@ -236,24 +236,93 @@ function tidyLesson(raw: Lesson, pages: PageRow[]): Lesson {
  * when the lesson is served and the clean lesson saved back, with no AI call. Returns the lesson to show.
  */
 function cleanStoredLesson(topic: Pick<Topic, "id">, lesson: Lesson): Lesson {
-  let changed = false;
+  const c = cleanLesson(lesson);
+  if (!c.changed) return lesson;
+  console.warn(`Lesson for topic ${topic.id}: filler cut from the stored lesson (${c.trimmed} slide(s) trimmed, ${c.dropped} dropped)`);
+  db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(c.lesson), topic.id);
+  return c.lesson;
+}
+
+/** Cut filler from a lesson's slide entries and intro (pure). `trimmed` entries kept shorter, `dropped` entries gone. */
+export function cleanLesson(lesson: Lesson): { lesson: Lesson; changed: boolean; trimmed: number; dropped: number; intro: boolean } {
+  let trimmed = 0;
+  let dropped = 0;
   const slides = (Array.isArray(lesson.slides) ? lesson.slides : [])
     .map((s) => {
       if (!s || typeof s.explanation !== "string") return s;
       const t = trimRamble(s.explanation);
       if (!t.trimmed) return s;
-      changed = true;
+      if (!t.text.trim()) {
+        dropped++;
+        return null;
+      }
+      trimmed++;
       return { ...s, explanation: t.text.trim() };
     })
-    .filter((s) => !s || typeof s.explanation !== "string" || s.explanation.trim());
-  if (slides.length !== (Array.isArray(lesson.slides) ? lesson.slides.length : 0)) changed = true;
+    .filter((s): s is Lesson["slides"][number] => s != null);
   const intro = typeof lesson.intro === "string" ? trimRamble(lesson.intro) : null;
-  if (intro?.trimmed) changed = true;
-  if (!changed) return lesson;
-  const clean: Lesson = { ...lesson, slides, intro: intro ? intro.text.trim() : lesson.intro };
-  console.warn(`Lesson for topic ${topic.id}: filler cut from the stored lesson`);
-  db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(clean), topic.id);
-  return clean;
+  const changed = trimmed > 0 || dropped > 0 || !!intro?.trimmed;
+  return {
+    lesson: changed ? { ...lesson, slides, intro: intro ? intro.text.trim() : lesson.intro } : lesson,
+    changed,
+    trimmed,
+    dropped,
+    intro: !!intro?.trimmed,
+  };
+}
+
+export type LessonScanHit = { topicId: number; examId: number; exam: string; lecture: string | null; section: string; trimmed: number; dropped: number; intro: boolean };
+export type LessonScan = { at: string; checked: number; found: LessonScanHit[] };
+const LESSON_SCAN_KEY = "lesson_filler_scan";
+
+/**
+ * Check every stored lesson for filler the writer drifted into, clean the ones that have it (no AI call) and record
+ * what was found (meta, for the Admin page). Runs at every start and from the Admin page.
+ */
+export function scanLessonsForFiller(): LessonScan {
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.exam_id, t.title, t.lesson_json, e.name exam, d.filename lecture
+       FROM topics t JOIN exams e ON e.id = t.exam_id LEFT JOIN documents d ON d.id = t.document_id
+       WHERE t.lesson_json IS NOT NULL ORDER BY t.exam_id, t.position`,
+    )
+    .all() as { id: number; exam_id: number; title: string; lesson_json: string; exam: string; lecture: string | null }[];
+  const found: LessonScanHit[] = [];
+  const save = db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const r of rows) {
+      let lesson: Lesson;
+      try {
+        lesson = JSON.parse(r.lesson_json) as Lesson;
+      } catch {
+        continue;
+      }
+      if (!lesson || typeof lesson !== "object") continue;
+      const c = cleanLesson(lesson);
+      if (!c.changed) continue;
+      save.run(JSON.stringify(c.lesson), r.id);
+      found.push({ topicId: r.id, examId: r.exam_id, exam: r.exam, lecture: r.lecture, section: r.title, trimmed: c.trimmed, dropped: c.dropped, intro: c.intro });
+    }
+  })();
+  const scan: LessonScan = { at: new Date().toISOString(), checked: rows.length, found };
+  // The record keeps every lesson ever found, so the Admin page still shows what happened after the clean-up itself
+  // found nothing more.
+  const prior = lastLessonScan();
+  const history = [...(prior?.found ?? []).filter((h) => !found.some((f) => f.topicId === h.topicId)), ...found];
+  setMeta(LESSON_SCAN_KEY, JSON.stringify({ ...scan, found: history }));
+  return scan;
+}
+
+/** The latest filler check: when, how many lessons, and every lesson ever found with filler (null before the first). */
+export function lastLessonScan(): LessonScan | null {
+  const raw = getMeta(LESSON_SCAN_KEY);
+  if (!raw) return null;
+  try {
+    const s = JSON.parse(raw) as LessonScan;
+    return s && typeof s === "object" && Array.isArray(s.found) ? s : null;
+  } catch {
+    return null;
+  }
 }
 
 async function generateLesson(topic: Topic): Promise<Lesson> {

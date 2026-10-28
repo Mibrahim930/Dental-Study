@@ -6,6 +6,7 @@ import { BackupNowButton } from "@/components/BackupNowButton";
 import { ActionButton } from "@/components/ActionButton";
 import { listReports, unseenReportCount } from "@/lib/reports";
 import { listReportedQuestions } from "@/lib/reportedQuestions";
+import { lastLessonScan } from "@/lib/study";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ export default async function AdminPage() {
   const reports = listReports();
   const unseen = unseenReportCount();
   const reportedQuestions = listReportedQuestions(200);
+  const lessonScan = lastLessonScan();
   const sourceLabel: Record<string, string> = { quiz: "Section quiz", practice: "Practice exam", review: "Daily review", quizme: "Quiz me", lecture_review: "Lecture review" };
 
   return (
@@ -123,6 +125,41 @@ export default async function AdminPage() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title ">Lesson filler check</h2>
+          <ActionButton url="/api/admin/lesson-scan" label="Check all lessons now" className="btn-secondary btn-sm" />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Every stored lesson is checked for filler the writer drifted into at the end of a slide (&ldquo;Done. Ok. Stop. Bye.&rdquo;) at every start and
+          whenever you press the button. Filler is cut and the lesson saved clean, with no AI call. Lessons found this way are listed here.
+        </p>
+        {!lessonScan ? (
+          <p className="text-sm text-muted-foreground">Not checked yet.</p>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Last check {lessonScan.at.slice(0, 16).replace("T", " ")} UTC · {lessonScan.checked} lesson(s) checked ·{" "}
+              {lessonScan.found.length === 0 ? "nothing found, ever" : `${lessonScan.found.length} found so far (cleaned)`}
+            </p>
+            {lessonScan.found.length > 0 && (
+              <ul className="divide-y divide-border text-sm">
+                {lessonScan.found.map((h) => (
+                  <li key={h.topicId} className="py-2">
+                    <div className="font-semibold">{h.section}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {h.exam}
+                      {h.lecture ? ` · ${h.lecture}` : ""} · {h.trimmed} slide(s) trimmed{h.dropped ? `, ${h.dropped} dropped` : ""}
+                      {h.intro ? ", intro trimmed" : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </section>
 
