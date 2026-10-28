@@ -36,9 +36,12 @@ export function coveredFacts(text: string, facts: string[]): { covered: string[]
   return { covered, missing, ratio: total === 0 ? 1 : covered.length / total };
 }
 
-/** A text as a run of lower-cased words (letters and digits only), for word-for-word matching. */
+/**
+ * A text as a run of lower-cased words (letters, marks and digits only), for word-for-word matching. Composed first,
+ * so "ü" written as u + combining diaeresis is the same word as the precomposed one.
+ */
 function wordRun(s: string): string[] {
-  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(Boolean);
+  return (s.normalize("NFC").toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).filter(Boolean);
 }
 
 /** The fewest words a fact needs before it can count as copied: shorter ones can hardly be said another way. */

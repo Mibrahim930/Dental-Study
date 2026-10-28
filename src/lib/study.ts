@@ -45,6 +45,12 @@ export type Lesson = z.infer<typeof Lesson> & { version?: number };
 export const LESSON_VERSION = 4;
 /** Share of the slides' (long enough) facts a lesson may repeat word for word; above this it is rewritten to explain. */
 const LESSON_QUOTED_MAX = 0.3;
+/**
+ * Whether a lesson copies the slides rather than explains them. A section with fewer than three facts long enough to
+ * judge is never called a copier: one quoted list or classification (which the writer is told to give exactly) would
+ * be a third or more of it on its own.
+ */
+const copiesSlides = (q: ReturnType<typeof quotedFacts>) => q.judged >= 3 && q.ratio > LESSON_QUOTED_MAX;
 /** The section's distinct facts, as the coverage and copy checks see them (each once; slides often repeat one). */
 function sectionFacts(pages: PageRow[]): string[] {
   return [...new Map(pages.flatMap((p) => parseNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
@@ -165,7 +171,7 @@ export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json" | "page_ids">):
     if (v !== 3) return false;
     // Slide by slide already; kept unless it mostly repeats the slides instead of explaining them.
     const pages = typeof topic.page_ids === "string" ? topicPages(topic as Topic) : [];
-    return quotedFacts(lessonText(lesson), sectionFacts(pages)).ratio <= LESSON_QUOTED_MAX;
+    return !copiesSlides(quotedFacts(lessonText(lesson), sectionFacts(pages)));
   } catch {
     return false;
   }
@@ -175,10 +181,30 @@ export function getLesson(topic: Topic): Promise<Lesson> {
   if (lessonIsCurrent(topic)) return Promise.resolve(JSON.parse(topic.lesson_json!) as Lesson);
   let p = inflight.get(topic.id);
   if (!p) {
-    p = generateLesson(topic).finally(() => inflight.delete(topic.id));
+    p = generateLesson(topic)
+      .catch((err: unknown) => {
+        // A rewrite that fails (the AI is down, the key is out of credit) doesn't take away the slide-by-slide
+        // lesson she already had: that one is shown, and the rewrite is tried again on a later open.
+        const old = storedSlideLesson(topic);
+        if (!old) throw err;
+        console.error(`Rewriting the lesson for topic ${topic.id} failed; showing the stored one`, err);
+        return old;
+      })
+      .finally(() => inflight.delete(topic.id));
     inflight.set(topic.id, p);
   }
   return p;
+}
+
+/** The stored lesson if it is already slide by slide (version 3 or later) and readable; else null. */
+function storedSlideLesson(topic: Pick<Topic, "lesson_json">): Lesson | null {
+  if (!topic.lesson_json) return null;
+  try {
+    const l = JSON.parse(topic.lesson_json) as Lesson;
+    return l && typeof l === "object" && (l.version ?? 1) >= 3 && Array.isArray(l.slides) ? l : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -250,7 +276,7 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   let cover = coveredFacts(lessonText(lesson), facts);
   let quoted = quotedFacts(lessonText(lesson), facts);
   let left = leftOut(lesson);
-  const copies = quoted.ratio > LESSON_QUOTED_MAX;
+  const copies = copiesSlides(quoted);
   if ((facts.length > 0 && cover.ratio < LESSON_COVERAGE) || left.length > 0 || copies) {
     try {
       const again = await ask(
@@ -274,7 +300,9 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
       const left2 = leftOut(again);
       // The repair stands when it loses no slide, keeps (nearly) all the facts it had (an explanation may say a fact
       // with other words than the slide's, which the word check can miss) and copies no more than before.
-      if (left2.length <= left.length && cover2.ratio >= cover.ratio - (copies ? 0.1 : 0) && quoted2.ratio <= Math.max(quoted.ratio, LESSON_QUOTED_MAX)) {
+      // (Compared in whole percents: 0.8 - 0.1 is not 0.7 in floating point.)
+      const pct = (r: number) => Math.round(r * 100);
+      if (left2.length <= left.length && pct(cover2.ratio) >= pct(cover.ratio) - (copies ? 10 : 0) && pct(quoted2.ratio) <= Math.max(pct(quoted.ratio), pct(LESSON_QUOTED_MAX))) {
         lesson = again;
         cover = cover2;
         quoted = quoted2;
