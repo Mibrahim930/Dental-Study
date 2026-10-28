@@ -121,6 +121,86 @@ function chunks<T>(list: T[], n: number): T[][] {
 }
 
 /**
+ * Too few groups for `size`: hand out the remaining questions to whichever unit has the most facts per question, one
+ * at a time, re-chunking it evenly each time (so a 120-fact slide ends up as 25 questions of 4-5 facts, and two equal
+ * slides get 13 and 12). A unit is one slide's facts (split into k even chunks) or a merged run of thin slides (split
+ * at slide boundaries into k pieces); a "general" group stays as it is.
+ */
+function spread(groups: Entry[][], size: number): Entry[][] {
+  type Unit = { entries: Entry[]; k: number; single: boolean; fixed: boolean };
+  const units: Unit[] = [];
+  for (const g of groups) {
+    const last = units[units.length - 1];
+    const single = slidesOf(g) === 1 && !general(g);
+    if (single && last?.single && last.entries[0].slide.id === g[0].slide.id) {
+      last.entries.push(...g);
+      last.k++;
+    } else units.push({ entries: [...g], k: 1, single, fixed: general(g) });
+  }
+  const pieces = (u: Unit) => (u.single ? u.entries.length : slidesOf(u.entries)); // the most questions a unit can become
+  let total = units.reduce((n, u) => n + u.k, 0);
+  while (total < size) {
+    let best: Unit | null = null;
+    for (const u of units) {
+      if (u.fixed || u.k >= pieces(u)) continue;
+      if (!best || u.entries.length / u.k > best.entries.length / best.k) best = u;
+    }
+    if (!best) break;
+    best.k++;
+    total++;
+  }
+  return units.flatMap((u) => {
+    if (u.single || u.fixed) return chunks(u.entries, u.k);
+    // A merged run: split at slide boundaries, as evenly as possible, by slide.
+    const runs: Entry[][] = [];
+    for (const e of u.entries) {
+      const last = runs[runs.length - 1];
+      if (last && last[0].slide.id === e.slide.id) last.push(e);
+      else runs.push([e]);
+    }
+    return chunks(runs, u.k).map((piece) => piece.flat());
+  });
+}
+
+/** A "test the slide in general" entry: it stays a question of its own, never merged with facts. */
+const general = (g: Entry[]) => g.some((e) => e.fact == null);
+const slidesOf = (g: Entry[]) => new Set(g.map((e) => e.slide.id)).size;
+
+/**
+ * Condense `all` (every fact, in slide order) into exactly `size` groups, each a question:
+ * 1. A bound on facts per question, M = ceil(facts / size). Each slide's facts are split into even chunks of at most M.
+ * 2. Still too many groups (thin slides): neighbouring chunks are merged, left to right, while a merge stays within M,
+ *    only as far as needed. If that isn't enough, M goes up by one and it all runs again.
+ * 3. Too few groups: the biggest groups are split (a merged group at a slide boundary first) until there are `size`.
+ * So facts stay with their slide whenever the slide is big enough to deserve a question, a dense slide gets the most
+ * questions, a question never carries more than about M facts, and thin neighbouring slides share one.
+ */
+function condense(all: Entry[], size: number): Entry[][] {
+  // "General" entries (fact-less slides) never merge; more of them than slots means merging them anyway (below).
+  for (let M = Math.max(1, Math.ceil(all.length / size)); M <= all.length; M++) {
+    const bySlide: Entry[][] = [];
+    for (const e of all) {
+      const last = bySlide[bySlide.length - 1];
+      if (last && last[0].slide.id === e.slide.id) last.push(e);
+      else bySlide.push([e]);
+    }
+    const parts = bySlide.flatMap((g) => chunks(g, Math.ceil(g.length / M)));
+    const groups: Entry[][] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const c = parts[i];
+      const last = groups[groups.length - 1];
+      const stillTooMany = groups.length + (parts.length - i) > size;
+      if (last && stillTooMany && !general(last) && !general(c) && last.length + c.length <= M) last.push(...c);
+      else groups.push([...c]);
+    }
+    if (groups.length > size) continue;
+    return spread(groups, size);
+  }
+  // Only fact-less slides left to merge (more of them than slots): plain consecutive chunks.
+  return chunks(all, size);
+}
+
+/**
  * The plan: every distinct fact once, in slide order (facts in the order the slide lists them), one slot each when they
  * fit in `size`. When there are more facts than slots, the facts are condensed, not dropped: each slide gets slots in
  * proportion to its facts (at least one), and a slot holding several facts asks for one question that needs all of
@@ -174,38 +254,7 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides), mo
       .sort((a, b) => a.i - b.i)
       .map((a) => [a.x]);
   } else {
-    // Condense. Entries per slide, in order.
-    const bySlide: Entry[][] = [];
-    for (const e of all) {
-      const last = bySlide[bySlide.length - 1];
-      if (last && last[0].slide.id === e.slide.id) last.push(e);
-      else bySlide.push([e]);
-    }
-    if (bySlide.length > size) {
-      // More fact-bearing slides than slots: neighbouring slides share a question.
-      groups = chunks(all, size);
-    } else {
-      // Slots per slide in proportion to its facts, at least one each, adding up to `size` (largest remainders first).
-      const quota = bySlide.map((g) => (g.length * size) / all.length);
-      const slots = quota.map((q) => Math.max(1, Math.floor(q)));
-      let left = size - slots.reduce((a, b) => a + b, 0);
-      const order = quota.map((q, i) => ({ i, r: q - Math.floor(q) })).sort((a, b) => b.r - a.r || a.i - b.i);
-      for (let k = 0; left > 0; k = (k + 1) % order.length) {
-        const i = order[k].i;
-        if (slots[i] < bySlide[i].length) {
-          slots[i]++;
-          left--;
-        } else if (order.every((o) => slots[o.i] >= bySlide[o.i].length)) break;
-      }
-      for (; left < 0; ) {
-        // Rounding gave too many (every slide got its floor of one): take from the slides with the most slots per fact.
-        const i = slots.map((n, i) => ({ i, spare: n - 1, ratio: n / bySlide[i].length })).filter((x) => x.spare > 0).sort((a, b) => b.ratio - a.ratio)[0]?.i;
-        if (i == null) break;
-        slots[i]--;
-        left++;
-      }
-      groups = bySlide.flatMap((g, i) => chunks(g, Math.min(slots[i], g.length)));
-    }
+    groups = condense(all, size);
   }
 
   // Vary the angle so a quiz isn't all recall: every second fact is applied, every third compared; case slides apply.
@@ -214,7 +263,7 @@ export function planQuizByFacts(slides: FactSlide[], size = quizSize(slides), mo
     const pages = [...new Set(g.map((e) => e.slide.id))];
     const facts = g.map((e) => e.fact).filter((f): f is string => f != null);
     const multi = facts.length > 1;
-    const angle: Angle = g[0].slide.hasCase ? "apply" : multi ? (["compare", "not", "apply"] as Angle[])[i % 3] : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall";
+    const angle: Angle = g.some((e) => e.slide.hasCase) ? "apply" : multi ? (["compare", "not", "apply"] as Angle[])[i % 3] : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall";
     return { page: pages[0], ...(pages.length > 1 ? { pages } : {}), fact: facts[0] ?? null, facts, angle };
   });
 }
