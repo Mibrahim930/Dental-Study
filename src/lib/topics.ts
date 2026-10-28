@@ -159,7 +159,8 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
       `Existing concepts from earlier exams (${concepts.length}):\n${concepts.join("\n") || "(none yet)"}\n\n` +
       `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}`,
   });
-  return capSections(inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture));
+  const n = new Map(lecture.slides.map((p) => [p.id, p.page_number]));
+  return capSections(inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture), MAX_SECTIONS, (id) => n.get(id) ?? Number.MAX_SAFE_INTEGER);
 }
 
 /** Sort a lecture's sections (and the slides inside each) by slide number, and tag them with the lecture. */

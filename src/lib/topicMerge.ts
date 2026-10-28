@@ -59,12 +59,14 @@ type Mergeable = { title: string; summary: string; page_ids: number[]; emphasize
 
 /**
  * No more than `max` sections per lecture. While there are too many, the two neighbouring sections with the fewest
- * slides between them become one (so the sections stay about even and in slide order): its slides run on, the titles
- * join with " & ", the summaries follow each other, the concepts pool. `sections` must be in slide order.
+ * slides between them become one (so the sections stay about even and in slide order): its slides are the two sets
+ * in slide order (`order` gives a slide's place; slide ids ascending by default), the titles join with " & ", the
+ * summaries follow each other, the concepts pool. `sections` must be in slide order.
  */
-export function capSections<T extends Mergeable>(sections: T[], max = MAX_SECTIONS): T[] {
+export function capSections<T extends Mergeable>(sections: T[], max = MAX_SECTIONS, order: (id: number) => number = (id) => id): T[] {
   const out = sections.map((s) => ({ ...s }));
-  while (out.length > Math.max(1, max)) {
+  const limit = Number.isNaN(max) ? MAX_SECTIONS : Math.max(1, max);
+  while (out.length > limit) {
     let at = 0;
     for (let i = 1; i < out.length - 1; i++) {
       if (out[i].page_ids.length + out[i + 1].page_ids.length < out[at].page_ids.length + out[at + 1].page_ids.length) at = i;
@@ -74,7 +76,7 @@ export function capSections<T extends Mergeable>(sections: T[], max = MAX_SECTIO
       ...a,
       title: `${a.title.trim()} & ${b.title.trim()}`,
       summary: [a.summary.trim(), b.summary.trim()].filter(Boolean).join(" "),
-      page_ids: [...a.page_ids, ...b.page_ids],
+      page_ids: [...a.page_ids, ...b.page_ids].sort((x, y) => order(x) - order(y)),
       emphasized: a.emphasized || b.emphasized,
       concepts: [...new Set([...a.concepts, ...b.concepts])],
     });
