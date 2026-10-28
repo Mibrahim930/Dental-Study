@@ -288,10 +288,10 @@ describe("report and check routes", () => {
   }
   const report = (s: number, body: unknown) => reportPOST(new Request("http://x/r", post(body)), ctx(s));
 
-  it("huge note is cut to 500 characters; reporting twice keeps the first note; hidden question can't be answered", async () => {
+  it("huge note is cut to 500 characters; reporting twice is refused (no second record) and keeps the first note; hidden question can't be answered", async () => {
     const w = await ready();
     expect((await report(w.sessionId, { topicId: w.topicId, questionId: w.qs[0].id, note: "x".repeat(100000) })).status).toBe(200);
-    expect((await report(w.sessionId, { topicId: w.topicId, questionId: w.qs[0].id, note: "second" })).status).toBe(200);
+    expect((await report(w.sessionId, { topicId: w.topicId, questionId: w.qs[0].id, note: "second" })).status).toBe(400);
     const q = (JSON.parse(w.topic().checks_json!) as QuizQuestion[])[0];
     expect(q.report_note).toHaveLength(500);
     const r = await checkPOST(new Request("http://x/c", post({ topicId: w.topicId, index: 0, chosen: 0 })), ctx(w.sessionId));
@@ -322,7 +322,7 @@ describe("report and check routes", () => {
     expect(db.prepare("SELECT COUNT(*) n FROM session_checks WHERE session_id = ?").get(w.sessionId)).toEqual({ n: 1 });
   });
 
-  it("a class copy keeps quiz ids, drops the owner's reports, maps source_page_id to the copy's own slides, and answers don't travel", async () => {
+  it("a class copy keeps quiz ids and the owner's reports (hidden class-wide), maps source_page_id to the copy's own slides, and answers don't travel", async () => {
     const w = await ready();
     await report(w.sessionId, { topicId: w.topicId, questionId: w.qs[3].id, note: "bad key" });
     const classmate = makeUser();
@@ -345,8 +345,8 @@ describe("report and check routes", () => {
     expect(copyQs.every((q) => q.source_page_id != null && copyPages.has(q.source_page_id))).toBe(true);
     expect(copyQs.some((q) => w.pages.includes(q.source_page_id!))).toBe(false);
     // The owner's "report a problem" hides the question in the owner's copy only; the classmate's copy starts clean.
-    expect(copyQs.filter((q) => q.hidden)).toHaveLength(0);
-    expect(copyQs.some((q) => q.report_note)).toBe(false);
+    expect(copyQs.filter((q) => q.hidden).map((q) => q.id)).toEqual([w.qs[3].id]);
+    expect(copyQs[3].report_note).toBe("bad key");
     expect(copyQs).toHaveLength(w.qs.length);
   });
 });

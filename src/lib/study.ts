@@ -451,7 +451,10 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   };
 
   const kept = new Map<number, Draft>();
-  const seen = new Set<string>();
+  // Questions students reported on this section (own copy or a class copy): the writer is told to steer clear of
+  // them, and one that comes back anyway is dropped like a duplicate.
+  const reported = reportedStems(topic.id);
+  const seen = new Set<string>(reported.map(normStem).filter(Boolean));
   const keep = (drafts: Draft[]) => {
     for (const d of drafts) {
       const key = normStem(d.question);
@@ -464,8 +467,6 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const all = slots.map((_, i) => i);
   // Two writer calls run side by side for a quiz of any size; a small one (up to 4 questions) is one call.
   const halves = all.length <= 4 ? [all] : [all.slice(0, Math.ceil(all.length / 2)), all.slice(Math.ceil(all.length / 2))];
-  // Questions students reported on this section (own copy or a class copy) are named so the writer steers clear of them.
-  const reported = reportedStems(topic.id);
   const settled = await Promise.allSettled(halves.map((h) => write(h, reported)));
   const first = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
   if (first.length === 0 && settled.every((r) => r.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
@@ -482,7 +483,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   const missing = all.filter((i) => !kept.has(i)).sort((a, b) => Number(coveredPages.has(slots[a].page)) - Number(coveredPages.has(slots[b].page)) || a - b);
   if (missing.length > 0) {
     try {
-      const repaired = (await write(missing, [...kept.values()].map((d) => d.question.slice(0, 160)))).filter((d) => !seen.has(normStem(d.question)));
+      const repaired = (await write(missing, [...[...kept.values()].map((d) => d.question.slice(0, 160)), ...reported])).filter((d) => !seen.has(normStem(d.question)));
       keep(await check(repaired));
     } catch (err) {
       console.error(`Section quiz repair failed for topic ${topic.id}`, err);

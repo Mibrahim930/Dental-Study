@@ -303,7 +303,7 @@ function openAttemptsByExam(examIds: number[]): Map<number, OpenAttempt> {
   const rows = db
     .prepare(
       `SELECT a.exam_id, a.id, a.started_at, a.time_limit_sec, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
-       FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id
+       FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id AND aq.reported = 0
        WHERE a.status = 'ready' AND a.exam_id IN (${examIds.map(() => "?").join(",")})
        GROUP BY a.id HAVING answered < n ORDER BY a.id DESC`,
     )

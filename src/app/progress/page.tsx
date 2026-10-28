@@ -15,7 +15,7 @@ export default async function ProgressPage() {
   const attempts = db
     .prepare(
       `SELECT a.id, a.score, a.finished_at, a.mode, e.name exam_name, COUNT(aq.question_id) n, COALESCE(SUM(aq.correct = 1), 0) n_right
-       FROM attempts a JOIN exams e ON e.id = a.exam_id LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
+       FROM attempts a JOIN exams e ON e.id = a.exam_id LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id AND aq.reported = 0
        WHERE a.status = 'finished' AND e.user_id = ? GROUP BY a.id ORDER BY a.finished_at DESC LIMIT 20`,
     )
     .all(user.id) as { id: number; score: number; finished_at: string; mode: string; exam_name: string; n: number; n_right: number }[];

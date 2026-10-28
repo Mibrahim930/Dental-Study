@@ -62,14 +62,33 @@ type StoredQuiz = { id?: string; hidden?: boolean; report_note?: string | null }
  * the exam it was shared from and every exam added from it (copies keep question ids). The question stays in place so
  * positions, and the answers that refer to them, never shift. Returns how many quizzes changed.
  */
+/**
+ * Every exam that shares this exam's questions: the one it was (ultimately) shared from and every exam added from any
+ * of them, copies of copies included (a copy points at the exam it was added from, not at the root).
+ */
+export function examFamily(examId: number): number[] {
+  const parent = db.prepare("SELECT source_exam_id FROM exams WHERE id = ?");
+  let root = examId;
+  for (let hops = 0; hops < 20; hops++) {
+    const r = parent.get(root) as { source_exam_id: number | null } | undefined;
+    if (!r?.source_exam_id || r.source_exam_id === root) break;
+    root = r.source_exam_id;
+  }
+  const family = [root];
+  const children = db.prepare("SELECT id FROM exams WHERE source_exam_id = ?");
+  for (let i = 0; i < family.length && family.length < 1000; i++) {
+    for (const c of children.all(family[i]) as { id: number }[]) if (!family.includes(c.id)) family.push(c.id);
+  }
+  return family;
+}
+
 export function hideQuizQuestionEverywhere(topicId: number, questionId: string, note: string | null): number {
   const topic = db.prepare("SELECT exam_id FROM topics WHERE id = ?").get(topicId) as { exam_id: number } | undefined;
   if (!topic) return 0;
-  const exam = db.prepare("SELECT id, source_exam_id FROM exams WHERE id = ?").get(topic.exam_id) as { id: number; source_exam_id: number | null };
-  const root = exam.source_exam_id ?? exam.id;
+  const family = examFamily(topic.exam_id);
   const topics = db
-    .prepare("SELECT t.id, t.checks_json FROM topics t JOIN exams e ON e.id = t.exam_id WHERE (e.id = ? OR e.source_exam_id = ?) AND t.checks_json IS NOT NULL")
-    .all(root, root) as { id: number; checks_json: string }[];
+    .prepare(`SELECT t.id, t.checks_json FROM topics t WHERE t.exam_id IN (${family.map(() => "?").join(",")}) AND t.checks_json IS NOT NULL`)
+    .all(...family) as { id: number; checks_json: string }[];
   const update = db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?");
   let n = 0;
   for (const t of topics) {
@@ -79,6 +98,19 @@ export function hideQuizQuestionEverywhere(topicId: number, questionId: string, 
     qs[i] = { ...qs[i], hidden: true, report_note: qs[i].report_note ?? note };
     update.run(JSON.stringify(qs), t.id);
     n++;
+  }
+  // An open lecture review that carries this question (it was a miss) drops it too.
+  if (n > 0 && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'quizme'").get()) {
+    const reviews = db.prepare("SELECT id, questions_json FROM quizme WHERE kind = 'lecture' AND finished_at IS NULL AND questions_json LIKE ?").all(`%${questionId}%`) as {
+      id: number;
+      questions_json: string;
+    }[];
+    for (const r of reviews) {
+      const qs = JSON.parse(r.questions_json) as { source_qid?: string; hidden?: boolean }[];
+      let changed = false;
+      for (const q of qs) if (q.source_qid === questionId && !q.hidden) (q.hidden = true), (changed = true);
+      if (changed) db.prepare("UPDATE quizme SET questions_json = ? WHERE id = ?").run(JSON.stringify(qs), r.id);
+    }
   }
   return n;
 }

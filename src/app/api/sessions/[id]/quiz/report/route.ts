@@ -18,7 +18,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
   if (!ownsSession(user.id, sessionId)) return notFound();
   const body = (await request.json().catch(() => null)) as { topicId?: unknown; questionId?: unknown; note?: unknown; reason?: unknown } | null;
   const { topicId, questionId } = body ?? {};
-  const reason = cleanReason(body?.reason ?? body?.note);
+  const reason = cleanReason(typeof body?.reason === "string" ? body.reason : body?.note);
   if (!Number.isInteger(topicId) || typeof questionId !== "string" || !questionId) {
     return NextResponse.json({ error: "Unknown question" }, { status: 400 });
   }
@@ -30,7 +30,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
     if (!topic?.checks_json) return null;
     const own = (JSON.parse(topic.checks_json) as QuizQuestion[]).find((q) => q.id === questionId);
     if (!own) return null;
-    hideQuizQuestionEverywhere(topic.id, questionId, reason);
+    // Already reported (a double tap): nothing more to hide, and no second record.
+    if (hideQuizQuestionEverywhere(topic.id, questionId, reason) === 0) return null;
     saveReportedQuestion({
       userId: user.id,
       examId: topic.exam_id,

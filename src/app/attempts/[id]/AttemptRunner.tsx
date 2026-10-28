@@ -118,7 +118,24 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
 
   if (finished) return <Results view={view} onReport={report} />;
 
-  const current = questions[index];
+  if (questions.length === 0) {
+    return (
+      <div className="mx-auto flex max-w-xl flex-col gap-3">
+        <section className="tile cb-lilac flex flex-col gap-3 rounded-[28px]">
+          <div className="text-[26px] leading-tight font-extrabold tracking-tight">Every question in this exam was reported.</div>
+          <p className="text-[15px] font-medium">There&apos;s nothing left to answer here. Finish it and write a new one from the exam page.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary btn-sm" disabled={finishing} onClick={() => void finish()}>
+              Finish this exam
+            </button>
+            <Link href={`/exams/${attempt.exam_id}`} className="btn-ghost btn-sm text-on-lilac">Back to exam</Link>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const current = questions[Math.min(index, questions.length - 1)];
   const q = current as QuestionData;
   const answeredCount = questions.filter((x) => x.chosen_index != null).length;
   const tutor = attempt.mode === "tutor";

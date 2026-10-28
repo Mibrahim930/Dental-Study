@@ -18,7 +18,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/questions/[
   const questionId = Number((await ctx.params).id);
   if (!ownsQuestion(user.id, questionId)) return notFound();
   const body = (await request.json().catch(() => ({}))) as { note?: unknown; reason?: unknown; source?: unknown };
-  const reason = cleanReason(body.reason ?? body.note);
+  const reason = cleanReason(typeof body.reason === "string" ? body.reason : body.note);
   flagQuestionEverywhere(questionId, reason);
   const q = db
     .prepare(

@@ -137,11 +137,9 @@ function copyExam(sourceId: number, userId: number): number {
       let checks = t.checks_json;
       if (checks) {
         const qs = JSON.parse(checks) as { source_page_id?: number | null; image_page_id?: number | null; hidden?: boolean; report_note?: string | null }[];
-        // A question the owner reported stays hidden only in the owner's copy; the classmate starts clean.
+        // A reported question stays hidden in the copy too (reports hide it in every copy of the exam).
         checks = JSON.stringify(
-          qs.map(({ hidden, report_note, ...q }) => {
-            void hidden;
-            void report_note;
+          qs.map((q) => {
             return {
               ...q,
               ...(q.source_page_id != null ? { source_page_id: mapPage(q.source_page_id) } : {}),

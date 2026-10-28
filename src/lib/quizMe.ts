@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS lecture_review_done (
   done_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (user_id, ref)
 );`);
+const doneColumns = (db.prepare("PRAGMA table_info(lecture_review_done)").all() as { name: string }[]).map((c) => c.name);
+if (!doneColumns.includes("stem")) db.exec("ALTER TABLE lecture_review_done ADD COLUMN stem TEXT"); // normalised question text: the same question from another quiz is done too
 // Columns added after the table first shipped.
 const quizmeColumns = (db.prepare("PRAGMA table_info(quizme)").all() as { name: string }[]).map((c) => c.name);
 if (!quizmeColumns.includes("kind")) db.exec("ALTER TABLE quizme ADD COLUMN kind TEXT NOT NULL DEFAULT 'highlight'"); // highlight | lecture
@@ -67,6 +69,8 @@ export type QuizMeQuestion = {
   hidden?: boolean;
   /** Lecture review only: which missed answer this question came from (see lecture_review_done). */
   ref?: string;
+  /** Lecture review only, for a section-quiz question: its stable id there (a rewritten quiz changes positions). */
+  source_qid?: string;
 };
 
 /** What the browser gets for a question. The key, explanation and notes only once it's answered. */
@@ -308,10 +312,19 @@ function rowOf(userId: number, id: number): Row | undefined {
   return db.prepare("SELECT * FROM quizme WHERE id = ? AND user_id = ?").get(id, userId) as Row | undefined;
 }
 
+/** A stored quiz's questions and answers. A damaged row reads as empty rather than taking the page down with it. */
 function parse(row: Row): { questions: QuizMeQuestion[]; answers: (number | null)[] } {
-  const questions = JSON.parse(row.questions_json) as QuizMeQuestion[];
-  const stored = JSON.parse(row.answers_json) as (number | null)[];
-  return { questions, answers: questions.map((_, i) => (Number.isInteger(stored[i]) ? stored[i] : null)) };
+  let questions: QuizMeQuestion[] = [];
+  let stored: unknown = [];
+  try {
+    const q = JSON.parse(row.questions_json) as unknown;
+    questions = Array.isArray(q) ? (q as QuizMeQuestion[]).filter((x) => x && typeof x === "object" && Array.isArray(x.options)) : [];
+    stored = JSON.parse(row.answers_json);
+  } catch {
+    questions = [];
+  }
+  const a = Array.isArray(stored) ? (stored as unknown[]) : [];
+  return { questions, answers: questions.map((_, i) => (Number.isInteger(a[i]) ? (a[i] as number) : null)) };
 }
 
 function view(row: Row): QuizMeView {
@@ -405,8 +418,11 @@ export function answerQuizMe(input: { userId: number; id: number; index: number;
     const finished = view({ ...row, answers_json: JSON.stringify(answers) }).left === 0;
     db.prepare(`UPDATE quizme SET answers_json = ?${finished ? ", finished_at = datetime('now')" : ""} WHERE id = ?`).run(JSON.stringify(answers), id);
     if (q.concept?.trim()) recordConceptResult(upsertConcept(userId, q.concept), correct);
-    // Got it right in a lecture review: that miss is dealt with and won't be in the next review of the lecture.
-    if (row.kind === "lecture" && correct && q.ref) db.prepare("INSERT OR REPLACE INTO lecture_review_done (user_id, ref, done_at) VALUES (?, ?, datetime('now'))").run(userId, q.ref);
+    // Got it right in a lecture review: that miss is dealt with and won't be in the next review of the lecture (nor
+    // will the same question asked by another quiz).
+    if (row.kind === "lecture" && correct && q.ref) {
+      db.prepare("INSERT OR REPLACE INTO lecture_review_done (user_id, ref, stem, done_at) VALUES (?, ?, ?, datetime('now'))").run(userId, q.ref, normStem(q.question));
+    }
     return { ...result(chosen), finished };
   })();
 }
@@ -429,30 +445,36 @@ export function hideQuizMeQuestion(userId: number, id: number, index: number, re
       JSON.stringify(questions),
       id,
     );
-    // In a lecture review the question came from a section quiz or a "quiz me" quiz: hide it there too, so it is
-    // out of that quiz's score as well and never returns as a miss.
-    if (q.ref) hideAtSource(userId, q.ref, reason);
+    // In a lecture review the question came from a section quiz or a "quiz me" quiz: hide it there too (and wherever
+    // else the same question is asked in this lecture), so it is out of those scores as well and never returns as a miss.
+    if (row.kind === "lecture" && row.document_id != null) hideAtSource(userId, row.exam_id, row.document_id, q, reason);
     return { row, question: q };
   })();
 }
 
-/** Where a lecture-review question came from: "quiz:<topic>:<index>" or "quizme:<id>:<index>". */
-function hideAtSource(userId: number, ref: string, reason: string | null) {
-  const [kind, a, b] = ref.split(":");
-  const id = Number(a);
-  const index = Number(b);
-  if (!Number.isInteger(id) || !Number.isInteger(index)) return;
-  if (kind === "quiz") {
-    const topic = db.prepare("SELECT checks_json FROM topics WHERE id = ?").get(id) as { checks_json: string | null } | undefined;
-    const q = topic?.checks_json ? (JSON.parse(topic.checks_json) as { id?: string }[])[index] : undefined;
-    if (q?.id) hideQuizQuestionEverywhere(id, q.id, reason);
-  } else if (kind === "quizme") {
-    const row = rowOf(userId, id);
-    if (!row || row.kind !== "highlight") return;
+/**
+ * A lecture-review question was reported: hide every question with the same text in the lecture's section quizzes
+ * (every copy of the exam) and in the student's "quiz me" quizzes on its sections.
+ */
+function hideAtSource(userId: number, examId: number, documentId: number, q: QuizMeQuestion, reason: string | null) {
+  const stem = normStem(q.question);
+  const topics = lectureTopics(examId, documentId);
+  for (const t of topics) {
+    if (!t.checks_json) continue;
+    for (const x of JSON.parse(t.checks_json) as QuizQuestion[]) {
+      if (x.id && !x.hidden && (x.id === q.source_qid || normStem(x.question) === stem)) hideQuizQuestionEverywhere(t.id, x.id, reason);
+    }
+  }
+  const topicIds = topics.map((t) => t.id);
+  if (topicIds.length === 0) return;
+  const rows = db
+    .prepare(`SELECT * FROM quizme WHERE user_id = ? AND exam_id = ? AND kind = 'highlight' AND topic_id IN (${topicIds.map(() => "?").join(",")})`)
+    .all(userId, examId, ...topicIds) as Row[];
+  for (const row of rows) {
     const { questions } = parse(row);
-    if (!questions[index] || questions[index].hidden) return;
-    questions[index] = { ...questions[index], hidden: true };
-    db.prepare("UPDATE quizme SET questions_json = ? WHERE id = ?").run(JSON.stringify(questions), id);
+    let changed = false;
+    for (const x of questions) if (!x.hidden && normStem(x.question) === stem) (x.hidden = true), (changed = true);
+    if (changed) db.prepare("UPDATE quizme SET questions_json = ? WHERE id = ?").run(JSON.stringify(questions), row.id);
   }
 }
 
@@ -477,15 +499,29 @@ function lectureTopics(examId: number, documentId: number): Topic[] {
 export function lectureMisses(userId: number, examId: number, documentId: number): LectureMiss[] {
   const topics = lectureTopics(examId, documentId);
   if (topics.length === 0) return [];
-  const done = new Map(
-    (db.prepare("SELECT ref, done_at FROM lecture_review_done WHERE user_id = ?").all(userId) as { ref: string; done_at: string }[]).map((r) => [r.ref, r.done_at]),
+  const topicIds = topics.map((t) => t.id);
+  const rows = db
+    .prepare(`SELECT * FROM quizme WHERE user_id = ? AND exam_id = ? AND kind = 'highlight' AND topic_id IN (${topicIds.map(() => "?").join(",")}) ORDER BY id`)
+    .all(userId, examId, ...topicIds) as Row[];
+  // What she has dealt with in this lecture's reviews (a review is per lecture: the same text in another lecture is
+  // that lecture's own business).
+  const ownRef = (ref: string) => {
+    const [kind, id] = ref.split(":");
+    return kind === "quiz" ? topicIds.includes(Number(id)) : kind === "quizme" ? rows.some((r) => r.id === Number(id)) : false;
+  };
+  const doneRows = (db.prepare("SELECT ref, stem, done_at FROM lecture_review_done WHERE user_id = ?").all(userId) as { ref: string; stem: string | null; done_at: string }[]).filter((r) =>
+    ownRef(r.ref),
   );
+  const doneByRef = new Map(doneRows.map((r) => [r.ref, r.done_at]));
+  const doneByStem = new Map<string, string>();
+  for (const r of doneRows) if (r.stem && (doneByStem.get(r.stem) ?? "") < r.done_at) doneByStem.set(r.stem, r.done_at);
   const out: LectureMiss[] = [];
   const seen = new Set<string>();
   const add = (ref: string, missedAt: string, q: QuizMeQuestion) => {
-    const fixedAt = done.get(ref);
-    if (fixedAt && fixedAt >= missedAt) return;
     const key = normStem(q.question);
+    // Dealt with in a review (this very miss, or the same question from another quiz) after it was missed: not again.
+    const fixedAt = [doneByRef.get(ref), doneByStem.get(key)].filter((d): d is string => !!d).sort().at(-1);
+    if (fixedAt && fixedAt >= missedAt) return;
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push({ ref, missedAt, question: q });
@@ -508,18 +544,15 @@ export function lectureMisses(userId: number, examId: number, documentId: number
         concept: q.concept ?? "",
         source_page_id: q.source_page_id ?? null,
         image_page_id: q.image_page_id ?? null,
+        ...(q.id ? { source_qid: q.id } : {}),
       });
     }
   }
-  const topicIds = topics.map((t) => t.id);
-  const rows = db
-    .prepare(`SELECT * FROM quizme WHERE user_id = ? AND exam_id = ? AND kind = 'highlight' AND topic_id IN (${topicIds.map(() => "?").join(",")}) ORDER BY id`)
-    .all(userId, examId, ...topicIds) as Row[];
   for (const row of rows) {
     const { questions, answers } = parse(row);
     questions.forEach((q, i) => {
       if (q.hidden || answers[i] == null || answers[i] === q.correct_index) return;
-      add(`quizme:${row.id}:${i}`, row.created_at, { ...q, hidden: undefined, ref: undefined });
+      add(`quizme:${row.id}:${i}`, row.created_at, { ...q, hidden: undefined, ref: undefined, source_qid: undefined });
     });
   }
   return out;

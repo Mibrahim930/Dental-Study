@@ -42,7 +42,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const attempts = db
     .prepare(
       `SELECT a.*, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered, COALESCE(SUM(aq.correct = 1), 0) n_right
-       FROM attempts a LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id
+       FROM attempts a LEFT JOIN attempt_questions aq ON aq.attempt_id = a.id AND aq.reported = 0
        WHERE a.exam_id = ? GROUP BY a.id ORDER BY a.id DESC LIMIT 8`,
     )
     .all(id) as { id: number; mode: string; status: string; score: number | null; started_at: string; time_limit_sec: number | null; n: number; answered: number; n_right: number }[];
@@ -51,7 +51,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const openAttempt = db
     .prepare(
       `SELECT a.id, a.mode, a.started_at, a.time_limit_sec, COUNT(aq.question_id) n, COALESCE(SUM(aq.chosen_index IS NOT NULL), 0) answered
-       FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id
+       FROM attempts a JOIN attempt_questions aq ON aq.attempt_id = a.id AND aq.reported = 0
        WHERE a.exam_id = ? AND a.status = 'ready' GROUP BY a.id HAVING answered < n ORDER BY a.id DESC LIMIT 1`,
     )
     .get(id) as { id: number; mode: string; started_at: string; time_limit_sec: number | null; n: number; answered: number } | undefined;
