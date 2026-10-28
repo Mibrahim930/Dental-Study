@@ -481,6 +481,16 @@
   }
 }
 
+/* Marks on lesson text, painted with the highlight API (no DOM rewriting): highlight and underline. */
+::highlight(study-hl) {
+  background-color: var(--butter);
+  color: var(--on-butter);
+}
+::highlight(study-ul) {
+  text-decoration: underline 2px var(--coral);
+  text-underline-offset: 3px;
+}
+
 /* Text being selected (to highlight it). */
 ::selection {
   background: color-mix(in srgb, var(--butter) 70%, var(--foreground) 15%);

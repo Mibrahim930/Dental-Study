@@ -4,8 +4,8 @@
 export type Range = [number, number];
 
 /**
- * Marks on one question: highlighted ranges per piece of text ("stem", "case", "opt0"…"opt4"),
- * and the option numbers crossed out.
+ * Marks on one question: highlighted ranges per piece of text ("stem", "case", "opt0"…"opt4"), and the option numbers
+ * crossed out. On a block of lesson text: "text" (highlights) and "under" (underlines).
  */
 export type Marks = { hl: Record<string, Range[]>; crossed: number[] };
 
@@ -53,10 +53,14 @@ export function segments(text: string, ranges: Range[]): { text: string; start: 
   return out;
 }
 
-/** Which questions marks can be stored for: a practice-exam question, or a section-quiz question by its id. */
-export const MARKS_KEY = /^(attempt:\d{1,12}:\d{1,12}|quiz:[0-9a-f]{8})$/;
+/**
+ * Which marks can be stored: a practice-exam question, a section-quiz question by its id, or a block of lesson text
+ * ("lesson:<topic>:<slide>", slide 0 for the intro).
+ */
+export const MARKS_KEY = /^(attempt:\d{1,12}:\d{1,12}|quiz:[0-9a-f]{8}|lesson:\d{1,12}:\d{1,12})$/;
 
-const FIELD = /^(stem|case|opt[0-9])$/;
+/** Pieces of text marks are kept on: a question's stem, case and options; a lesson block's highlights and underlines. */
+const FIELD = /^(stem|case|opt[0-9]|text|under)$/;
 
 /** Marks from outside (browser storage or a request), checked and tidied; null if not usable. */
 export function cleanMarks(x: unknown): Marks | null {

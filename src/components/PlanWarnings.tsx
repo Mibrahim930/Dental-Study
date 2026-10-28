@@ -16,9 +16,9 @@ export function PlanWarnings({ warnings }: { warnings: PlanWarning[] }) {
             <div className="text-[17px] font-extrabold">Tight on time for {w.examName}, and that&apos;s okay.</div>
             <p className="text-[15px] leading-relaxed font-medium">
               {starredIn
-                ? "Your plan covers the ★ topics your professor stressed first, so the most important material is in. "
+                ? "Your plan covers the ★ topics you emphasized first, so the most important material is in. "
                 : hasStarred
-                  ? "Your plan puts the ★ topics your professor stressed first. "
+                  ? "Your plan puts the ★ topics you emphasized first. "
                   : "Your plan fits in as much as your study time allows. "}
               {w.topicsLeft
                 ? `${w.topicsLeft} ${w.topicsLeft === 1 ? "topic" : "topics"} didn't fit${w.perDay ? `; about ${w.perDay} extra minutes a day would cover ${w.topicsLeft === 1 ? "it" : "them"}` : ""}.`

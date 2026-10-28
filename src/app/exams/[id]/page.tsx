@@ -383,7 +383,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
             )}
             {topics.length > 0 && (
               <p className="text-[13px] text-muted-foreground">
-                Chips show mastery: mint ≥80%, butter ≥60%, coral below, “New” untested. ★ emphasized by your professor. ↺ covered in an earlier exam. ✓ studied.
+                Chips show mastery: mint ≥80%, butter ≥60%, coral below, “New” untested. ★ you emphasized in your notes. ↺ covered in an earlier exam. ✓ studied.
               </p>
             )}
           </section>
@@ -533,7 +533,7 @@ function SectionRow({
           <div className="min-w-0 flex-1">
             <div className="leading-snug font-bold break-words">
               {t.title}
-              {t.emphasized ? <span className={isCurrent ? "text-hero-accent-2" : "text-warning"} title="Emphasized in lecture"> ★</span> : null}
+              {t.emphasized ? <span className={isCurrent ? "text-hero-accent-2" : "text-warning"} title="You emphasized this"> ★</span> : null}
             </div>
             <div className={`text-[13px] font-medium ${isCurrent ? "text-hero-muted" : "text-muted-foreground"}`}>
               {(JSON.parse(t.page_ids) as number[]).length} slides{isCurrent ? " · you're here" : ""}

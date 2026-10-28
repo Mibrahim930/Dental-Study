@@ -108,7 +108,11 @@ export function hideQuizQuestionEverywhere(topicId: number, questionId: string, 
     for (const r of reviews) {
       const qs = JSON.parse(r.questions_json) as { source_qid?: string; hidden?: boolean }[];
       let changed = false;
-      for (const q of qs) if (q.source_qid === questionId && !q.hidden) (q.hidden = true), (changed = true);
+      for (const q of qs) {
+        if (q.source_qid !== questionId || q.hidden) continue;
+        q.hidden = true;
+        changed = true;
+      }
       if (changed) db.prepare("UPDATE quizme SET questions_json = ? WHERE id = ?").run(JSON.stringify(qs), r.id);
     }
   }

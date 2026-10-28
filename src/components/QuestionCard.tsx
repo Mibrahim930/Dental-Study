@@ -18,7 +18,7 @@ export type QuestionData = {
   image: { page_id: number; aspect: number; crop: unknown } | null;
   chosen_index: number | null;
   confidence?: "guess" | "unsure" | "sure" | null;
-  /** Written from a slide the professor emphasized. */
+  /** Written from a slide she emphasized in her notes. */
   emphasized?: boolean;
   flagged: boolean;
   topic: string | null;
@@ -153,7 +153,7 @@ export function QuestionCard({
       <section className="card flex flex-col gap-2.5">
         {header}
         {tag && !q.caseInfo && <div>{tag}</div>}
-        {q.emphasized && <span className="chip cb-coral self-start">★ Emphasized in lecture</span>}
+        {q.emphasized && <span className="chip cb-coral self-start">★ You emphasized this</span>}
         <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">
           <Highlightable text={q.stem} {...hlProps(hl("stem"))} />
         </p>

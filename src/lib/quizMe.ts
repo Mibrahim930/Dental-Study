@@ -473,7 +473,11 @@ function hideAtSource(userId: number, examId: number, documentId: number, q: Qui
   for (const row of rows) {
     const { questions } = parse(row);
     let changed = false;
-    for (const x of questions) if (!x.hidden && normStem(x.question) === stem) (x.hidden = true), (changed = true);
+    for (const x of questions) {
+      if (x.hidden || normStem(x.question) !== stem) continue;
+      x.hidden = true;
+      changed = true;
+    }
     if (changed) db.prepare("UPDATE quizme SET questions_json = ? WHERE id = ?").run(JSON.stringify(questions), row.id);
   }
 }

@@ -270,7 +270,7 @@ Teach only from the student's slides provided (plus standard dental knowledge ne
 - Leave out only a slide with nothing to learn: a title, outline, section divider, "questions?" or references slide, or a bare picture with no facts. Always keep a slide that asks a question or presents a case, and answer it from the slides.
 - Say it in plain words first, then give the term in **bold**: "the nerve and blood vessels inside the tooth — the **pulp**". Define every term the first time it appears. Short sentences, short paragraphs, one idea at a time. The intro is one sentence saying what the section is about.
 - Don't cite slide numbers: the slide is right above its explanation. Point at what is on it when that helps ("the arrow", "the left radiograph").
-- Slides marked ★IMPORTANT or with annotations were emphasized by the professor: say so in that slide's explanation ("★ the professor stressed this") and put them first in the key points.
+- Slides marked ★IMPORTANT or with annotations are ones the student marked as important in her own notes: say so in that slide's explanation ("★ you emphasized this") and put them first in the key points.
 - Numbers, ranges, names and classifications are given exactly as the slides give them.`;
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();

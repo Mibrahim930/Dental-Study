@@ -13,6 +13,7 @@ import { useMarks } from "./useMarks";
 import { QuizMe } from "./QuizMe";
 import { ReportQuestion } from "./ReportQuestion";
 import { LectureReviewCard } from "./LectureReviewCard";
+import { MarkableText } from "./MarkableText";
 import type { Range } from "@/lib/marks";
 
 /**
@@ -40,7 +41,7 @@ type LessonData = {
     connections: string | null;
   };
   aspects: Record<number, number>;
-  /** Every slide of the section: its number and lecture (shown above the picture) and whether the professor stressed it. */
+  /** Every slide of the section: its number and lecture (shown above the picture) and whether she emphasized it in her notes. */
   slideInfo?: Record<number, { number: number; lecture: string; emphasized: boolean }>;
   stressed?: { page_id: number; where: string; point: string }[];
 };
@@ -245,7 +246,7 @@ export function StudySession(props: {
           <section className="card-hero flex flex-col gap-3">
             <div className="text-[13px] font-bold text-hero-muted">
               {where}
-              {topic.emphasized && " · ★ emphasized in lecture"}
+              {topic.emphasized && " · ★ you emphasized"}
             </div>
             {byLecture && <div className="-mt-2 text-[13px] font-semibold break-words text-hero-muted">{topic.lecture}</div>}
             <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.03em] sm:text-[38px]">{topic.title}</h1>
@@ -320,7 +321,11 @@ function Lesson({ data }: { data: LessonData }) {
   return (
     <>
       <section className="card">
-        {lesson.intro && <p className="prose-study text-[18px] font-semibold">{lesson.intro}</p>}
+        {lesson.intro && (
+          <MarkableText marksKey={`lesson:${data.topic.id}:0`}>
+            <p className="prose-study text-[18px] font-semibold">{lesson.intro}</p>
+          </MarkableText>
+        )}
         {slides.length === 0 && <p className="prose-study text-muted-foreground">This section has no slides to walk through.</p>}
         {/* The lecture, one slide at a time: the slide's picture (tap to zoom) with its plain-words explanation under it. */}
         <ol className="mt-2 flex flex-col gap-8">
@@ -332,7 +337,7 @@ function Lesson({ data }: { data: LessonData }) {
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-[17px] font-extrabold tracking-tight">Slide {number}</span>
                   {info?.lecture && <span className="text-[13px] font-semibold text-muted-foreground">{info.lecture}</span>}
-                  {info?.emphasized && <span className="chip cb-coral">★ Professor stressed this</span>}
+                  {info?.emphasized && <span className="chip cb-coral">★ You emphasized this</span>}
                 </div>
                 <button onClick={() => setZoom(s.page_id)} className="group relative block w-full overflow-hidden rounded-[22px] bg-slide p-1.5" aria-label={`Zoom slide ${number}`}>
                   <SlideImage pageId={s.page_id} aspect={data.aspects?.[s.page_id]} alt={`Slide ${number}`} />
@@ -340,9 +345,10 @@ function Lesson({ data }: { data: LessonData }) {
                     <Icon d={ICONS.zoom} size={18} />
                   </span>
                 </button>
-                <div className="prose-study">
+                {/* Highlight / underline any of the explanation (saved to her account), and "Quiz me on this". */}
+                <MarkableText marksKey={`lesson:${data.topic.id}:${s.page_id}`} className="prose-study">
                   <ReactMarkdown>{s.explanation}</ReactMarkdown>
-                </div>
+                </MarkableText>
               </li>
             );
           })}
@@ -358,8 +364,8 @@ function Lesson({ data }: { data: LessonData }) {
 
       {data.stressed && data.stressed.length > 0 && (
         <section className="tile cb-coral rounded-[28px]">
-          <h2 className="mb-1 text-[22px] font-extrabold tracking-tight">★ Your professor stressed this</h2>
-          <p className="mb-3 text-[13px] font-semibold opacity-80">Starred, highlighted or called out in the lecture. Expect it on the exam.</p>
+          <h2 className="mb-1 text-[22px] font-extrabold tracking-tight">★ You emphasized this</h2>
+          <p className="mb-3 text-[13px] font-semibold opacity-80">Starred, highlighted or marked in your lecture notes. Expect it on the exam.</p>
           <ul className="flex flex-col gap-2">
             {data.stressed.map((s) => (
               <li key={s.page_id}>
