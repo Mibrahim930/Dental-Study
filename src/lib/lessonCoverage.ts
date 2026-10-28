@@ -36,6 +36,36 @@ export function coveredFacts(text: string, facts: string[]): { covered: string[]
   return { covered, missing, ratio: total === 0 ? 1 : covered.length / total };
 }
 
+/** A text as a run of lower-cased words (letters and digits only), for word-for-word matching. */
+function wordRun(s: string): string[] {
+  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(Boolean);
+}
+
+/** The fewest words a fact needs before it can count as copied: shorter ones can hardly be said another way. */
+export const QUOTE_MIN_WORDS = 5;
+
+/**
+ * Which facts the text copies word for word rather than explains. A fact of at least QUOTE_MIN_WORDS words counts as
+ * copied when a run of 70% of its words (at least QUOTE_MIN_WORDS) appears in the text in the same order, punctuation
+ * and case aside. Shorter facts are not judged and are not in the ratio. `ratio` is copied / judged (0 when nothing is
+ * long enough to judge), so a lesson that explains in its own words scores 0 and one pasted from the slides scores 1.
+ */
+export function quotedFacts(text: string, facts: string[]): { quoted: string[]; judged: number; ratio: number } {
+  const hay = ` ${wordRun(text).join(" ")} `;
+  const quoted: string[] = [];
+  let judged = 0;
+  for (const f of facts) {
+    const ws = wordRun(f);
+    if (ws.length < QUOTE_MIN_WORDS) continue;
+    judged++;
+    const run = Math.max(QUOTE_MIN_WORDS, Math.ceil(ws.length * 0.7));
+    let hit = false;
+    for (let i = 0; i + run <= ws.length && !hit; i++) hit = hay.includes(` ${ws.slice(i, i + run).join(" ")} `);
+    if (hit) quoted.push(f);
+  }
+  return { quoted, judged, ratio: judged === 0 ? 0 : quoted.length / judged };
+}
+
 /**
  * A crude stem: drops common English endings so "pulpal"/"pulps" meet "pulp" and "fractures"/"nerves" meet
  * "fracture"/"nerve" (a trailing e goes too, on both sides). Numbers and short words are left alone.

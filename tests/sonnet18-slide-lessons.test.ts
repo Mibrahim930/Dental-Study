@@ -347,7 +347,7 @@ describe("repair trigger", () => {
     expect(l.slides.map((s) => s.explanation)).toEqual(["x", "y"]);
   });
 
-  it("a throwing repair keeps the first lesson, stored as v3", async () => {
+  it("a throwing repair keeps the first lesson, stored as the current version", async () => {
     const w = world(2, (i) => [`lambda${i}word`]);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     lessonWriter = (n) => {
@@ -357,7 +357,7 @@ describe("repair trigger", () => {
     const l = await getLesson(w.topic());
     err.mockRestore();
     expect(l.slides[0].explanation).toBe("FIRST");
-    expect(JSON.parse(w.topic().lesson_json!).version).toBe(3);
+    expect(JSON.parse(w.topic().lesson_json!).version).toBe(LESSON_VERSION);
   });
 
   it("a repair returning garbage (slides not an array) is tidied and rejected, first lesson kept", async () => {
@@ -435,14 +435,14 @@ describe("repair trigger: question slides and fillers", () => {
 });
 
 describe("versions and migration", () => {
-  it("a stored v2 lesson (old shape with explanation) is rewritten on open, v3 afterwards", async () => {
+  it("a stored v2 lesson (old shape with explanation) is rewritten on open, the current version afterwards", async () => {
     const w = world(1);
     stored(w, { explanation: "OLD", key_points: [], slides: [{ page_id: w.pages[0], caption: "c" }], connections: null, version: 2 });
     expect(lessonIsCurrent(w.topic())).toBe(false);
     lessonWriter = () => good(w, "fact a0 fact b0");
     const l = await getLesson(w.topic());
     expect(l.slides[0].explanation).toBe("fact a0 fact b0");
-    expect(l.version).toBe(3);
+    expect(l.version).toBe(LESSON_VERSION);
     expect("explanation" in JSON.parse(w.topic().lesson_json!)).toBe(false);
   });
 
@@ -450,7 +450,7 @@ describe("versions and migration", () => {
     const w = world(1, () => []);
     stored(w, { explanation: "OLD", key_points: [], slides: [], connections: null });
     lessonWriter = () => good(w, "new");
-    expect((await getLesson(w.topic())).version).toBe(3);
+    expect((await getLesson(w.topic())).version).toBe(LESSON_VERSION);
   });
 
   it("a stored v3 lesson is served without any AI call, and via the route too", async () => {

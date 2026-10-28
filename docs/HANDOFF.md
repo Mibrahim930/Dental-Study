@@ -146,9 +146,11 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   joins the smallest neighbouring pairs if the AI over-splits anyway), "auto" after an upload maps only new lectures,
   "full" (Rebuild) keeps matching topic ids, `rebuildLectureMaps` one-time start-up upgrade (retried up to 3 starts),
   `refileQuestions`. Lectures mapped before the cap keep their sections until Rebuild is pressed on that exam.
-- `src/lib/study.ts` — lessons (`LESSON_VERSION` 3 stored inside `lesson_json`: `{ intro, slides: [{ page_id,
-  explanation }], key_points, connections }`, written and shown slide by slide in plain words; a slide with facts that
-  gets no entry triggers one repair call; coverage helpers in `lessonCoverage.ts`), section quizzes (`QUIZ_VERSION` 3: one question per distinct fact,
+- `src/lib/study.ts` — lessons (`LESSON_VERSION` 4 stored inside `lesson_json`: `{ intro, slides: [{ page_id,
+  explanation }], key_points, connections }`, written and shown slide by slide in plain words, explaining rather than
+  repeating the slides: `quotedFacts` in `lessonCoverage.ts` counts facts copied word for word, over 30% of them (or
+  a slide with facts that gets no entry, or coverage under 80%) triggers one repair call; a version-3 lesson that
+  already explains is kept, one that mostly copies is rewritten once on open), section quizzes (`QUIZ_VERSION` 3: one question per distinct fact,
   5–25, planned by `quizPlan.ts`'s `planQuizByFacts`; two writer calls, checker pass, one repair; `option_notes`), tutor
   prompt, session summary. `examStyle.ts` — how her real exams are written (distilled from 10 past papers) + the checker
   rules. `questionImage.ts` — which questions need a picture (`mentionsPicture` strict/generous), which slide to show,

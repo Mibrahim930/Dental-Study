@@ -840,7 +840,7 @@ describe("E: lessons", () => {
   });
 
   it("lessonIsCurrent: null / malformed / unversioned / v1 / v2 / v3 / v4", () => {
-    const t = (j: string | null) => lessonIsCurrent({ lesson_json: j });
+    const t = (j: string | null) => lessonIsCurrent({ lesson_json: j, page_ids: "[]" });
     expect(t(null)).toBe(false);
     expect(t("")).toBe(false);
     expect(t("{bad")).toBe(false);
@@ -850,19 +850,20 @@ describe("E: lessons", () => {
     expect(t('{"version":1}')).toBe(false);
     expect(t('{"version":null}')).toBe(false);
     expect(t('{"version":2}')).toBe(false);
-    expect(t('{"version":3}')).toBe(true);
+    expect(t('{"version":3}')).toBe(true); // slide by slide, and with no facts to judge nothing can be a copy
     expect(t('{"version":4}')).toBe(true);
-    expect(LESSON_VERSION).toBe(3);
+    expect(t('{"version":5}')).toBe(true);
+    expect(LESSON_VERSION).toBe(4);
   });
 
-  it("an older stored lesson (one continuous text, v2) is rewritten once; the stored lesson has version 3; a second open costs nothing", async () => {
+  it("an older stored lesson (one continuous text, v2) is rewritten once; the stored lesson has the current version; a second open costs nothing", async () => {
     const w = world(2);
     db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify({ explanation: "OLD", key_points: [], slides: [], connections: null, version: 2 }), w.topicId);
     lessonWriter = () => goodLesson(w, "NEW fact a0 fact b0 fact a1 fact b1");
     const l = await getLesson(w.topic());
     expect(lessonText(l)).toMatch(/NEW/);
     expect(l.slides.map((x) => x.page_id)).toEqual(w.pages);
-    expect(JSON.parse(w.topic().lesson_json!).version).toBe(3);
+    expect(JSON.parse(w.topic().lesson_json!).version).toBe(LESSON_VERSION);
     expect(lessonCalls).toBe(1);
     await getLesson(w.topic());
     expect(lessonCalls).toBe(1);
@@ -917,7 +918,7 @@ describe("E: lessons", () => {
     const l = await getLesson(w3.topic());
     err.mockRestore();
     expect(lessonText(l)).toMatch(/^FIRST/);
-    expect(JSON.parse(w3.topic().lesson_json!).version).toBe(3);
+    expect(JSON.parse(w3.topic().lesson_json!).version).toBe(LESSON_VERSION);
   });
 
   it("a failing FIRST call stores nothing and leaves an old lesson in place", async () => {

@@ -7,7 +7,7 @@ import { parseNotes } from "./processing";
 import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, distinctFacts, normStem, planQuizByFacts, QUIZ_MAX, type Angle, type FactSlide } from "./quizPlan";
-import { coveredFacts } from "./lessonCoverage";
+import { coveredFacts, quotedFacts } from "./lessonCoverage";
 import { clearTopicQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK, NO_COVER_CHECK, NO_COVER_RULE } from "./examStyle";
 import { reportedStems } from "./reportedQuestions";
@@ -22,7 +22,7 @@ export const Lesson = z.object({
         explanation: z
           .string()
           .describe(
-            "Markdown explanation of this one slide, shown under its picture. Covers every fact on the slide. Plain words first, then the term in **bold** (\"the nerve inside the tooth — the **pulp**\"); define each term the first time it appears; short paragraphs. As long as the slide needs; never summarise facts away. No slide citation: the slide is shown right above",
+            "Markdown explanation of this one slide, shown under its picture, in your own words: what each fact means, why it is so, and what it matters for. Never a copy of the slide's sentences (the student reads the slide right above). Covers every fact on the slide. Plain words first, then the term in **bold** (\"the nerve inside the tooth — the **pulp**\"); define each term the first time it appears; short paragraphs. As long as the slide needs; never summarise facts away. No slide citation",
           ),
       }),
     )
@@ -38,9 +38,19 @@ export const Lesson = z.object({
     .describe("How this ties to material from the student's earlier exams (cite them), or null if nothing relevant"),
 });
 /** Stored lessons carry the version of the writer that made them (missing = 1); older ones are rewritten once on next open.
- *  3 = slide by slide: every slide's picture with its own explanation under it (earlier lessons were one continuous text). */
+ *  3 = slide by slide: every slide's picture with its own explanation under it (earlier lessons were one continuous text).
+ *  4 = explains in its own words; a lesson that copied the slides' sentences gets one repair. A version-3 lesson that
+ *      already explains (few facts copied word for word) is kept, so the rewrite costs nothing where nothing would change. */
 export type Lesson = z.infer<typeof Lesson> & { version?: number };
-export const LESSON_VERSION = 3;
+export const LESSON_VERSION = 4;
+/** Share of the slides' (long enough) facts a lesson may repeat word for word; above this it is rewritten to explain. */
+const LESSON_QUOTED_MAX = 0.3;
+/** The section's distinct facts, as the coverage and copy checks see them (each once; slides often repeat one). */
+function sectionFacts(pages: PageRow[]): string[] {
+  return [...new Map(pages.flatMap((p) => parseNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
+    .filter(([key, f]) => key && f)
+    .map(([, f]) => f);
+}
 /** All the lesson's teaching text in one string (intro, then each slide's explanation), for the coverage check and tests. */
 export function lessonText(lesson: Pick<Lesson, "intro" | "slides">): string {
   return [lesson.intro ?? "", ...(lesson.slides ?? []).map((s) => s?.explanation ?? "")].filter(Boolean).join("\n\n");
@@ -146,10 +156,16 @@ const inflight = new Map<number, Promise<Lesson>>();
 
 /** Lessons are generated once per topic and cached; concurrent requests share one generation. */
 /** The stored lesson is up to date (written by this version); older ones are rewritten once on next open. */
-export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json">): boolean => {
+export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json" | "page_ids">): boolean => {
   if (!topic.lesson_json) return false;
   try {
-    return ((JSON.parse(topic.lesson_json) as Lesson).version ?? 1) >= LESSON_VERSION;
+    const lesson = JSON.parse(topic.lesson_json) as Lesson;
+    const v = lesson.version ?? 1;
+    if (v >= LESSON_VERSION) return true;
+    if (v !== 3) return false;
+    // Slide by slide already; kept unless it mostly repeats the slides instead of explaining them.
+    const pages = typeof topic.page_ids === "string" ? topicPages(topic as Topic) : [];
+    return quotedFacts(lessonText(lesson), sectionFacts(pages)).ratio <= LESSON_QUOTED_MAX;
   } catch {
     return false;
   }
@@ -198,7 +214,7 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     `Concepts and the student's mastery so far: ${
       concepts.map((c) => `${c.name} (${c.mastery == null ? "untested" : Math.round(c.mastery * 100) + "%"})`).join(", ") || "none"
     }`,
-    `Slides (in order; every fact listed under a slide must appear in that slide's explanation):\n${slideNotesText(pages)}`,
+    `Slides (in order; every fact listed under a slide must be explained, in your own words, in that slide's entry):\n${slideNotesText(pages)}`,
     earlier.length
       ? `Related slides from the student's earlier exams:\n${earlier.map((h) => `- ${h.exam_name} / ${h.filename} slide ${h.page_number}: ${h.title} — ${h.snippet}`).join("\n")}`
       : "No related material from earlier exams.",
@@ -217,12 +233,11 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
       pages,
     );
 
-  // Every fact on every slide should be in the lesson, and every slide with facts should have its own entry. When too
-  // many facts are missing or a slide with facts was left out, one repair call asks for them.
-  // Each distinct fact once (slides often repeat one), so coverage isn't counted twice and a repair doesn't ask twice.
-  const facts = [...new Map(pages.flatMap((p) => parseNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
-    .filter(([key, f]) => key && f)
-    .map(([, f]) => f);
+  // Every fact on every slide should be in the lesson, explained rather than copied, and every slide with facts should
+  // have its own entry. When too many facts are missing, too many are repeated word for word, or a slide with facts
+  // was left out, one repair call asks for the fix. Each distinct fact once (slides often repeat one), so nothing is
+  // counted twice and a repair doesn't ask twice.
+  const facts = sectionFacts(pages);
   // A slide that must get its own entry: one with facts, or one that poses a case or question (she should see it
   // answered). Title, agenda and reference slides never do (they don't reach a section anyway).
   const mustAppear = pages.filter((p) => {
@@ -233,25 +248,36 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   const leftOut = (l: Lesson) => mustAppear.filter((p) => !l.slides.some((s) => s.page_id === p.id));
   let lesson = await ask("");
   let cover = coveredFacts(lessonText(lesson), facts);
+  let quoted = quotedFacts(lessonText(lesson), facts);
   let left = leftOut(lesson);
-  if ((facts.length > 0 && cover.ratio < LESSON_COVERAGE) || left.length > 0) {
+  const copies = quoted.ratio > LESSON_QUOTED_MAX;
+  if ((facts.length > 0 && cover.ratio < LESSON_COVERAGE) || left.length > 0 || copies) {
     try {
       const again = await ask(
         [
-          "Your previous lesson left things out. Write the whole lesson again, keeping everything that was there and adding what is missing:",
+          copies && !left.length && !cover.missing.length
+            ? "Your previous lesson repeated the slides instead of explaining them. Write the whole lesson again, keeping every fact, but say each one in your own words:"
+            : "Your previous lesson left things out" + (copies ? " and repeated the slides instead of explaining them" : "") + ". Write the whole lesson again, keeping everything that was there and fixing this:",
           left.length
             ? `These slides have facts or a question but got no entry; add one for each:\n${left.map((p) => `- [P${p.id}] ${p.filename} slide ${p.page_number}`).join("\n")}`
             : "",
-          cover.missing.length ? `These facts from the slides are missing; add each one under its slide:\n${cover.missing.map((f) => `- ${f}`).join("\n")}` : "",
+          cover.missing.length ? `These facts from the slides are missing; explain each one under its slide:\n${cover.missing.map((f) => `- ${f}`).join("\n")}` : "",
+          copies
+            ? `These lines were copied from the slides word for word. The student can already read the slide above your text; rewrite each as an explanation in your own words (what it means, why it is so, what it matters for), without repeating the slide's sentence:\n${quoted.quoted.map((f) => `- ${f}`).join("\n")}`
+            : "",
         ]
           .filter(Boolean)
           .join("\n"),
       );
       const cover2 = coveredFacts(lessonText(again), facts);
+      const quoted2 = quotedFacts(lessonText(again), facts);
       const left2 = leftOut(again);
-      if (cover2.ratio >= cover.ratio && left2.length <= left.length) {
+      // The repair stands when it loses no slide, keeps (nearly) all the facts it had (an explanation may say a fact
+      // with other words than the slide's, which the word check can miss) and copies no more than before.
+      if (left2.length <= left.length && cover2.ratio >= cover.ratio - (copies ? 0.1 : 0) && quoted2.ratio <= Math.max(quoted.ratio, LESSON_QUOTED_MAX)) {
         lesson = again;
         cover = cover2;
+        quoted = quoted2;
         left = left2;
       }
     } catch (err) {
@@ -264,14 +290,17 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
 }
 
 const LESSON_SYSTEM = `You are a dental school tutor writing one section of a guided study session, for a student who finds the slides dense.
-The student sees each slide's picture with your explanation of it underneath, one slide after another, in lecture order.
+The student sees each slide's picture with your explanation of it underneath, one slide after another, in lecture order. She can read the slide herself: your job is to make her understand it, not to repeat it.
 Teach only from the student's slides provided (plus standard dental knowledge needed to connect them).
 - One entry per slide, in the order given, with the slide's P number. Explain every fact on a slide under that slide: the lesson is a complete, simpler version of the lecture, not a summary. Nothing a slide says may be left out; if a slide lists six things, explain all six. If a slide only continues the one before, say so and explain what it adds.
+- Explain, never copy. Do not repeat a slide's sentences or bullet points in the same words; quote a line only to point at it ("where it says…"). For each fact say, in your own words: what it means, why it is so (the mechanism or the reason behind it), and what it matters for (what she would notice or do with a patient, or what an exam would ask). Add a short example or comparison when it helps.
+  Bad, a copy: "Cystatin C-based estimates for GFR are believed to be less influenced by muscle mass or diet than creatinine-based estimates."
+  Good, an explanation: "Creatinine comes from muscle, so a bodybuilder, a frail elderly patient or someone who eats a lot of meat gets a misleading creatinine number. **Cystatin C** is made by every cell at a steady rate and does not change with muscle or diet, so a kidney-function estimate (**GFR**) built on it is more trustworthy in those patients."
 - Leave out only a slide with nothing to learn: a title, outline, section divider, "questions?" or references slide, or a bare picture with no facts. Always keep a slide that asks a question or presents a case, and answer it from the slides.
 - Say it in plain words first, then give the term in **bold**: "the nerve and blood vessels inside the tooth — the **pulp**". Define every term the first time it appears. Short sentences, short paragraphs, one idea at a time. The intro is one sentence saying what the section is about.
 - Don't cite slide numbers: the slide is right above its explanation. Point at what is on it when that helps ("the arrow", "the left radiograph").
 - Slides marked ★IMPORTANT or with annotations are ones the student marked as important in her own notes: say so in that slide's explanation ("★ you emphasized this") and put them first in the key points.
-- Numbers, ranges, names and classifications are given exactly as the slides give them.`;
+- Numbers, ranges, names and classifications are given exactly as the slides give them; the words around them are yours.`;
 
 const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 
