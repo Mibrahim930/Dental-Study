@@ -79,6 +79,17 @@ describe("smallerPlanLine (the lectures hold less than she asked for)", () => {
     expect(smallerPlanLine({ requested: 30 })).toBeNull();
     expect(smallerPlanLine({})).toBeNull();
   });
+
+  it("follows the server's `smaller` when the view has it (case sets plan whole cases, a few questions off what was asked)", () => {
+    expect(smallerPlanLine({ planned: 24, requested: 25, smaller: false })).toBeNull();
+    expect(smallerPlanLine({ planned: 12, requested: 25, smaller: true })).toBe("These lectures have material for 12 questions, so this exam has 12 (you asked for 25).");
+    // Never a sentence that contradicts itself, whatever the flag says.
+    expect(smallerPlanLine({ planned: 27, requested: 25, smaller: true })).toBeNull();
+    // Absent or not a boolean: the numbers decide, as before.
+    expect(smallerPlanLine({ planned: 24, requested: 25 })).not.toBeNull();
+    expect(smallerPlanLine({ planned: 24, requested: 25, smaller: null })).not.toBeNull();
+    expect(planFields({ smaller: "yes" }).smaller).toBeNull();
+  });
 });
 
 describe("coverageLine (exam screen and results)", () => {
@@ -137,7 +148,7 @@ describe("the other sentences", () => {
     expect(completeLine(30)).toBe("All 30 questions are in.");
   });
   it("planFields reads an old attempt (no plan fields) as nothing pending", () => {
-    expect(planFields({ attempt: {}, questions: [] })).toEqual({ requested: null, planned: null, written: null, pending: 0, short: null, coverage: null });
+    expect(planFields({ attempt: {}, questions: [] })).toEqual({ requested: null, planned: null, smaller: null, written: null, pending: 0, short: null, coverage: null });
     expect(planFields({ pending: "3", coverage: { tested: 1 } })).toMatchObject({ pending: 0, coverage: null });
   });
 });

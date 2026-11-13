@@ -9,6 +9,8 @@
 export type PlanFields = {
   requested?: number | null;
   planned?: number | null;
+  /** The server's word on whether the plan is really smaller than asked (case sets count cases). Absent: compare numbers. */
+  smaller?: boolean | null;
   written?: number | null;
   pending?: number | null;
   short?: { reason: "key" | "busy" | "interrupted" | string; writing: boolean } | null;
@@ -22,6 +24,7 @@ export function planFields(view: PlanFields | object) {
   return {
     requested: num(v.requested),
     planned: num(v.planned),
+    smaller: typeof v.smaller === "boolean" ? v.smaller : null,
     written: num(v.written),
     pending: Math.max(0, num(v.pending) ?? 0),
     short: v.short && typeof v.short === "object" ? v.short : null,
@@ -53,9 +56,14 @@ export function progressLine(v: PlanFields | object): { text: string; settings: 
   return { text: `${head} The rest will be written shortly.`, settings: false };
 }
 
-/** When the lectures hold less than she asked for: a complete exam, smaller than asked. Null otherwise. */
+/**
+ * When the lectures hold less than she asked for: a complete exam, smaller than asked. Null otherwise. The server says
+ * whether the shortfall is real (`smaller`: a case set naturally plans a few questions more or less than asked, as its
+ * cases hold 3-5 each); a view without it compares the numbers.
+ */
 export function smallerPlanLine(v: PlanFields | object): string | null {
-  const { planned, requested } = planFields(v);
+  const { planned, requested, smaller } = planFields(v);
+  if (smaller === false) return null;
   if (planned == null || requested == null || planned <= 0 || planned >= requested) return null;
   return `These lectures have material for ${plural(planned, "question")}, so this exam has ${planned} (you asked for ${requested}).`;
 }

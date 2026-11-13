@@ -27,7 +27,8 @@
 // examCoverage(examId, scope: Scope, slots?: Slot[]): Coverage
 //   { facts, tested, right, inThisExam? } for the exam page and the results. Two queries plus the slides in scope.
 //
-// Readers, exported for tests and for the writer: planSections, answerHistory, oldQuestionCounts, returningQuestions.
+// Readers, exported for tests and for the writer: planSections, answerHistory, keysInOpenExams, oldQuestionCounts,
+// returningQuestions.
 // Keys: factKey(text) for a fact, slideKey(pageId) for a slide with no facts listed; questions.fact_key stores the key.
 //
 // Stored as attempts.slots_json: the ExamPlan JSON (slots in exam order, numbered 1..n, and case groups).
@@ -85,6 +86,12 @@ export type PlanInput = {
   /** "Focus on my weak spots". */
   adaptive: boolean;
   history: ReadonlyMap<string, FactHistory>;
+  /**
+   * Fact key → how many of her other exams still open (not finished, started in the last day) plan it
+   * (keysInOpenExams). Such a fact ranks after every other (behind "rotation"), keeping its own `why`: it is planned
+   * only when the material runs out, those in fewer open exams first. So two exams started back to back don't repeat.
+   */
+  inOpenExams?: ReadonlyMap<string, number>;
   /** Section id → when it was last practised (practicePlan lastPracticed). Absent = never. */
   lastPracticed?: ReadonlyMap<number, number>;
   /** Slide id → old questions written from it with no fact_key (rule 6). */
@@ -150,20 +157,30 @@ function distinctFacts(sections: PlanSection[], oldQuestions?: ReadonlyMap<numbe
   return out;
 }
 
-/** A fact ranked for this exam (rule 3). Lower rank comes first. */
-type Cand = Fact & { rank: number; why: SlotWhy; at: number };
+/**
+ * A fact ranked for this exam (rule 3). Lower rank comes first. `base` is its rank by her history alone; `busy` says
+ * it is already planned in another open exam, which puts it behind every fact that is not (rank = base + BUSY per exam).
+ */
+type Cand = Fact & { rank: number; base: number; busy: boolean; why: SlotWhy; at: number };
 
-function rankFacts(facts: Fact[], history: ReadonlyMap<string, FactHistory>, adaptive: boolean): Cand[] {
+/** Ranks 0-4 are her history; a fact in another open exam ranks this much later per such exam. */
+const BUSY = 5;
+
+function rankFacts(facts: Fact[], history: ReadonlyMap<string, FactHistory>, adaptive: boolean, inOpen?: ReadonlyMap<string, number>): Cand[] {
   return facts.map((f) => {
     const h = history.get(f.key);
-    // Missed and unsure lead with focus on; with it off they rank with the never-tested facts (their label stays).
-    if (h?.result === "wrong") return { ...f, rank: adaptive ? 0 : 2, why: "missed", at: h.at };
-    if (h?.result === "unsure") return { ...f, rank: adaptive ? 1 : 2, why: "unsure", at: h.at };
-    // Rule 6: a fact with no keyed history on a slide that already has at least as many old (unkeyed) questions as
-    // facts counts as tested, longest ago of all (at 0). With fewer it stays new, behind the new facts of slides with
-    // fewer old questions (see `compare`), without pretending to know which of its facts they tested.
-    if (!h && f.share < 1) return { ...f, rank: 2, why: "new", at: 0 };
-    return { ...f, rank: f.slide.starred ? 3 : 4, why: f.slide.starred ? "starred" : "rotation", at: h?.at ?? 0 };
+    const ranked = ((): Omit<Cand, keyof Fact | "rank" | "busy"> => {
+      // Missed and unsure lead with focus on; with it off they rank with the never-tested facts (their label stays).
+      if (h?.result === "wrong") return { base: adaptive ? 0 : 2, why: "missed", at: h.at };
+      if (h?.result === "unsure") return { base: adaptive ? 1 : 2, why: "unsure", at: h.at };
+      // Rule 6: a fact with no keyed history on a slide that already has at least as many old (unkeyed) questions as
+      // facts counts as tested, longest ago of all (at 0). With fewer it stays new, behind the new facts of slides with
+      // fewer old questions (see `compare`), without pretending to know which of its facts they tested.
+      if (!h && f.share < 1) return { base: 2, why: "new", at: 0 };
+      return { base: f.slide.starred ? 3 : 4, why: f.slide.starred ? "starred" : "rotation", at: h?.at ?? 0 };
+    })();
+    const open = inOpen?.get(f.key) ?? 0;
+    return { ...f, ...ranked, rank: ranked.base + BUSY * open, busy: open > 0 };
   });
 }
 
@@ -175,7 +192,7 @@ const compare = (a: Cand, b: Cand) =>
   a.rank - b.rank ||
   Number(b.slide.starred) - Number(a.slide.starred) ||
   a.share - b.share ||
-  (a.rank >= 3 ? a.at - b.at : 0) ||
+  (a.base >= 3 ? a.at - b.at : 0) ||
   a.order - b.order;
 
 /** Sections, least recently practised first (never practised first of all), then in order. */
@@ -314,7 +331,7 @@ export function planExam(input: PlanInput): ExamPlan {
   const factText = new Map(facts.map((f) => [f.key, f.fact]));
   const empty: ExamPlan = { style: input.style, requested: size, slots: [], cases: [] };
   if (size === 0) return empty;
-  const cands = rankFacts(facts, input.history, input.adaptive);
+  const cands = rankFacts(facts, input.history, input.adaptive, input.inOpenExams);
   const secOrder = sectionOrder(sections, input.lastPracticed);
   if (input.style === "caseset") return planCaseSet(input, size, sections, cands, secOrder, factText, order);
 
@@ -328,13 +345,16 @@ export function planExam(input: PlanInput): ExamPlan {
   const open = cands.filter((c) => !coveredKeys.has(c.key));
   const room = size - retries.length;
 
-  // 2. One slot for every section not covered yet, least recently practised first when there isn't room for all.
+  // 2. One slot for every section not covered yet, least recently practised first when there isn't room for all. A
+  // section whose facts are all in another open exam gets one only when the free facts can't fill the exam anyway.
   const first: Cand[] = [];
+  let busyRoom = room - open.filter((c) => !c.busy).length;
   for (const sec of secOrder) {
     if (first.length >= room) break;
     if (coveredTopics.has(sections[sec].id)) continue;
     const best = open.filter((c) => c.sec === sec).sort(compare)[0];
-    if (best) first.push(best);
+    if (!best || (best.busy && busyRoom-- <= 0)) continue;
+    first.push(best);
   }
   // 3. The rest by rank, round-robin across sections within a rank.
   const picked = new Set(first);
@@ -443,16 +463,21 @@ function planCaseSet(
   const retriedQs = out.reduce((n, g) => n + g.drafts.length, 0);
   const sizes = caseSizes(Math.max(0, size - retriedQs), Math.max(1, caseCount - out.length));
 
-  /** Grow a case from `seed` over its section: its own slide first, then the slides one away, two away, … */
+  /**
+   * Grow a case from `seed` over its section: its own slide first, then the slides one away, two away, … Facts in
+   * another open exam only once the section's free facts are all in (the case then reaches further for free ones).
+   */
   const grow = (seed: Cand, k: number): Cand[] => {
     const pool = left().filter((c) => c.sec === seed.sec && c !== seed);
     const chosen = [seed];
-    for (let dist = 0; chosen.length < k; dist++) {
-      const ring = pool.filter((c) => Math.abs(c.slideIdx - seed.slideIdx) === dist);
-      if (ring.length === 0 && pool.every((c) => Math.abs(c.slideIdx - seed.slideIdx) < dist)) break;
-      // Nearer slides after the seed's first (i+1 before i-1), best facts first on each slide.
-      ring.sort((a, b) => Number(a.slideIdx < seed.slideIdx) - Number(b.slideIdx < seed.slideIdx) || compare(a, b));
-      chosen.push(...ring.slice(0, k - chosen.length));
+    for (const part of [pool.filter((c) => !c.busy), pool.filter((c) => c.busy)]) {
+      for (let dist = 0; chosen.length < k; dist++) {
+        const ring = part.filter((c) => Math.abs(c.slideIdx - seed.slideIdx) === dist);
+        if (ring.length === 0 && part.every((c) => Math.abs(c.slideIdx - seed.slideIdx) < dist)) break;
+        // Nearer slides after the seed's first (i+1 before i-1), best facts first on each slide.
+        ring.sort((a, b) => Number(a.slideIdx < seed.slideIdx) - Number(b.slideIdx < seed.slideIdx) || compare(a, b));
+        chosen.push(...ring.slice(0, k - chosen.length));
+      }
     }
     return chosen.sort((a, b) => a.order - b.order);
   };
@@ -478,11 +503,14 @@ function planCaseSet(
   };
 
   let next = 0;
-  // Every section without a case gets one first, least recently practised first.
+  // Every section without a case gets one first, least recently practised first; but a section whose facts are all
+  // in another open exam waits while there are free facts elsewhere (its never-answered case may still come back).
   for (const sec of secOrder) {
     if (next >= sizes.length) break;
     if (casesIn.has(sec)) continue;
-    if (seat(sec, left().filter((c) => c.sec === sec).sort(compare)[0], sizes[next])) next++;
+    const seed = left().filter((c) => c.sec === sec).sort(compare)[0];
+    if (seed?.busy && !unusedBySection.get(sections[sec].id)?.length && left().some((c) => !c.busy)) continue;
+    if (seat(sec, seed, sizes[next])) next++;
   }
   // Then wherever the best fact left is: by rank, a section with fewer cases first, then the usual order.
   while (next < sizes.length) {
@@ -581,6 +609,37 @@ export function answerHistory(examId: number): { facts: Map<string, FactHistory>
   return { facts, oldBySlide };
 }
 
+/**
+ * Fact keys already planned in her other practice exams of this exam's family that are still open: not finished (nor
+ * failed), started in the last day, as practice.ts unusedQuestions leaves alone the questions sitting in such an exam.
+ * Every slot of their plans counts, whatever its state; the value is how many such exams plan the key. A classmate's
+ * exams (on a shared copy) never count, and the attempt being planned has no plan yet, so it doesn't either.
+ */
+export function keysInOpenExams(examId: number): Map<string, number> {
+  const owner = (db.prepare("SELECT user_id FROM exams WHERE id = ?").get(examId) as { user_id: number | null } | undefined)?.user_id ?? null;
+  const family = examFamily(examId);
+  const rows = db
+    .prepare(
+      `SELECT a.slots_json FROM attempts a JOIN exams e ON e.id = a.exam_id
+       WHERE a.exam_id IN (${family.map(() => "?").join(",")}) AND e.user_id IS ? AND a.status IN ('generating', 'ready')
+         AND a.started_at > datetime('now', '-1 day') AND a.slots_json IS NOT NULL`,
+    )
+    .all(...family, owner) as { slots_json: string }[];
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    let slots: unknown;
+    try {
+      slots = (JSON.parse(r.slots_json) as { slots?: unknown })?.slots;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(slots)) continue;
+    const keys = new Set(slots.map((s) => (s as Partial<Slot> | null)?.key).filter((k): k is string => typeof k === "string" && k !== ""));
+    for (const k of keys) out.set(k, (out.get(k) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** Rule 6: per slide of this exam, how many questions (not retired) were written from it before fact keys existed. */
 export function oldQuestionCounts(examId: number): Map<number, number> {
   const rows = db
@@ -626,6 +685,7 @@ export function buildExamPlan(examId: number, opts: BuildOptions): ExamPlan {
     style: opts.style,
     adaptive: opts.adaptive,
     history: answerHistory(examId).facts,
+    inOpenExams: keysInOpenExams(examId),
     lastPracticed: lastPracticed(examId),
     oldQuestions: oldQuestionCounts(examId),
     retries: returningQuestions(retries),

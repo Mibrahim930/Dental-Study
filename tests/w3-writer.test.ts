@@ -74,6 +74,7 @@ vi.mock("next/headers", async () => {
 import { db } from "@/lib/db";
 import { INTERRUPTED_ATTEMPT, isResuming, recoverStaleAttempts, resumeAttempt, SECONDS_PER_QUESTION, startAttempt } from "@/lib/practice";
 import { attemptView, type AttemptProgress } from "@/lib/attemptView";
+import { smallerPlanLine } from "@/components/examProgressText";
 import { factKey, type ExamPlan } from "@/lib/examPlan";
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as attemptGET } from "@/app/api/attempts/[id]/route";
@@ -109,7 +110,7 @@ const inExam = (id: number) =>
     .all(id) as { question_id: number; position: number; option_order: string | null; fact_key: string | null; case_id: number | null; stem: string }[];
 const progress = (id: number): AttemptProgress => {
   const v = attemptView(id)!;
-  return { requested: v.requested, planned: v.planned, written: v.written, pending: v.pending, short: v.short, coverage: v.coverage };
+  return { requested: v.requested, planned: v.planned, smaller: v.smaller, written: v.written, pending: v.pending, short: v.short, coverage: v.coverage };
 };
 const answerAllRight = (attemptId: number) => {
   for (const r of inExam(attemptId)) {
@@ -308,18 +309,68 @@ describe("the exam follows the plan", () => {
     expect(new Set(keys(c))).toEqual(new Set(keys(a)));
   });
 
-  // A planner gap (lib/examPlan.ts, not the writer's): its history counts only answered questions, so a second exam
-  // started before the first was answered plans the very same facts. Pinned so a fix shows up here.
-  it("(documented) two exams started back to back, the first not answered yet, plan the same facts", async () => {
-    const w = exam(2, 3);
+  // Facts already planned in an exam still open (not finished, started in the last day) rank after every other, so a
+  // second exam started before the first is answered plans the other facts (lib/examPlan.ts keysInOpenExams).
+  it("two exams started back to back, the first not answered yet, plan different facts; a third takes the least bad", async () => {
+    const w = exam(2, 3); // 12 facts
     const keys = (id: number) => inExam(id).map((r) => r.fact_key!);
     const a = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
     const b = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
     await settled(a);
     await settled(b);
-    expect(keys(b).sort()).toEqual(keys(a).sort());
-    // Never the same questions, though: each exam has its own.
+    expect(keys(a)).toHaveLength(6);
+    expect(keys(b)).toHaveLength(6);
+    expect(new Set([...keys(a), ...keys(b)]).size).toBe(12);
     expect(inExam(a).some((r) => inExam(b).some((x) => x.question_id === r.question_id))).toBe(false);
+    // Every fact is in an open exam: the third still gets a full exam of distinct facts, each its own why.
+    const c = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(c);
+    expect(new Set(keys(c)).size).toBe(6);
+    expect(planOf(c).slots.every((s) => s.why === "new")).toBe(true);
+  });
+
+  it("an open exam started more than a day ago doesn't count", async () => {
+    const w = exam(2, 3);
+    const keys = (id: number) => inExam(id).map((r) => r.fact_key!);
+    const a = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(a);
+    db.prepare("UPDATE attempts SET started_at = datetime('now', '-25 hours') WHERE id = ?").run(a);
+    const b = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(b);
+    expect(new Set(keys(b))).toEqual(new Set(keys(a)));
+  });
+
+  it("a finished exam doesn't count as open: only the facts she answered in it count, through her answers", async () => {
+    const w = exam(2, 3);
+    const keys = (id: number) => inExam(id).map((r) => r.fact_key!);
+    const a = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(a);
+    // She answers two questions, then finishes: the four unanswered facts are free again, the two answered are not new.
+    const answered = inExam(a).slice(0, 2);
+    for (const r of answered) db.prepare("UPDATE attempt_questions SET chosen_index = 0, correct = 1, confidence = 'sure' WHERE attempt_id = ? AND question_id = ?").run(a, r.question_id);
+    db.prepare("UPDATE attempts SET status = 'finished', finished_at = datetime('now') WHERE id = ?").run(a);
+    const b = startAttempt(w.examId, { size: 10, mode: "tutor", style: "recall", adaptive: false });
+    await settled(b);
+    const unanswered = keys(a).filter((k) => !answered.some((r) => r.fact_key === k));
+    expect(keys(b)).toEqual(expect.arrayContaining(unanswered));
+    expect(keys(b).filter((k) => answered.some((r) => r.fact_key === k))).toHaveLength(0);
+  });
+
+  it("a classmate's open exam on her copy never counts", async () => {
+    const owner = apiReadyUser();
+    const w = world({ userId: owner, sections: 2, slidesEach: 3, ready: true, notes: (n) => slideNotes({ title: `slide ${n}`, key_facts: [`fact ${n}a`, `fact ${n}b`] }) });
+    const classId = createClass(owner, "C");
+    const mate = apiReadyUser();
+    joinClass(mate, (db.prepare("SELECT invite_code FROM classes WHERE id = ?").get(classId) as { invite_code: string }).invite_code);
+    expect(shareExam(owner, classId, w.examId)).toBeNull();
+    const shared = (db.prepare("SELECT id FROM shared_exams WHERE exam_id = ?").get(w.examId) as { id: number }).id;
+    const copy = (addSharedExam(mate, shared) as { examId: number }).examId;
+    const keys = (id: number) => inExam(id).map((r) => r.fact_key!);
+    const theirs = startAttempt(copy, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(theirs);
+    const mine = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(mine);
+    expect(new Set(keys(mine))).toEqual(new Set(keys(theirs)));
   });
 
   it("case sets: each planned case is one patient filling its slots in order; a case under three questions is dropped and its slots fail", async () => {
@@ -571,7 +622,7 @@ describe("resumeAttempt", () => {
     db.prepare("UPDATE attempts SET status = 'ready', slots_json = NULL, options_json = NULL, requested = NULL WHERE id = ?").run(id);
     expect(resumeAttempt(id)).toBe(false);
     expect(gen.calls).toHaveLength(0);
-    expect(progress(id)).toEqual({ requested: null, planned: null, written: 3, pending: 0, short: null, coverage: null });
+    expect(progress(id)).toEqual({ requested: null, planned: null, smaller: false, written: 3, pending: 0, short: null, coverage: null });
   });
 
   it("an exam finished while its missing questions are written keeps what it had", async () => {
@@ -660,7 +711,7 @@ describe("attemptView", () => {
     const w = exam(2, 3);
     const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
     await settled(id);
-    expect(progress(id)).toEqual({ requested: 6, planned: 6, written: 6, pending: 0, short: null, coverage: { facts: 12, inThisExam: 6, tested: 0 } });
+    expect(progress(id)).toEqual({ requested: 6, planned: 6, smaller: false, written: 6, pending: 0, short: null, coverage: { facts: 12, inThisExam: 6, tested: 0 } });
     answerAllRight(id);
     expect(progress(id).coverage).toEqual({ facts: 12, inThisExam: 6, tested: 6 });
   });
@@ -669,7 +720,7 @@ describe("attemptView", () => {
     const w = exam(1, 2); // four facts
     const id = startAttempt(w.examId, { size: 10, mode: "tutor", style: "recall", adaptive: false });
     await settled(id);
-    expect(progress(id)).toEqual({ requested: 10, planned: 4, written: 4, pending: 0, short: null, coverage: { facts: 4, inThisExam: 4, tested: 0 } });
+    expect(progress(id)).toEqual({ requested: 10, planned: 4, smaller: true, written: 4, pending: 0, short: null, coverage: { facts: 4, inThisExam: 4, tested: 0 } });
   });
 
   it("coverage counts every planned question, written or not, within the exam's scope", async () => {
@@ -688,6 +739,28 @@ describe("attemptView", () => {
     expect(progress(id)).toMatchObject({ requested: 6, planned: 6, written: 3, pending: 3, short: null });
   });
 
+  it("case sets: the cases aimed for are a complete exam whatever their question count; fewer cases is smaller", async () => {
+    const w = exam(2, 6); // 24 facts
+    // Each written case keeps three questions: the rest leave the plan, and the exam is complete with fewer than asked.
+    gen.answer = (slots, call, opts) => {
+      const out = answerAll(slots, call, opts) as { cases: { questions: unknown[] }[] };
+      out.cases.forEach((c) => (c.questions = c.questions.slice(0, 3)));
+      return out;
+    };
+    const full = startAttempt(w.examId, { size: 9, mode: "tutor", style: "caseset", adaptive: false });
+    await settled(full);
+    expect(planOf(full).cases).toHaveLength(2); // round(9 / 4)
+    expect(progress(full)).toMatchObject({ requested: 9, planned: 6, pending: 0, smaller: false });
+    expect(smallerPlanLine(attemptView(full)!)).toBeNull();
+    gen.answer = null;
+    const small = exam(1, 2); // four facts: one case where five were aimed for
+    const short = startAttempt(small.examId, { size: 20, mode: "tutor", style: "caseset", adaptive: false });
+    await settled(short);
+    expect(planOf(short).cases).toHaveLength(1);
+    expect(progress(short)).toMatchObject({ requested: 20, smaller: true });
+    expect(smallerPlanLine(attemptView(short)!)).toMatch(/^These lectures have material for \d+ questions, so this exam has \d+ \(you asked for 20\)\.$/);
+  });
+
   it("an exam from before plans keeps working: all null or zero", () => {
     const w = exam(1, 1);
     const id = Number(db.prepare("INSERT INTO attempts (exam_id, mode, status) VALUES (?, 'tutor', 'ready')").run(w.examId).lastInsertRowid);
@@ -695,7 +768,7 @@ describe("attemptView", () => {
     db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, 0)").run(id, q);
     const v = attemptView(id)!;
     expect(v.questions).toHaveLength(1);
-    expect(progress(id)).toEqual({ requested: null, planned: null, written: 1, pending: 0, short: null, coverage: null });
+    expect(progress(id)).toEqual({ requested: null, planned: null, smaller: false, written: 1, pending: 0, short: null, coverage: null });
   });
 });
 

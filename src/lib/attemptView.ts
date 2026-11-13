@@ -15,6 +15,9 @@ export type AttemptProgress = {
   requested: number | null;
   /** Planned questions (can be fewer than requested when the material runs out: that exam is complete). */
   planned: number | null;
+  /** The plan is really smaller than asked (the material ran out), so the screens say so. Case sets plan whole cases
+   *  of 3-5 questions, so theirs counts cases: fewer than the planner aims for (one per four questions asked). */
+  smaller: boolean;
   /** Questions in the exam now. While it is first being written: the planned questions written so far (questions
    *  coming back as they were are not counted; they go in when the exam is ready). */
   written: number;
@@ -193,7 +196,7 @@ function progress(
   } catch {
     plan = null;
   }
-  if (!plan) return { requested: attempt.requested ?? null, planned: null, written, pending: 0, short: null, coverage: null };
+  if (!plan) return { requested: attempt.requested ?? null, planned: null, smaller: false, written, pending: 0, short: null, coverage: null };
   const pending = openSlots(plan).length;
   // While the exam is first being written nothing is "missing" yet (the loading screen shows that), and nothing is in
   // the exam yet either: what has been written so far is what the planned questions say.
@@ -203,9 +206,15 @@ function progress(
   if (generating) written = plan.slots.filter((s) => s.state === "done" && s.why !== "retry" && s.why !== "unused").length;
   // The coverage line counts what the exam plans to cover, whatever each planned question's state.
   const c = examCoverage(attempt.exam_id, scope, plan.slots);
+  const requested = attempt.requested ?? null;
+  // As planCaseSet in lib/examPlan.ts: it aims for one case per four questions asked.
+  const smaller =
+    requested != null &&
+    (plan.style === "caseset" ? (Array.isArray(plan.cases) ? plan.cases.length : 0) < Math.max(1, Math.round(requested / 4)) : plan.slots.length < requested);
   return {
-    requested: attempt.requested ?? null,
+    requested,
     planned: plan.slots.length,
+    smaller,
     written,
     pending,
     short,

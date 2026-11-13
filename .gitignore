@@ -12,6 +12,11 @@
 
 # testing
 /coverage
+# browser tests: traces and screenshots of failures, and the HTML report (CI)
+/e2e/.results/
+/e2e/.report/
+/playwright-report/
+/test-results/
 
 # next.js
 /.next/
