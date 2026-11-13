@@ -28,7 +28,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION } from "@/lib/study";
+import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION, recentFailure } from "@/lib/study";
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
@@ -308,23 +308,30 @@ describe("repair trigger", () => {
     expect(l.slides[0].explanation).toBe("FIRST\n\nADDED");
   });
 
-  it("repair with equal coverage but MORE slides left out is rejected", async () => {
+  it("a repair that still leaves a slide with facts out (it only rewrites one it was not asked about): nothing is stored, the failure is marked", async () => {
     const w = world(3, (i) => [`zeta${i}word`]);
     // first: slide 0 and 1 present, slide 2 missing (coverage by text 3/3 via intro)
     lessonWriter = (n) =>
       n === 1
         ? good(w, "", { intro: "zeta0word zeta1word zeta2word", slides: [{ page_id: w.pages[0], explanation: "a" }, { page_id: w.pages[1], explanation: "b" }] })
         : good(w, "", { intro: "zeta0word zeta1word zeta2word", slides: [{ page_id: w.pages[0], explanation: "FROM REPAIR" }] });
-    const l = await getLesson(w.topic());
-    expect(l.slides.map((s) => s.explanation)).toEqual(["a", "b"]);
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
+    expect(calls.filter((c) => c.purpose === "lesson repair")).toHaveLength(1);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
   });
 
   it("a repair's entries for slides it was not asked about are ignored", async () => {
     const w = world(2, (i) => [`eta${i}word`]);
-    lessonWriter = (n) => good(w, "", { intro: "eta0word eta1word", slides: [{ page_id: w.pages[0], explanation: n === 1 ? "FIRST" : "SECOND" }] });
+    // The repair writes the slide it was asked for (slide 1) and also sends a rewrite of slide 0, which it was not asked about.
+    lessonWriter = (n) =>
+      good(w, "", {
+        intro: "eta0word eta1word",
+        slides: n === 1 ? [{ page_id: w.pages[0], explanation: "FIRST" }] : [{ page_id: w.pages[0], explanation: "SECOND" }, { page_id: w.pages[1], explanation: "REPAIRED" }],
+      });
     const l = await getLesson(w.topic());
     expect(repairPrompt()).not.toContain(`[P${w.pages[0]}]`);
-    expect(l.slides.map((s) => s.explanation)).toEqual(["FIRST"]);
+    expect(l.slides.map((s) => s.explanation)).toEqual(["FIRST", "REPAIRED"]);
   });
 
   it("the repair adds a left-out slide and leaves the complete one as it was", async () => {
@@ -339,7 +346,7 @@ describe("repair trigger", () => {
     expect(l.slides[1].explanation).toBe("theta0word");
   });
 
-  it("repair with higher coverage and fewer left out is accepted; repair with higher coverage but more left out is rejected", async () => {
+  it("a repair that writes the left-out slides is used; one that returns only a slide it was not asked about leaves the hole, and nothing is stored", async () => {
     const w = world(2, (i) => [`iota${i}word`]);
     lessonWriter = (n) => (n === 1 ? good(w, "", { slides: [] }) : good(w, "iota0word iota1word"));
     expect((await getLesson(w.topic())).slides).toHaveLength(2);
@@ -349,29 +356,48 @@ describe("repair trigger", () => {
     lessonWriter = (n) =>
       n === 1
         ? good(w2, "", { slides: [{ page_id: w2.pages[0], explanation: "x" }, { page_id: w2.pages[1], explanation: "y" }] }) // coverage 0, 1 left out
-        : good(w2, "", { slides: [{ page_id: w2.pages[0], explanation: "kappa0word kappa1word kappa2word" }] }); // coverage 100%, 2 left out
-    const l = await getLesson(w2.topic());
-    expect(l.slides.map((s) => s.explanation)).toEqual(["x", "y"]);
+        : good(w2, "", { slides: [{ page_id: w2.pages[0], explanation: "kappa0word kappa1word kappa2word" }] }); // only slide 0, which it was not asked about
+    await expect(getLesson(w2.topic())).rejects.toThrow("without 1 of its slides");
+    expect(lessonCalls).toBe(2);
+    expect(w2.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w2.topicId)).toBe(true);
   });
 
-  it("a throwing repair keeps the first lesson, stored as the current version", async () => {
+  it("a throwing repair, when the first lesson left a slide with facts out: nothing is stored and the failure is marked", async () => {
     const w = world(2, (i) => [`lambda${i}word`]);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     lessonWriter = (n) => {
       if (n === 2) throw new Error("repair down");
       return good(w, "", { slides: [{ page_id: w.pages[0], explanation: "FIRST" }] });
     };
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
+    err.mockRestore();
+    expect(lessonCalls).toBe(2);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
+  });
+
+  it("a throwing repair, when the first lesson only left facts out of an entry: the first lesson is stored as the current version", async () => {
+    const w = world(1, () => ["lambdaAword", "lambdaBword"]);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    lessonWriter = (n) => {
+      if (n === 2) throw new Error("repair down");
+      return good(w, "", { slides: [{ page_id: w.pages[0], explanation: "FIRST", facts: [1] }] });
+    };
     const l = await getLesson(w.topic());
     err.mockRestore();
+    expect(lessonCalls).toBe(2);
     expect(l.slides[0].explanation).toBe("FIRST");
     expect(JSON.parse(w.topic().lesson_json!).version).toBe(LESSON_VERSION);
   });
 
-  it("a repair returning garbage (slides not an array) is tidied and rejected, first lesson kept", async () => {
+  it("a repair returning garbage (slides not an array) writes nothing for the left-out slide: nothing is stored, the failure is marked", async () => {
     const w = world(2, (i) => [`mu${i}word`]);
     lessonWriter = (n) => (n === 1 ? good(w, "", { slides: [{ page_id: w.pages[0], explanation: "FIRST mu0word mu1word" }] }) : { intro: "", slides: "garbage" });
-    const l = await getLesson(w.topic());
-    expect(l.slides[0].explanation).toMatch(/^FIRST/);
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
+    expect(lessonCalls).toBe(2);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
   });
 
   it("a left-out slide whose only fact has no significant stem (punctuation) needs no entry while others have facts", async () => {
@@ -382,11 +408,12 @@ describe("repair trigger", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("only ever one repair, even if the repair is still bad", async () => {
+  it("only ever one repair, even if the repair is still bad (the lesson then fails and nothing is stored)", async () => {
     const w = world(2, (i) => [`xi${i}word`]);
     lessonWriter = () => good(w, "", { slides: [] });
-    await getLesson(w.topic());
+    await expect(getLesson(w.topic())).rejects.toThrow("without 2 of its slides");
     expect(lessonCalls).toBe(2);
+    expect(w.topic().lesson_json).toBeNull();
   });
 });
 
@@ -432,12 +459,15 @@ describe("repair trigger: question slides and fillers", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("a left-out question slide: repair that still leaves it out is accepted only if not worse; first lesson kept when repair leaves out more", async () => {
+  it("a left-out question slide that the repair still leaves out: nothing is stored, the failure is marked", async () => {
     const w = world(2, () => []);
     setNotes(w.pages[0], { case_prompt: "A?" });
     setNotes(w.pages[1], { case_prompt: "B?" });
     lessonWriter = (n) => good(w, "", { slides: n === 1 ? [{ page_id: w.pages[0], explanation: "FIRST" }] : [] });
-    expect((await getLesson(w.topic())).slides[0].explanation).toBe("FIRST");
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
+    expect(lessonCalls).toBe(2);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
   });
 });
 

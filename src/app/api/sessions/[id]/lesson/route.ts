@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
-import { getLesson, lessonIsCurrent, recentFailure, slideNotes, topicPages } from "@/lib/study";
+import { getLesson, getSectionQuiz, lessonIsCurrent, quizNeedsWriting, recentFailure, slideNotes, topicPages } from "@/lib/study";
 import { topicConcepts } from "@/lib/memory";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
 import { aiFailure } from "@/lib/http";
+import { track } from "@/lib/inflight";
 import { refuseCrossSite } from "../../crossSite";
 
 export const maxDuration = 300;
 
 /**
- * One section's lesson (written once and cached). Nothing else happens here: the page reports the lesson as shown with
- * POST …/shown, which moves her place, marks the section studied and starts its quiz. `prefetch=1` (the page warming
- * the next section) never retries a lesson whose writing failed a moment ago: it answers 204 instead.
+ * One section's lesson (written once and cached). When she opens a section herself (not a prefetch), its quiz is
+ * started alongside the lesson so it is ready when she finishes reading; the page only asks once she has settled on
+ * a section, so sections tapped past cost nothing. Her place and "studied" are NOT set here: the page reports the
+ * lesson as shown with POST …/shown. `prefetch=1` (the page warming the next section) never starts a quiz and never
+ * retries a lesson whose writing failed a moment ago: it answers 204 instead.
  */
 export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id]/lesson">) {
   const refused = refuseCrossSite(request);
@@ -29,6 +32,11 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
   const topic = db.prepare("SELECT * FROM topics WHERE exam_id = ? AND position = ?").get(session.exam_id, position) as Topic | undefined;
   if (!topic) return NextResponse.json({ error: "Topic not found" }, { status: 404 });
   if (prefetch && !lessonIsCurrent(topic) && recentFailure("lesson", topic.id)) return new NextResponse(null, { status: 204 });
+  // The quiz is written while the lesson is (about a minute sooner than waiting for the lesson to be on screen). Not
+  // when it failed a moment ago, and never over a quiz she has answered (quizNeedsWriting).
+  if (!prefetch && quizNeedsWriting(topic) && !recentFailure("quiz", topic.id)) {
+    void track(getSectionQuiz(topic)).catch((err) => console.error(`Section quiz for topic ${topic.id} (started with the lesson) failed`, err));
+  }
 
   try {
     const lesson = await getLesson(topic);

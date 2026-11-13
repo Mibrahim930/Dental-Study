@@ -1037,10 +1037,11 @@ describe("practice: stale attempts at boot", () => {
     expect(failStaleAttempts()).toBe(0);
   });
 
-  it("a stale attempt no longer counts as 'being written' for a second tap", () => {
+  it("a stale attempt no longer counts as 'being written' for a second tap once the boot sweep marked it failed", () => {
     const w = practiceWorld();
+    // Six minutes old: inside the ten-minute reuse window, but past the five minutes after which a restart's sweep fails it.
     const old = add(w.examId, "generating", "-6 minutes");
-    expect(writingAttempt(w.userId, w.examId)).toBeNull();
+    expect(writingAttempt(w.userId, w.examId)).toBe(old);
     failStaleAttempts();
     expect(writingAttempt(w.userId, w.examId)).toBeNull();
     expect(row(old).status).toBe("error");

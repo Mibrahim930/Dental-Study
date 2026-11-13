@@ -30,7 +30,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { cleanLesson, getLesson, lastLessonScan, lessonText, LESSON_VERSION, scanLessonsForFiller, type Lesson } from "@/lib/study";
+import { cleanLesson, getLesson, lastLessonScan, lessonText, LESSON_VERSION, recentFailure, scanLessonsForFiller, type Lesson } from "@/lib/study";
 import { coveredFacts, quotedFacts, RAMBLE_RUN, trimRamble } from "@/lib/lessonCoverage";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { makeUser } from "./helpers";
@@ -710,23 +710,35 @@ describe("fresh lessons", () => {
     expect(repair).not.toMatch(/Bye|Keep going|End of slide/);
   });
 
-  it("(documented) when the repair also returns only filler for that slide, the lesson is stored without it at the current version", async () => {
+  it("when the repair also returns only filler for that slide, nothing is stored, the failure is marked and the lesson route answers 502", async () => {
     const w = world();
+    currentUserId = w.userId;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     lessonWriter = () => lessonOf(w, (i) => (i === 0 ? RAMBLE : `${GOOD} fact a1`));
-    const lesson = await getLesson(w.topic());
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
     expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
-    expect(lesson.slides.map((s) => s.page_id)).toEqual([w.pages[1]]);
-    const s = storedLesson(w);
-    expect(s.version).toBe(LESSON_VERSION);
-    expect(s.slides.map((x) => x.page_id)).toEqual([w.pages[1]]);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
+    // Her own open tries again (and fails the same way): an error, never a lesson with a hole.
+    expect((await getRoute(w)).status).toBe(502);
+    expect(w.topic().lesson_json).toBeNull();
+    err.mockRestore();
   });
 
-  it("(documented) when every slide is filler both times, a lesson with no slides is stored at the current version", async () => {
+  it("when every slide is filler both times, no lesson is stored; a stored version-3 lesson is served instead and left as it was", async () => {
     const w = world();
     lessonWriter = () => lessonOf(w, () => RAMBLE);
+    await expect(getLesson(w.topic())).rejects.toThrow("without 2 of its slides");
+    expect(w.topic().lesson_json).toBeNull();
+    expect(recentFailure("lesson", w.topicId)).toBe(true);
+
+    const v3 = { ...lessonOf(w, (i) => `${GOOD} fact a${i}`), version: 3 };
+    stored(w, v3);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const lesson = await getLesson(w.topic());
-    expect(lesson.slides).toEqual([]);
-    expect(storedLesson(w).version).toBe(LESSON_VERSION);
+    err.mockRestore();
+    expect(lesson.slides.map((x) => x.page_id)).toEqual(w.pages);
+    expect(storedLesson(w)).toEqual(v3);
   });
 
   it("(documented) filler in key_points and connections is left as the writer wrote it", async () => {

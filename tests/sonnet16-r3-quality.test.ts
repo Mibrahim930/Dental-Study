@@ -936,15 +936,16 @@ describe("E: lessons", () => {
     expect(l.slides.map((s) => s.page_id)).toEqual([w.pages[0], w.pages[2]]);
   });
 
-  it("a repair that brings back fewer slides than the first lesson is discarded even if its fact coverage is equal", async () => {
+  it("a repair that brings back nothing for the left-out slide: the lesson is not stored and the failure is marked", async () => {
     const w = world(2, (i) => [`h${i}x`]);
     lessonWriter = (n) =>
       n === 1
         ? goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: "h0x h1x" }] }) // all facts, slide 2 missing → repair
         : goodLesson(w, "", { slides: [] }); // the repair drops everything
-    const l = await getLesson(w.topic());
+    await expect(getLesson(w.topic())).rejects.toThrow("without 1 of its slides");
     expect(lessonCalls).toBe(2);
-    expect(l.slides.map((s) => s.page_id)).toEqual([w.pages[0]]);
+    expect(w.topic().lesson_json).toBeNull();
+    expect(getMeta(`lesson_fail:${w.topicId}`)).toMatch(/without 1 of its slides/);
   });
 
   it("concurrent opens share one generation", async () => {

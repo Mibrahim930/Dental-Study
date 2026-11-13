@@ -29,7 +29,7 @@ vi.mock("@/lib/user", async (orig) => ({
 }));
 
 import { db, type Topic } from "@/lib/db";
-import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION } from "@/lib/study";
+import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION, recentFailure } from "@/lib/study";
 import { coveredFacts, QUOTE_MIN_WORDS, quotedFacts } from "@/lib/lessonCoverage";
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
@@ -426,11 +426,19 @@ describe("merging the repair, slide by slide", () => {
     expect(lesson.slides.map((s) => s.explanation)).toEqual([say("cover", 0, "wtwo"), say("cover", 1, "wtwo"), say("copy", 2, "wone"), say("copy", 3, "wone")]);
   });
 
-  it("a left-out slide is written by the repair; one the repair doesn't return stays out", async () => {
-    const r = await twoSteps([...rep(3, "cover"), "skip", "skip"], [...rep(3, "cover"), "cover", "skip"]);
+  it("a left-out slide is written by the repair", async () => {
+    const r = await twoSteps([...rep(3, "cover"), "skip", "skip"], rep(5, "cover"));
     expect(r.ask.match(/got no entry/g)).toHaveLength(2);
-    expect(r.lesson.slides.map((s) => s.page_id)).toEqual(r.w.pages.slice(0, 4));
+    expect(r.lesson.slides.map((s) => s.page_id)).toEqual(r.w.pages);
     expect(r.lesson.slides[3].explanation).toBe(say("cover", 3, "wtwo"));
+  });
+
+  it("a left-out slide the repair doesn't return either: the lesson is not stored and the failure is marked", async () => {
+    await expect(twoSteps([...rep(3, "cover"), "skip", "skip"], [...rep(3, "cover"), "cover", "skip"])).rejects.toThrow("without 1 of its slides");
+    expect(lessonCallsMade()).toEqual(["lesson", "lesson repair"]);
+    const row = db.prepare("SELECT id, lesson_json FROM topics ORDER BY id DESC LIMIT 1").get() as { id: number; lesson_json: string | null };
+    expect(row.lesson_json).toBeNull();
+    expect(recentFailure("lesson", row.id)).toBe(true);
   });
 
   it("no whole-lesson rewrite: the repair only ever asks for the slides that need it, never the whole section", async () => {
