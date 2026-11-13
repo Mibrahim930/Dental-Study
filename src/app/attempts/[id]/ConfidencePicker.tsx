@@ -1,3 +1,5 @@
+"use client";
+
 import type { AttemptView } from "@/lib/attemptView";
 import type { Confidence } from "@/lib/practicePlan";
 

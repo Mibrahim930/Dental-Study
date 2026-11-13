@@ -151,7 +151,7 @@ export function SectionQuiz({
           Section quiz · {index + 1} of {total}
         </div>
         <div className="flex flex-wrap items-center gap-1">
-          {q.id && <ReportQuestion onReport={(reason) => report(q.id, reason)} context="this quiz and your score" />}
+          {q.id && <ReportQuestion key={q.id} onReport={(reason) => report(q.id, reason)} context="this quiz and your score" />}
           {done > 0 && (
             <button className="btn-ghost px-1" onClick={() => goTo(total)}>
               I&apos;m done — see my score

@@ -11,7 +11,9 @@ vi.mock("@/lib/ai", async (orig) => ({
     calls.push({ purpose: opts.purpose });
     if (opts.purpose === "lesson") {
       await lessonGate;
-      return { explanation: "Lesson text", key_points: ["a", "b", "c", "d"], slides: [], connections: null };
+      // An entry for every slide it was given (a lesson that leaves out a slide with facts is not stored).
+      const slides = slidesInPrompt(opts.content).map((page_id) => ({ page_id, explanation: `Explained ${page_id} in plain words.` }));
+      return claimAll(opts.content, { explanation: "Lesson text", key_points: ["a", "b", "c", "d"], slides, connections: null });
     }
     if (opts.purpose === "section quiz") {
       if (failQuiz) throw new Error("529 overloaded");
@@ -51,6 +53,7 @@ import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
+import { claimAll, slidesInPrompt } from "./lessonClaims";
 
 const notes = (i: number) =>
   JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`a${i}`, `b${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });

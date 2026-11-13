@@ -1,3 +1,5 @@
+"use client";
+
 import type { AttemptView } from "@/lib/attemptView";
 
 /** The numbered squares: one per question, coloured once answered (right / wrong in Learn mode); a tap opens it. */

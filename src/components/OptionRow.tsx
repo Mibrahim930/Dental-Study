@@ -81,7 +81,7 @@ export function OptionRow({
       role="radio"
       aria-checked={checked}
       aria-disabled={!onSelect}
-      aria-label={`${letter}. ${text}${crossed ? " (crossed out)" : ""}`}
+      aria-label={`${letter}. ${text}${crossed ? " (crossed out)" : ""}${note ? `. ${note}` : ""}`}
       tabIndex={0}
       onClick={pick}
       onKeyDown={onKeyDown}

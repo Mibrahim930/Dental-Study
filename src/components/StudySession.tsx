@@ -102,6 +102,7 @@ export function StudySession(props: {
 
   const go = (pos: number) => {
     setPosition(pos);
+    setConceptOpen(null);
     setVisited((v) => new Set(v).add(pos));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };

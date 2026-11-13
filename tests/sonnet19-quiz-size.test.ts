@@ -7,7 +7,14 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    if (opts.purpose === "lesson") return { explanation: "Lesson text", key_points: ["a", "b", "c", "d"], slides: [], connections: null };
+    // An entry for every slide it was given (a lesson that leaves out a slide with facts is not stored).
+    if (opts.purpose === "lesson")
+      return claimAll(opts.content, {
+        explanation: "Lesson text",
+        key_points: ["a", "b", "c", "d"],
+        slides: slidesInPrompt(opts.content).map((page_id) => ({ page_id, explanation: `Explained ${page_id} in plain words.` })),
+        connections: null,
+      });
     if (opts.purpose === "session summary") return { summary: "Summed up" };
     if (opts.purpose === "section quiz") {
       const slots = [...opts.content.matchAll(/^Q(\d+): (?:slide P(\d+)|the section)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2] ?? 0) }));
@@ -53,6 +60,7 @@ import { POST as regenPOST } from "@/app/api/sessions/[id]/quiz/regenerate/route
 import { POST as endPOST } from "@/app/api/sessions/[id]/end/route";
 import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
+import { claimAll, slidesInPrompt } from "./lessonClaims";
 
 const notes = (facts: string[]) =>
   JSON.stringify({ title: "s", summary: "s", image_description: null, key_facts: facts, annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });

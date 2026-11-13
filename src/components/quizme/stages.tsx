@@ -96,7 +96,7 @@ export function QuestionStep({ s }: { s: QuizMeState }) {
         <div className="text-[13px] font-bold text-muted-foreground">
           {quiz.kind === "lecture" && quiz.round > 1 ? `Round ${round} · ` : ""}Question {index + 1} of {total}
         </div>
-        <ReportQuestion onReport={s.report} context="this quiz and your score" />
+        <ReportQuestion key={`${round}:${index}`} onReport={s.report} context="this quiz and your score" />
       </div>
       {/* Highlights and cross-outs are saved to her account under the quiz and question, like a section-quiz question. */}
       <QuestionCard

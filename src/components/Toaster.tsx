@@ -46,7 +46,7 @@ export function Toaster() {
   // Two live regions that are always on the page (a region added together with its text is often not read out):
   // errors interrupt the screen reader, other messages wait their turn.
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-28 z-40 flex justify-center px-4 sm:inset-x-auto sm:right-6 sm:bottom-6">
+    <div className="pointer-events-none fixed inset-x-0 bottom-28 z-[80] flex justify-center px-4 sm:inset-x-auto sm:right-6 sm:bottom-6">
       <div role="status" aria-live="polite">
         {current?.kind === "success" && box}
       </div>
