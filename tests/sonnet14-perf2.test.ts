@@ -244,6 +244,9 @@ describe("dropped connection wording", () => {
     "src/app/attempts/[id]/useAttempt.ts",
     "src/app/attempts/[id]/Results.tsx",
     "src/components/StudySession.tsx",
+    "src/components/study/useSectionQuiz.ts",
+    "src/components/study/LessonView.tsx",
+    "src/components/quizme/useQuizMe.ts",
     "src/components/TaskList.tsx",
   ];
   it("catch blocks do not show a thrown TypeError's own message (a rejected fetch says 'Failed to fetch' / 'Load failed')", () => {

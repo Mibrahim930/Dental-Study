@@ -383,21 +383,39 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
     - **Tests.** Every test file has its own database; the one long-failing test was a test bug and is fixed. 79 files,
       1714 tests, all passing (`tests/w1-*.test.ts` are the wave's own).
 
-### Being changed in audit wave 2 (not final when this was written)
+### Audit wave 2 (done)
 
-The lead finishes this section when wave 2 is reviewed. Work in progress on the same side branch:
-- **Lesson generation in chunks**: a long section's lesson written in parts instead of one big call (details to be
-  filled in by the lead).
-- **One shared Dialog and one QuestionCard** (audit U1, U2): the seven hand-made overlays and the three question cards
-  (section quiz, Quiz me, practice) become one component each.
-- **File splits** (audit U4): `StudySession.tsx`, `QuizMe.tsx`, `AttemptRunner.tsx` and the exam page split along their
-  seams (the exam page's sections are moving into `src/components/exam/` and `src/lib/examPage.ts`).
-- **Tests**: `tests/helpers.ts` gained shared fixtures (`apiReadyUser`, `sessionCookie`, `slideNotes`, `makeLecture`,
-  `world`, `ctx`, `postJson`, `getReq`) and twelve files use them; tests titled "BUG…" that pass were renamed to say
-  what they check; trivia tests in `sonnet24-section-cap` were removed; `tests/w2-coverage.test.ts` checks every route
-  file it finds (401 signed out, 404 for a stranger's row, unchanged data) and fails when a new route is not in its
-  tables, plus route tests for the routes no test imported before. Test counts change; run the suite for the current
-  numbers.
+- **Lessons are written in parts** (`src/lib/study.ts`, audit L1): a section's slides go to the writer in parts of at
+  most 5 slides (`lessonParts`: 6 slides is 3+3), two calls at a time, each with a small output limit. The first part
+  also writes the intro, key points and connections, so a section of 5 slides or fewer is still one call. The slides'
+  facts are numbered across the section (F1…Fn) and each entry says which numbers it explained, so "was every fact
+  covered" is an exact check instead of keyword matching. One targeted "lesson repair" call re-asks only the slides
+  with a missing fact, no entry, or a copied entry; there is no whole-lesson rewrite any more. A failed part is retried
+  once (a cut-off part as two halves); if it fails again nothing is stored and the failure cool-down applies.
+  `coveredFacts` is only logged; `quotedFacts` decides whether a stored version-3 lesson is kept and flags a copied
+  part; `trimRamble` still cleans every entry. The stored shape and `LESSON_VERSION` (4) are unchanged, so no
+  existing lesson is rewritten. Section-quiz drafts go through `validateMcq` (`src/lib/mcq.ts`) like every other
+  question writer, and the judge's verdicts are matched by question number, ignored when the numbers don't line up.
+- **One Dialog** (`src/components/Dialog.tsx` + `dialogStack.ts`): portal, backdrop, Escape closes only the top
+  dialog, focus trap and restore, scroll lock. Used by the quiz panel, question Report, end session, slide zoom,
+  "Write new questions", "Re-split every lecture", the practice finish confirm and Report a problem. `className`
+  REPLACES the variant's panel classes.
+- **One question card** (`src/components/QuestionCard.tsx`): the section quiz and the quiz panel render through it
+  (`bare`, `locked` props; exported `Explanation`); each caller keeps its own answer flow. One selection-pill hook
+  (`useSelectionPill.tsx`, `selection.ts`) for Highlightable, MarkableText and Quiz me.
+- **File splits**: `StudySession.tsx` → `src/components/study/` (SectionNav, LessonView + SlideZoom, SectionQuiz,
+  useSectionQuiz, RegenerateQuiz, EndSession); `QuizMe.tsx` → `src/components/quizme/` (useQuizMe, QuizMePanel,
+  stages, ResumeButton); `AttemptRunner.tsx` → `useAttempt.ts`, Writing, Timer, Results, QuestionNav,
+  ConfidencePicker, FinishConfirm, AttemptError beside it; the exam page → `src/lib/examPage.ts` (`loadExamPage`)
+  and `src/components/exam/`. The exported names and paths other files import did not change.
+- **Lesson marks in one request**: `GET /api/marks?prefix=lesson:<topicId>:` behind `MarksProvider` in `useMarks.ts`.
+- **Schema in one place**: the tables `quizMe.ts`, `reports.ts` and `reportedQuestions.ts` used to create at import
+  now live only in `db.ts`. Title/agenda slides are counted from `pages.is_filler` (`examSlideKinds`).
+- **Tests**: every test file has its own database (`tests/setup-file.ts`). `tests/helpers.ts` has shared fixtures
+  (`apiReadyUser`, `sessionCookie`, `slideNotes`, `makeLecture`, `world`, `ctx`, `postJson`, `getReq`);
+  `tests/lessonClaims.ts` helps scripted lesson writers claim fact numbers. `tests/w2-coverage.test.ts` checks every
+  route file it finds (401 signed out, 404 for a stranger's row, data unchanged) and fails when a new route is not in
+  its tables. The suite has no known failures and no expected failures; run it for the current counts.
 
 ---
 

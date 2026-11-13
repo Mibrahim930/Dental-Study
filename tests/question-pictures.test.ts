@@ -16,8 +16,9 @@ vi.mock("@/lib/ai", async (orig) => ({
       return { questions: quizWriter(slots) };
     }
     if (opts.purpose === "section quiz check") {
-      const stems = [...opts.content.matchAll(/^\d+\. (.*)$/gm)].map((m) => m[1]);
-      return { verdicts: stems.map((t, i) => ({ n: i + 1, ok: true, picture: judgePicture(t), reason: "" })) };
+      // The judge echoes the number each question is listed under (numbers can have gaps after a dropped draft).
+      const listed = [...opts.content.matchAll(/^(\d+)\. (.*)$/gm)];
+      return { verdicts: listed.map((m) => ({ n: Number(m[1]), ok: true, picture: judgePicture(m[2]), reason: "" })) };
     }
     if (opts.purpose === "practice questions") return { questions: practiceWriter(opts.content) };
     throw new Error("unexpected " + opts.purpose);
