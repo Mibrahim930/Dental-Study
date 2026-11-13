@@ -6,7 +6,7 @@ import path from "path";
 import type { TestProject } from "vitest/node";
 
 export default function setup(project: TestProject) {
-  const dir = project.config.env?.DATA_DIR;
+  const dir = project.config.env?.TEST_DATA_BASE;
   return () => {
     // Only ever a folder this config made in the temp dir, never a real data folder.
     if (dir && path.dirname(dir) === os.tmpdir() && path.basename(dir).startsWith("dental-study-test-")) fs.rmSync(dir, { recursive: true, force: true });
