@@ -239,3 +239,21 @@ framework version with published security advisories.
 - Not done, by choice: moving `page_ids` out of JSON into a table (large, risky, no user-visible gain);
   switching the Anthropic SDK to its 1.x major (no need found); turning on `noUncheckedIndexedAccess`
   (1,048 errors, mostly tests).
+
+## Status (after the implementation)
+
+Done on the side branch in two waves plus a QA pass: every item above except the ones listed under "Not done, by
+choice" and these, left as they are with reasons:
+
+- M4(c) changed after review: the quiz is started with the lesson request again, because starting it only once the
+  lesson was on screen made the quiz ready about a minute later; the 400 ms wait already keeps skipped sections free.
+- T3: twelve test files use the shared fixtures; the rest were left alone (churn without benefit).
+- T5: there are still no browser-level component tests; the interface was checked by hand at 375 px and by a
+  line-by-line review.
+- A key or billing problem part-way through a long practice exam delivers the questions written so far without
+  saying some are missing (documented in `tests/sonnet27-audit-waves.test.ts`). Worth a message on the exam screen.
+- Focus is not restored when the button that opened a dialog disappears while it is open; the quiz panel locks page
+  scroll on wide screens too. Both small.
+
+Result: 84 test files, 1,955 tests, none failing and none expected to fail; typecheck, lint and production build
+clean; no known vulnerable dependencies.

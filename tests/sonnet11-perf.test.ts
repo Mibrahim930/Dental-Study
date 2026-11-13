@@ -131,7 +131,7 @@ function quizWorld(topics = 2) {
 const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
 const lesson = (sessionId: number, position: number, prefetch = false) =>
   lessonGET(new Request(`http://x/l?position=${position}${prefetch ? "&prefetch=1" : ""}`), ctx(sessionId));
-// The page reports the lesson as on screen; this is what starts the quiz in the background.
+// The page reports the lesson as on screen; this starts the quiz in the background too (joining the run the lesson GET started).
 const shown = (sessionId: number, position: unknown) =>
   shownPOST(new Request("http://x/s", { method: "POST", body: JSON.stringify({ position }) }), ctx(sessionId));
 // Opening a section the way the page does: the lesson, then "shown" once it is on screen. Answers the lesson response.
@@ -171,19 +171,25 @@ afterEach(async () => {
 });
 
 describe("job 2: quiz started with the lesson, under concurrency", () => {
-  it("the lesson GET alone starts no quiz; two opens at once (lesson + shown) make one quiz generation (not two), and both succeed", async () => {
+  it("a direct lesson GET starts one quiz generation; two opens at once (lesson GET + shown, twice) still make one generation (not two), and both succeed", async () => {
     const w = quizWorld();
-    expect((await lesson(w.sessionId, 0)).status).toBe(200);
-    await tick();
-    expect(quizWrites()).toBe(0);
+    // A lesson GET on its own (no "shown") writes the quiz too: exactly one generation.
+    expect((await lesson(w.sessionId, 1)).status).toBe(200);
+    await until(() => !!w.topic(w.topicIds[1]).checks_json);
+    expect(quizWrites()).toBe(2); // one generation = two writers of half the plan each
+    expect(w.topic(w.topicIds[1]).checks_version).toBe(QUIZ_VERSION);
+    calls.length = 0;
+    // Two opens of another section at once: four requests that each could start the quiz, all join one run.
     let release!: () => void;
     quizGate = new Promise((r) => (release = r));
     const [a, b] = [open(w.sessionId, 0), open(w.sessionId, 0)];
-    await until(() => quizWrites() >= 2);
-    await tick();
-    release();
     expect((await a).status).toBe(200);
     expect((await b).status).toBe(200);
+    await until(() => quizWrites() >= 2);
+    await tick();
+    expect(quizWrites()).toBe(2);
+    expect(w.topic(w.topicIds[0]).checks_json).toBeNull(); // both opens answered before the quiz was written
+    release();
     await until(() => !!w.topic(w.topicIds[0]).checks_json);
     expect(quizWrites()).toBe(2);
     expect(w.topic(w.topicIds[0]).checks_version).toBe(QUIZ_VERSION);
@@ -253,17 +259,22 @@ describe("job 2: quiz started with the lesson, under concurrency", () => {
     expect(quizWrites()).toBe(2);
   });
 
-  it("failure then retry: the failed run is forgotten (not stuck in the in-flight map), a re-open within the cool-down starts nothing, and her own quiz GET writes it", async () => {
+  it("failure then retry: the failed run is forgotten (not stuck in the in-flight map), a re-open (lesson GET or 'shown') within the cool-down starts nothing, and her own quiz GET writes it", async () => {
     const w = quizWorld();
     failQuiz = true;
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     expect((await open(w.sessionId, 0)).status).toBe(200);
-    await until(() => logged.mock.calls.some((c) => String(c[0]).includes("started when the lesson showed")));
-    expect(logged.mock.calls.some((c) => String(c[0]).includes("started when the lesson showed"))).toBe(true);
+    await until(() => logged.mock.calls.some((c) => String(c[0]).includes("started with the lesson")));
+    expect(logged.mock.calls.some((c) => String(c[0]).includes("started with the lesson"))).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(quizWrites()).toBe(2); // the open's lesson GET and "shown" shared one (failed) run
     expect(w.topic(w.topicIds[0]).checks_json).toBeNull();
     failQuiz = false;
     calls.length = 0;
-    // Opening the topic again within the cool-down deliberately does not restart the quiz on its own (billed again).
+    // Opening the topic again within the cool-down deliberately does not restart the quiz on its own (billed again),
+    // neither from the lesson GET nor from "shown".
+    expect((await lesson(w.sessionId, 0)).status).toBe(200);
+    expect((await shown(w.sessionId, 0)).status).toBe(200);
     expect((await open(w.sessionId, 0)).status).toBe(200);
     await new Promise((r) => setTimeout(r, 30));
     expect(quizWrites()).toBe(0);
@@ -277,16 +288,17 @@ describe("job 2: quiz started with the lesson, under concurrency", () => {
     expect(unhandled).toEqual([]);
   });
 
-  it("a failing background quiz is never an unhandled rejection, even when the quiz GET also joined and failed", async () => {
+  it("a failing background quiz is never an unhandled rejection, even when 'shown' and the quiz GET also joined and failed", async () => {
     const w = quizWorld();
     failQuiz = true;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    expect((await lesson(w.sessionId, 0)).status).toBe(200);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let release!: () => void;
     quizGate = new Promise((r) => (release = r));
-    const s = shown(w.sessionId, 0);
+    // The lesson GET starts the run and answers without waiting for it; "shown" joins it.
+    expect((await lesson(w.sessionId, 0)).status).toBe(200);
     await until(() => quizWrites() >= 1);
-    // Make sure the quiz GET has looked the topic up (and so joined the run "shown" started) before the run fails.
+    expect((await shown(w.sessionId, 0)).status).toBe(200);
+    // Make sure the quiz GET has looked the topic up (and so joined the run the lesson GET started) before the run fails.
     const prepare = db.prepare.bind(db);
     let looked = false;
     vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
@@ -297,10 +309,10 @@ describe("job 2: quiz started with the lesson, under concurrency", () => {
     await until(() => looked);
     expect(looked).toBe(true);
     release();
-    expect((await s).status).toBe(200);
     expect((await q).status).toBe(502);
     await new Promise((r) => setTimeout(r, 30));
     expect(quizWrites()).toBe(2); // one run (its two calls), joined: not a second generation
+    expect(logged.mock.calls.some((c) => String(c[0]).includes("started with the lesson"))).toBe(true);
     expect(unhandled).toEqual([]);
   });
 

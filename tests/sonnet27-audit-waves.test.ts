@@ -656,7 +656,7 @@ describe("section quiz: validation and the judge", () => {
     const quiz = await getSectionQuiz(w.topic());
     expect(quiz).toHaveLength(4);
     expect(count("section quiz")).toBe(1);
-    expect(warn.mock.calls.some((c) => /verdicts don't match/.test(String(c[0])))).toBe(true);
+    expect(warn.mock.calls.some((c: unknown[]) => /verdicts don't match/.test(String(c[0])))).toBe(true);
   });
 
   it("a judge call that throws keeps every question", async () => {

@@ -408,6 +408,13 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   stages, ResumeButton); `AttemptRunner.tsx` → `useAttempt.ts`, Writing, Timer, Results, QuestionNav,
   ConfidencePicker, FinishConfirm, AttemptError beside it; the exam page → `src/lib/examPage.ts` (`loadExamPage`)
   and `src/components/exam/`. The exported names and paths other files import did not change.
+- **After the QA pass on both waves** (`tests/sonnet27-audit-waves.test.ts` and a line-by-line review of the
+  interface refactor): a lesson is never stored with a slide missing (if a slide with facts or a case still has no
+  entry after the repair, nothing is stored, the cool-down applies and the next open retries); a direct lesson request
+  starts the section quiz alongside the lesson again (the page waits 400 ms for her to settle on a section first, so
+  sections tapped past still cost nothing), while her place and "studied" are set only by `shown`; `shown` on an ended
+  session does nothing; an attempt still being written is reused for ten minutes; toasts show above dialogs; option
+  notes are announced by screen readers.
 - **Lesson marks in one request**: `GET /api/marks?prefix=lesson:<topicId>:` behind `MarksProvider` in `useMarks.ts`.
 - **Schema in one place**: the tables `quizMe.ts`, `reports.ts` and `reportedQuestions.ts` used to create at import
   now live only in `db.ts`. Title/agenda slides are counted from `pages.is_filler` (`examSlideKinds`).

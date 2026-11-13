@@ -140,17 +140,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("M4: the lesson GET has no side effects", () => {
-  it("a direct GET writes the lesson but moves nothing, marks nothing and starts no quiz", async () => {
+describe("M4: the lesson GET moves nothing and marks nothing (a direct one only starts the quiz)", () => {
+  it("a direct GET writes the lesson and starts exactly one quiz generation, but moves nothing and marks nothing", async () => {
     const w = world();
     const res = await lesson(w.sessionId, 0);
     expect(res.status).toBe(200);
     expect((await res.json()).lesson.slides.length).toBeGreaterThan(0);
-    await tick();
+    await until(() => !!w.topic(w.topicIds[0]).checks_json);
+    await new Promise((r) => setTimeout(r, 10));
     expect(position(w)).toBe(7);
     expect(studied(w, w.topicIds[0])).toBe(false);
-    expect(count("section quiz")).toBe(0);
-    expect(w.topic(w.topicIds[0]).checks_json).toBeNull();
+    expect(studied(w, w.topicIds[1])).toBe(false);
+    expect(count("section quiz")).toBe(2); // one generation = two writers of half the plan each
+    expect(w.topic(w.topicIds[0]).checks_version).toBe(QUIZ_VERSION);
+    expect(w.topic(w.topicIds[1]).checks_json).toBeNull();
     expect(w.topic(w.topicIds[0]).lesson_json).not.toBeNull();
   });
 

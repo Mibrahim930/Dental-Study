@@ -1,9 +1,10 @@
-// Perf fix #2, revised by audit M4: the section quiz starts once the lesson is on screen (POST …/shown), once, and
-// never for a prefetch or a lesson GET alone.
+// Perf fix #2: the section quiz starts with the lesson. A direct lesson GET starts it (about a minute sooner than waiting
+// for the lesson to be on screen), POST …/shown starts it too, and both share one generation; a prefetch never starts it.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: { purpose: string }[] = [];
 let lessonGate: Promise<void> = Promise.resolve();
+let quizGate: Promise<void> = Promise.resolve();
 let failQuiz = false;
 vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
@@ -16,6 +17,7 @@ vi.mock("@/lib/ai", async (orig) => ({
       return claimAll(opts.content, { explanation: "Lesson text", key_points: ["a", "b", "c", "d"], slides, connections: null });
     }
     if (opts.purpose === "section quiz") {
+      await quizGate;
       if (failQuiz) throw new Error("529 overloaded");
       const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]) }));
       return {
@@ -89,30 +91,37 @@ async function until(cond: () => boolean, tries = 200) {
 beforeEach(() => {
   calls.length = 0;
   lessonGate = Promise.resolve();
+  quizGate = Promise.resolve();
   failQuiz = false;
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe("section quiz starts with the lesson", () => {
-  it("the lesson GET alone starts no quiz; 'shown' starts it in the background, and the quiz GET joins that run", async () => {
+  it("the lesson GET starts the quiz in the background; 'shown' and the quiz GET join that run (one generation)", async () => {
     const w = world();
+    let release!: () => void;
+    quizGate = new Promise((r) => (release = r));
+    // The lesson GET answers without waiting for the quiz it started.
     expect((await lesson(w.sessionId, 0)).status).toBe(200);
-    await tick();
-    expect(quizWrites()).toBe(0);
-    expect(w.topic(w.topicIds[0]).checks_json).toBeNull();
-    // The lesson is on screen: the quiz writers start, and 'shown' answers without waiting for them.
-    expect(await (await shown(w.sessionId, 0)).json()).toEqual({ ok: true });
     await until(() => quizWrites() >= 2);
     expect(quizWrites()).toBe(2); // one generation = two parallel writes of half the plan
+    expect(w.topic(w.topicIds[0]).checks_json).toBeNull();
+    // The lesson is on screen: 'shown' answers at once and joins the run instead of starting a second one.
+    expect(await (await shown(w.sessionId, 0)).json()).toEqual({ ok: true });
     // The page asks for the quiz while it's still being written: no second generation.
     const quizRes = quiz(w.sessionId, 0);
+    await tick();
+    expect(quizWrites()).toBe(2);
+    release();
     const body = await (await quizRes).json();
     expect(body.questions.length).toBeGreaterThan(0);
     expect(quizWrites()).toBe(2);
     // Later opens are served from the cache with no AI call at all.
     const before = calls.length;
     expect((await lesson(w.sessionId, 0)).status).toBe(200);
+    expect((await shown(w.sessionId, 0)).status).toBe(200);
     expect((await quiz(w.sessionId, 0)).status).toBe(200);
+    await tick();
     expect(calls.length).toBe(before);
   });
 
