@@ -1,7 +1,8 @@
 /**
  * In production the site must not start half-configured: with no APP_PASSCODE the gate is open to anyone, with no
  * SECRET_KEY every request fails, and with no DATA_DIR (or a relative one) the database lands in a folder that a
- * deploy throws away. Returns what is missing, or null when all is set. Not checked in development or tests.
+ * deploy throws away. AI_FAKE (the fake AI for browser tests, lib/aiFake.ts) would answer students with made-up text.
+ * Returns what is missing or wrong, or null when all is set. Not checked in development or tests.
  */
 export function missingProductionConfig(env: NodeJS.ProcessEnv = process.env): string | null {
   if (env.NODE_ENV !== "production" || env.NEXT_PHASE === "phase-production-build") return null;
@@ -10,6 +11,7 @@ export function missingProductionConfig(env: NodeJS.ProcessEnv = process.env): s
   if (!env.APP_PASSCODE?.trim()) missing.push("APP_PASSCODE is empty");
   if (!env.DATA_DIR?.trim()) missing.push("DATA_DIR is not set");
   else if (!env.DATA_DIR.startsWith("/") && !/^[a-zA-Z]:[\\/]/.test(env.DATA_DIR)) missing.push(`DATA_DIR is not an absolute path (${env.DATA_DIR})`);
+  if (env.AI_FAKE?.trim() === "1") missing.push("AI_FAKE must not be set in production");
   return missing.length ? missing.join(", ") : null;
 }
 

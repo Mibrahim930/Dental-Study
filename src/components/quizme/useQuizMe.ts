@@ -259,7 +259,9 @@ export function useQuizMe(examId: number, topicId?: number) {
   const laterRight = quiz ? quiz.questions.filter((x) => !x.hidden && x.round > 1 && x.chosen != null && x.chosen === x.correct_index).length : 0;
 
   const title = stage === "quiz" && quiz ? (quiz.kind === "lecture" ? `Lecture review · ${quiz.text}` : "Quiz on what you selected") : "Quiz me on this";
-  const showResume = !open && (stage === "writing" || (quiz != null && !quiz.finished && quiz.left > 0));
+  // "Resume your quiz" exists while there is something to resume; it shows only while the panel is shut.
+  const resumable = stage === "writing" || (quiz != null && !quiz.finished && quiz.left > 0);
+  const showResume = !open && resumable;
 
   return {
     open,
@@ -287,6 +289,7 @@ export function useQuizMe(examId: number, topicId?: number) {
     nextRound,
     title,
     showResume,
+    resumable,
     fromSelection,
     resume,
     start,

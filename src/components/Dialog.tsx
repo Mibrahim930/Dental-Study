@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { FOCUSABLE, isTopDialog, lockScroll, nextFocus, pushDialog, removeDialog } from "./dialogStack";
+import { FOCUSABLE, NARROW_SCREEN, focusAfterClose, isTopDialog, lockScroll, nextFocus, pushDialog, removeDialog, shouldLockScroll, topDialogPanel } from "./dialogStack";
 
 /** The three looks. The backdrop and the panel's place and style come with each. */
 const LOOK = {
@@ -30,8 +30,11 @@ export type DialogVariant = keyof typeof LOOK;
  * One modal overlay, used for every dialog on the study pages: drawn in a portal over a backdrop, and while it's open
  * the page behind doesn't scroll, Tab stays inside it, and Escape closes it (only the top one when two are open, e.g.
  * Report over the quiz panel). Focus goes into it when it opens (to `initialFocus`, or the dialog itself) and back to
- * whatever had it before when it closes. A tap on the backdrop closes it too, unless `dismissable` is false (then
- * neither the backdrop nor Escape closes it: e.g. while a request it started is running).
+ * whatever had it before when it closes. If that element has left the page by then, focus goes to `returnFocus`, or the
+ * dialog still open underneath, or the page's <main> (see `focusAfterClose`). A tap on the backdrop closes it too,
+ * unless `dismissable` is false (then neither the backdrop nor Escape closes it: e.g. while a request it started is
+ * running). `lockScroll: "narrow"` holds the page still only on a phone-sized screen (the quiz panel: on a laptop she
+ * scrolls the lesson beside the corner card).
  *
  * `className`, when given, replaces the variant's panel classes (place and look); the backdrop stays the variant's.
  * `data-*` attributes go on the element that holds both the backdrop and the panel.
@@ -43,6 +46,8 @@ export function Dialog({
   variant = "center",
   role = "dialog",
   initialFocus,
+  returnFocus,
+  lockScroll: lock = true,
   className,
   dismissable = true,
   children,
@@ -57,6 +62,10 @@ export function Dialog({
   role?: "dialog" | "alertdialog";
   /** Where focus goes when it opens (default: the dialog itself). */
   initialFocus?: RefObject<HTMLElement | null>;
+  /** Where focus goes when it closes if the element that opened it has left the page by then. */
+  returnFocus?: RefObject<HTMLElement | null>;
+  /** Hold the page behind still while open: always (default), never, or only below the `sm` width ("narrow"). */
+  lockScroll?: boolean | "narrow";
   className?: string;
   dismissable?: boolean;
   children: ReactNode;
@@ -71,6 +80,8 @@ export function Dialog({
       variant={variant}
       role={role}
       initialFocus={initialFocus}
+      returnFocus={returnFocus}
+      lock={lock}
       className={className}
       dismissable={dismissable}
       describedBy={describedBy}
@@ -88,6 +99,8 @@ function OpenDialog({
   variant,
   role,
   initialFocus,
+  returnFocus,
+  lock,
   className,
   dismissable,
   describedBy,
@@ -99,6 +112,8 @@ function OpenDialog({
   variant: DialogVariant;
   role: "dialog" | "alertdialog";
   initialFocus?: RefObject<HTMLElement | null>;
+  returnFocus?: RefObject<HTMLElement | null>;
+  lock: boolean | "narrow";
   className?: string;
   dismissable: boolean;
   describedBy?: string;
@@ -113,12 +128,25 @@ function OpenDialog({
   });
 
   // Opening: on top of the stack, page locked, focus in. Closing: off the stack, page unlocked (once no other dialog is
-  // open), focus back where it was. Runs once per opening; `initialFocus` is read only at that moment.
+  // open), focus back where it was. Runs once per opening; `initialFocus` and `lock` are read only at that moment.
   useEffect(() => {
     const id = Symbol(reactId);
     const back = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
-    pushDialog(id);
-    const unlock = lockScroll();
+    const box = panel.current;
+    pushDialog(id, box);
+    // "narrow" follows the screen: turning a tablet or widening the window locks or frees the page as it crosses `sm`.
+    let unlock: (() => void) | null = null;
+    const narrow = lock === "narrow" ? window.matchMedia(NARROW_SCREEN) : null;
+    const applyLock = () => {
+      const want = shouldLockScroll(lock, narrow?.matches ?? false);
+      if (want && !unlock) unlock = lockScroll();
+      else if (!want && unlock) {
+        unlock();
+        unlock = null;
+      }
+    };
+    applyLock();
+    narrow?.addEventListener("change", applyLock);
     (initialFocus?.current ?? panel.current)?.focus();
 
     const onKey = (e: KeyboardEvent) => {
@@ -147,9 +175,24 @@ function OpenDialog({
     window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("keydown", onKey, true);
+      narrow?.removeEventListener("change", applyLock);
       removeDialog(id);
-      unlock();
-      if (back?.isConnected) back.focus({ preventScroll: true });
+      unlock?.();
+      const now = document.activeElement;
+      const lost = !now || now === document.body || !now.isConnected || !!box?.contains(now);
+      const main = document.querySelector("main");
+      // `returnFocus` is read now, on purpose: it names what is on the page after the close (e.g. a notice that replaced the opener).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      const fallback = returnFocus?.current ?? null;
+      const target = focusAfterClose({ opener: back, fallback, under: topDialogPanel(), main, lost });
+      if (!target) return;
+      // <main> can't take focus on its own: tabindex -1 just until focus moves on, so Tab never stops on it.
+      if (target.temporary && !target.to.hasAttribute("tabindex")) {
+        const el = target.to;
+        el.setAttribute("tabindex", "-1");
+        el.addEventListener("blur", () => el.removeAttribute("tabindex"), { once: true });
+      }
+      target.to.focus({ preventScroll: true });
     };
     // Once per opening, on purpose: a new `initialFocus` while open must not steal focus back.
     // eslint-disable-next-line react-hooks/exhaustive-deps

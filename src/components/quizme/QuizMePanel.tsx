@@ -15,8 +15,9 @@ export function QuizMePanel({ s }: { s: QuizMeState }) {
   else body = <ChooseSize s={s} />;
 
   return (
-    // Escape, a tap beside it or Close shut it; focus goes back where it was.
-    <Dialog open={s.open} onClose={s.close} label={s.title} variant="sheet" data-quizme>
+    // Escape, a tap beside it or Close shut it; focus goes back where it was ("Resume your quiz" stays on the page,
+    // hidden, while it's open). The page behind stays scrollable beside the corner card on a wider screen.
+    <Dialog open={s.open} onClose={s.close} label={s.title} variant="sheet" lockScroll="narrow" data-quizme>
       <div className="flex items-start justify-between gap-2">
         <h2 id="quizme-title" className="text-[18px] font-extrabold tracking-tight">
           {s.title}

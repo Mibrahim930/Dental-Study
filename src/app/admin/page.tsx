@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { db, type User } from "@/lib/db";
 import { requireAdmin } from "@/lib/user";
 import { backupConfigured, lastBackup } from "@/lib/backup";
@@ -7,11 +8,14 @@ import { ActionButton } from "@/components/ActionButton";
 import { listReports, unseenReportCount } from "@/lib/reports";
 import { listReportedQuestions } from "@/lib/reportedQuestions";
 import { lastLessonScan } from "@/lib/study";
+import { aiActivity } from "@/lib/aiActivity";
 
 export const dynamic = "force-dynamic";
 
 type Row = User & { exams: number; slides: number; month: number; total: number; last_active: string | null };
 const usd = (n: number) => `$${n.toFixed(2)}`;
+/** One call's cost: a fraction of a cent needs more places. */
+const usdSmall = (n: number) => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : usd(n));
 
 export default async function AdminPage() {
   const admin = await requireAdmin();
@@ -31,6 +35,7 @@ export default async function AdminPage() {
   const unseen = unseenReportCount();
   const reportedQuestions = listReportedQuestions(200);
   const lessonScan = lastLessonScan();
+  const activity = aiActivity(7);
   const sourceLabel: Record<string, string> = { quiz: "Section quiz", practice: "Practice exam", review: "Daily review", quizme: "Quiz me", lecture_review: "Lecture review" };
 
   return (
@@ -75,6 +80,58 @@ export default async function AdminPage() {
           </table>
         </div>
         <p className="text-xs text-muted-foreground">Spending is billed to each user&apos;s own API key, not to you.</p>
+      </section>
+
+      <section className="card space-y-3">
+        <h2 className="section-title ">AI activity (last {activity.days} days)</h2>
+        <p className="text-sm text-muted-foreground">
+          Every AI call on the site, for every student, failed ones included. A failed call usually means a key problem, a busy AI service or an answer
+          that was cut off; the most common reason is under its row.
+        </p>
+        {activity.purposes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No AI calls in the last {activity.days} days.</p>
+        ) : (
+          <>
+            <table className="w-full table-fixed text-sm">
+              <thead className="text-left text-muted-foreground">
+                <tr>
+                  <th className="py-2 pr-2 font-medium">What</th>
+                  <th className="w-14 py-2 pr-2 text-right font-medium">Calls</th>
+                  <th className="w-16 py-2 pr-2 text-right font-medium">Failed</th>
+                  <th className="w-20 py-2 text-right font-medium">Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activity.purposes.map((p) => (
+                  <Fragment key={p.purpose}>
+                    <tr className="border-t border-border">
+                      <td className="py-2 pr-2 break-words">{p.label}</td>
+                      <td className="py-2 pr-2 text-right tabular-nums">{p.calls}</td>
+                      <td className="py-2 pr-2 text-right tabular-nums">{p.failed > 0 ? <span className="chip cb-coral">{p.failed}</span> : "0"}</td>
+                      <td className="py-2 text-right tabular-nums">
+                        {usd(p.totalCost)}
+                        <div className="text-xs text-subtle">{usdSmall(p.avgCost)} each</div>
+                      </td>
+                    </tr>
+                    {p.failed > 0 && p.topError && (
+                      <tr>
+                        <td colSpan={4} className="pb-2 text-xs break-words text-muted-foreground">
+                          Most often: {p.topError}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+            {activity.lessons && (
+              <p className="text-sm text-muted-foreground">
+                Lessons: {activity.lessons.written} written, {activity.lessons.repaired} needed a fix-up,{" "}
+                {activity.lessons.failed > 0 ? <span className="chip cb-coral">{activity.lessons.failed} had a failed call</span> : "none had a failed call"}.
+              </p>
+            )}
+          </>
+        )}
       </section>
 
       <section className="card space-y-3">

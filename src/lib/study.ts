@@ -549,7 +549,7 @@ type LessonCall = { pages: (PageRow & { filename: string })[]; first: boolean; p
  * 2. A part whose call fails is tried once more (one cut off for length: split in two); if it fails again, the lesson
  *    fails as a whole and nothing is stored (a lesson with a hole must never pass for a finished one).
  * 3. Coverage is exact: a fact is explained when an entry of a slide that lists it says so. Slides with facts missing,
- *    slides with facts or a case that got no entry, and the copied slides of a part that mostly copies the slides go
+ *    slides with a fact of their own (first listed there) or a case that got no entry, and the copied slides of a part that mostly copies the slides go
  *    into one repair call asking only for those slides (re-asked once; a repair that gives nothing usable leaves the
  *    entry as it was).
  */
@@ -657,10 +657,15 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   const explained = () => new Set([...entries.values()].flatMap((e) => [...e.facts]));
   // A missing fact is asked for under the first slide that lists it.
   const missingOn = (pageId: number, done: Set<number>) => factsOn(nf, pageId).filter((id) => !done.has(id) && nf.facts.get(id)!.pages[0] === pageId);
-  // A slide that must get its own entry: one with facts, or one that poses a case or question (she should see it answered).
+  // A slide that must get its own entry (else it is asked for in the repair, and still missing fails the lesson): one
+  // that poses a case or question (she should see it answered), or one with at least one fact first listed on it. A
+  // recap slide whose every fact an earlier slide already listed has nothing of its own to explain: the writer may skip
+  // it (an entry it does give is kept).
   const mustAppear = (p: PageRow) => {
     const n = slideNotes(p);
-    return !!n && !n.is_filler && (factsOn(nf, p.id).length > 0 || (typeof n.case_prompt === "string" && !!n.case_prompt.trim()));
+    if (!n || n.is_filler) return false;
+    if (typeof n.case_prompt === "string" && n.case_prompt.trim()) return true;
+    return factsOn(nf, p.id).some((id) => nf.facts.get(id)!.pages[0] === p.id);
   };
 
   type Fix = { page: (typeof pages)[number]; mode: "write" | "add" | "rewrite"; facts: number[] };
@@ -731,8 +736,8 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     },
     pages,
   );
-  // A lesson with a hole must never pass for a finished one: when a slide that has facts or a case still has no entry
-  // (the repair failed, or came back empty), nothing is stored. The failure marker is set by getLesson and the next
+  // A lesson with a hole must never pass for a finished one: when a slide that must appear (new facts or a case) still
+  // has no entry (the repair failed, or came back empty), nothing is stored. The failure marker is set by getLesson and the next
   // open she asks for tries again.
   const stored = new Set(lesson.slides.map((s) => s.page_id));
   const holes = pages.filter((p) => mustAppear(p) && !stored.has(p.id));

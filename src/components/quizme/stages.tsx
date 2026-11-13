@@ -1,4 +1,5 @@
 "use client";
+import { useRef } from "react";
 import { QuestionCard } from "../QuestionCard";
 import { ReportQuestion } from "../ReportQuestion";
 import { SIZES, type QuizMeState } from "./useQuizMe";
@@ -83,6 +84,8 @@ export function Score({ s }: { s: QuizMeState }) {
 /** One question: pick an answer, then "Check answer"; back and forth between the ones she has answered. */
 export function QuestionStep({ s }: { s: QuizMeState }) {
   const { quiz, shown, index, round, total, picked, saving, error, nextRound } = s;
+  // A reported question leaves, and its Report button with it: focus comes back to "Question n of total".
+  const place = useRef<HTMLDivElement>(null);
   const item = shown[index];
   if (!quiz || !item) return null;
   const { q, at } = item;
@@ -93,10 +96,10 @@ export function QuestionStep({ s }: { s: QuizMeState }) {
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[13px] font-bold text-muted-foreground">
+        <div ref={place} tabIndex={-1} className="text-[13px] font-bold text-muted-foreground outline-none">
           {quiz.kind === "lecture" && quiz.round > 1 ? `Round ${round} · ` : ""}Question {index + 1} of {total}
         </div>
-        <ReportQuestion key={`${round}:${index}`} onReport={s.report} context="this quiz and your score" />
+        <ReportQuestion key={`${round}:${index}`} onReport={s.report} context="this quiz and your score" returnFocus={place} />
       </div>
       {/* Highlights and cross-outs are saved to her account under the quiz and question, like a section-quiz question. */}
       <QuestionCard

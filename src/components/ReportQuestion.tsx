@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { Icon, ICONS } from "./ui";
 import { toast } from "./Toaster";
 import { Dialog } from "./Dialog";
@@ -11,16 +11,26 @@ const REASON_MAX = 500;
  * "Report" on any question. A tap opens a small dialog that asks "Are you sure?" (a mis-tap removes nothing), with an
  * optional one-line reason. On yes, `onReport` does the removing (the question leaves the quiz or exam she's in, and its
  * score) and the record goes to the site owner. `context` says where it leaves ("this quiz and your score", "today's
- * review"); without it the wording doesn't name a place, which reads right anywhere.
+ * review"); without it the wording doesn't name a place, which reads right anywhere. `returnFocus` is where focus goes
+ * when the reported question's card (and this button with it) leaves the page; without it the dialog falls back to the
+ * dialog underneath or the page's <main>.
  */
-export function ReportQuestion({ onReport, context }: { onReport: (reason: string) => Promise<void>; context?: string }) {
+export function ReportQuestion({
+  onReport,
+  context,
+  returnFocus,
+}: {
+  onReport: (reason: string) => Promise<void>;
+  context?: string;
+  returnFocus?: RefObject<HTMLElement | null>;
+}) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const field = useRef<HTMLInputElement>(null);
 
-  // Closing gives focus back to the Report button (the dialog does that).
+  // Closing gives focus back to the Report button (the dialog does that), or, once the question is gone, `returnFocus`.
   const shut = () => setOpen(false);
 
   async function confirm() {
@@ -57,6 +67,7 @@ export function ReportQuestion({ onReport, context }: { onReport: (reason: strin
         role="alertdialog"
         aria-describedby="report-q-text"
         initialFocus={field}
+        returnFocus={returnFocus}
         dismissable={!busy}
       >
         <h2 id="report-q-title" className="text-[18px] font-extrabold tracking-tight">

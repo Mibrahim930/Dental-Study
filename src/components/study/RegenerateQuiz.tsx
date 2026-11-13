@@ -23,9 +23,15 @@ export function RegenerateQuiz({
   onRun: () => void;
 }) {
   const keep = useRef<HTMLButtonElement>(null);
+  // Where focus goes when the dialog closes: "Yes" swaps the button that opened it for the "Writing…" notice, and after
+  // a failed try the button is a new one. Whichever of the two is on the page holds this.
+  const after = useRef<HTMLElement | null>(null);
+  const hold = (el: HTMLElement | null) => {
+    after.current = el;
+  };
   if (state === "working") {
     return (
-      <div className="rounded-[20px] bg-muted px-4 py-3 text-[14px] font-semibold text-muted-foreground" aria-busy>
+      <div ref={hold} tabIndex={-1} className="rounded-[20px] bg-muted px-4 py-3 text-[14px] font-semibold text-muted-foreground outline-none" aria-busy>
         Writing a new set of questions (one per fact on these slides) and checking them against your slides… about 1–2 minutes. Keep this page open.
       </div>
     );
@@ -33,11 +39,11 @@ export function RegenerateQuiz({
   return (
     <>
       <div className="flex justify-end">
-        <button className="btn-ghost px-1 text-[13px]" onClick={onAsk}>
+        <button ref={hold} className="btn-ghost px-1 text-[13px]" onClick={onAsk}>
           Write new questions for this section
         </button>
       </div>
-      <Dialog open={state === "confirm" || state === "error"} onClose={onCancel} label="Write new questions?" role="alertdialog" initialFocus={keep}>
+      <Dialog open={state === "confirm" || state === "error"} onClose={onCancel} label="Write new questions?" role="alertdialog" initialFocus={keep} returnFocus={after}>
         <p className="text-[15px] font-bold">Replace this section&apos;s questions with 20 new ones?</p>
         <p className="text-[13px] font-medium text-muted-foreground">
           Takes 1–2 minutes and uses a little AI credit. Your answers to the current questions stay in your history but won&apos;t show here any more.

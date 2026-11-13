@@ -174,7 +174,9 @@ CREATE TABLE IF NOT EXISTS questions (
   flagged INTEGER NOT NULL DEFAULT 0,
   flag_note TEXT,
   option_notes TEXT,                               -- JSON string[]: one sentence per option (why right / why wrong), same order as options
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  fact_key TEXT                                    -- the exam-plan slot key it was written for (lib/examPlan.ts factKey, or "slide:<page id>");
+                                                   -- NULL for questions written before exams were planned
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -189,7 +191,12 @@ CREATE TABLE IF NOT EXISTS attempts (
   time_limit_sec INTEGER,
   score REAL,
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
-  finished_at TEXT
+  finished_at TEXT,
+  requested INTEGER,                               -- how many questions she asked for
+  slots_json TEXT,                                 -- the exam plan (lib/examPlan.ts ExamPlan): every planned question and its state
+  short_reason TEXT,                               -- NULL, or why writing stopped short: key | busy | interrupted
+  resumed_at TEXT,                                 -- when writing the missing questions was last tried
+  options_json TEXT                                -- what the exam was started with (style, scope, adaptive), so it can resume
 );
 
 CREATE TABLE IF NOT EXISTS attempt_questions (
@@ -329,7 +336,10 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   cached_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ok INTEGER NOT NULL DEFAULT 1,                   -- 0 when the call failed
+  error TEXT,                                      -- one short line on why it failed (never key text)
+  ref TEXT                                         -- what it was for: topic:<id> | attempt:<id> | doc:<id>
 );
 
 -- "Quiz me" (lib/quizMe.ts): questions on what she highlighted, or a review of a whole lecture.
@@ -393,6 +403,7 @@ CREATE INDEX IF NOT EXISTS reported_questions_topic ON reported_questions(topic_
 -- Lookups every page makes (by exam, by section, by question, a student's spending).
 CREATE INDEX IF NOT EXISTS questions_exam ON questions(exam_id);
 CREATE INDEX IF NOT EXISTS questions_topic ON questions(topic_id);
+CREATE INDEX IF NOT EXISTS questions_topic_fact ON questions(topic_id, fact_key);
 CREATE INDEX IF NOT EXISTS attempt_questions_question ON attempt_questions(question_id);
 CREATE INDEX IF NOT EXISTS topics_exam ON topics(exam_id);
 CREATE INDEX IF NOT EXISTS documents_exam ON documents(exam_id);
@@ -480,6 +491,16 @@ function migrate(db: Database.Database) {
   addColumn(db, "quizme", "document_id", "INTEGER");
   addColumn(db, "pages", "is_filler", "INTEGER");
   addColumn(db, "documents", "batch_at", "TEXT");
+  // Practice exams written to a plan (docs/EXAM-PLAN.md) and AI activity.
+  addColumn(db, "questions", "fact_key", "TEXT");
+  addColumn(db, "attempts", "requested", "INTEGER");
+  addColumn(db, "attempts", "slots_json", "TEXT");
+  addColumn(db, "attempts", "short_reason", "TEXT");
+  addColumn(db, "attempts", "resumed_at", "TEXT");
+  addColumn(db, "attempts", "options_json", "TEXT");
+  addColumn(db, "ai_usage", "ok", "INTEGER NOT NULL DEFAULT 1");
+  addColumn(db, "ai_usage", "error", "TEXT");
+  addColumn(db, "ai_usage", "ref", "TEXT");
 }
 
 /** SQL for "this slide is a title / agenda / thank-you slide" on the pages row `alias`: 1 or 0, NULL when it has no readable notes. */
