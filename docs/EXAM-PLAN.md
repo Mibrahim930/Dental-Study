@@ -140,3 +140,14 @@ repair and how many failed.
 section quiz, judge, practice questions to a plan, case sets, quiz me) without any network call. It is refused when
 `NODE_ENV === "production"` (the server will not start with it set). It exists for the browser tests in `e2e/` and
 for previews; it is never a fallback.
+
+## Decisions taken while building (these override anything above they conflict with)
+
+- The planner's API is the header comment of `src/lib/examPlan.ts`; coverage is `examCoverage(examId, scope, slots?)`.
+- A plan can be smaller than the size asked for: a fact is never asked twice with the same kind, so a recall-only
+  exam over lectures with 30 facts has 30 questions. That is a COMPLETE exam, not a short one. `pending` counts only
+  slots in state "todo" or "failed"; `requested - plan.slots.length` is shown differently: "These lectures have
+  material for 30 questions, so this exam has 30 (you asked for 100)."
+- The coverage line counts what the exam PLANS to cover: pass every slot of the plan to `examCoverage`, whatever its
+  state, and count its distinct in-scope keys.
+- `attemptView` therefore also carries `planned: number` (slots in the plan).
