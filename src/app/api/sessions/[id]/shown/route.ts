@@ -23,6 +23,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
     .prepare("SELECT t.* FROM topics t JOIN study_sessions s ON s.exam_id = t.exam_id WHERE s.id = ? AND t.position = ?")
     .get(sessionId, position) as Topic | undefined;
   if (!topic) return notFound();
+  // A session she already ended (the page was left open): nothing moves and nothing is paid for.
+  const ended = db.prepare("SELECT ended_at FROM study_sessions WHERE id = ?").get(sessionId) as { ended_at: string | null };
+  if (ended.ended_at) return NextResponse.json({ ok: true });
 
   db.prepare("UPDATE study_sessions SET current_position = ? WHERE id = ?").run(position, sessionId);
   markTopicStudied(user.id, topic.id);

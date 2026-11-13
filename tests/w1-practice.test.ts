@@ -280,7 +280,7 @@ describe("M9: a second Start while the first exam is being written gets the same
     gen.gate = new Promise<void>((r) => (release = r));
   };
 
-  it("same exam within two minutes: same attempt; once ready, or older than two minutes: a new one", async () => {
+  it("same exam within ten minutes: same attempt; once ready, or older than ten minutes: a new one", async () => {
     const w = world();
     signIn(w.userId);
     hold();
@@ -289,7 +289,7 @@ describe("M9: a second Start while the first exam is being written gets the same
     expect(b.id).toBe(a.id);
     expect((db.prepare("SELECT COUNT(*) n FROM attempts WHERE exam_id = ?").get(w.examId) as { n: number }).n).toBe(1);
 
-    db.prepare("UPDATE attempts SET started_at = datetime('now', '-3 minutes') WHERE id = ?").run(a.id);
+    db.prepare("UPDATE attempts SET started_at = datetime('now', '-11 minutes') WHERE id = ?").run(a.id);
     const c = (await (await attemptsPOST(post({ size: 10 }), ctx(w.examId))).json()) as { id: number };
     expect(c.id).not.toBe(a.id);
 

@@ -138,13 +138,14 @@ const buildQueue = new Map<number, Promise<void>>();
 
 /**
  * A practice exam this student started on this exam (from this plan task, or from no task) that is still being
- * written and is under two minutes old: a second tap on Start gets that one back instead of paying for another.
+ * written and is under ten minutes old (a long exam takes several minutes): another tap on Start gets that one back
+ * instead of paying for a second.
  */
 export function writingAttempt(userId: number, examId: number, taskId: number | null = null): number | null {
   const row = db
     .prepare(
       `SELECT a.id FROM attempts a JOIN exams e ON e.id = a.exam_id
-       WHERE e.user_id = ? AND a.exam_id = ? AND a.task_id IS ? AND a.status = 'generating' AND a.started_at > datetime('now', '-2 minutes')
+       WHERE e.user_id = ? AND a.exam_id = ? AND a.task_id IS ? AND a.status = 'generating' AND a.started_at > datetime('now', '-10 minutes')
        ORDER BY a.id DESC LIMIT 1`,
     )
     .get(userId, examId, taskId) as { id: number } | undefined;

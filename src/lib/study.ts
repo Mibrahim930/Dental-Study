@@ -731,6 +731,12 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     },
     pages,
   );
+  // A lesson with a hole must never pass for a finished one: when a slide that has facts or a case still has no entry
+  // (the repair failed, or came back empty), nothing is stored. The failure marker is set by getLesson and the next
+  // open she asks for tries again.
+  const stored = new Set(lesson.slides.map((s) => s.page_id));
+  const holes = pages.filter((p) => mustAppear(p) && !stored.has(p.id));
+  if (holes.length > 0) throw new Error(`The lesson came back without ${holes.length} of its slides. Try again in a moment.`);
   // Logged only: what is still unexplained after the repair, with the old word check's share for comparison.
   const after = explained();
   const unexplained = [...nf.facts.keys()].filter((id) => !after.has(id)).length;
