@@ -161,6 +161,7 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
   const out = await generate({
     creds: credentials(userId),
     purpose: "topic map",
+    ref: `doc:${lecture.docId}`,
     schema: TopicMap,
     system: SYSTEM,
     effort: "medium",

@@ -130,6 +130,7 @@ async function runDocument(docId: number) {
         creds,
         SlideNotes,
         pages.map((p) => ({ customId: String(p.id), ...slideRequest(doc.filename, p) })),
+        { ref: `doc:${docId}` },
       );
       db.prepare("UPDATE documents SET batch_id = ?, batch_at = datetime('now') WHERE id = ?").run(batchId, docId);
       return;
@@ -150,7 +151,7 @@ async function readSlides(creds: Credentials, doc: DocInfo, pages: PageRow[]) {
   await mapLimit(pages, 4, async (page) => {
     try {
       const req = slideRequest(doc.filename, page);
-      const notes = await generate({ creds, purpose: "read slides", schema: SlideNotes, ...req });
+      const notes = await generate({ creds, purpose: "read slides", ref: `doc:${doc.id}`, schema: SlideNotes, ...req });
       savePageNotes(creds.userId, page, notes);
     } catch (err) {
       db.prepare("UPDATE pages SET status = 'error', error = ? WHERE id = ?").run(String(err), page.id);
@@ -212,7 +213,7 @@ export async function pollBatches() {
         continue;
       }
       try {
-        const outcome = await batchResults(creds, "read slides (batch)", SlideNotes, doc.batch_id);
+        const outcome = await batchResults(creds, "read slides (batch)", SlideNotes, doc.batch_id, `doc:${id}`);
         if (!outcome) continue; // still running
         const byId = new Map(pendingPages(id).map((p) => [String(p.id), p]));
         // Saving the results, forgetting the batch and recording its cost happen together, so a batch is never

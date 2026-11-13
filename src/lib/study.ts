@@ -609,6 +609,7 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
     const out = (await generate({
       creds,
       purpose: "lesson",
+      ref: `topic:${topic.id}`,
       schema: call.first ? LessonFirstPart : LessonPart,
       effort: "medium",
       maxTokens: (LESSON_TOKENS_PER_SLIDE * call.pages.length + LESSON_TOKENS_BASE + (call.first ? LESSON_TOKENS_OVERVIEW : 0)) * room,
@@ -700,6 +701,7 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
         const out = await generate({
           creds,
           purpose: "lesson repair",
+          ref: `topic:${topic.id}`,
           schema: LessonPart,
           effort: "medium",
           maxTokens: LESSON_TOKENS_PER_SLIDE * batch.length + LESSON_TOKENS_BASE,
@@ -881,6 +883,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
     const out = await generate({
       creds,
       purpose: "section quiz",
+      ref: `topic:${topic.id}`,
       schema: SectionQuiz,
       effort: "medium",
       maxTokens: 20000,
@@ -939,6 +942,7 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       const out = await generate({
         creds,
         purpose: "section quiz check",
+        ref: `topic:${topic.id}`,
         schema: QuizCheck,
         effort: "low",
         maxTokens: 8000,

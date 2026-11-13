@@ -222,6 +222,7 @@ export async function createQuizMe(input: { userId: number; examId: number; topi
     const out = await generate({
       creds: credentials(userId),
       purpose: "quiz me",
+      ref: `exam:${examId}`,
       tier: "quality",
       schema: QuizMeOut,
       effort: "medium",
