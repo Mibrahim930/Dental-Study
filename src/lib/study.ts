@@ -5,7 +5,8 @@ import { generate, type Part } from "./ai";
 import { credentials } from "./credentials";
 import { parseNotes, type SlideNotes } from "./processing";
 import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
-import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
+import { shuffle } from "./practicePlan";
+import { validateMcq } from "./mcq";
 import { ANGLE_TEXT, distinctFacts, normStem, planQuizByFacts, QUIZ_MAX, type Angle, type FactSlide } from "./quizPlan";
 import { coveredFacts, FILLER_SCAN_VERSION, quotedFacts, trimRamble } from "./lessonCoverage";
 import { clearTopicQuizAnswers, topicHasQuizAnswers } from "./quizProgress";
@@ -98,7 +99,7 @@ const SectionQuiz = z.object({
 const QuizCheck = z.object({
   verdicts: z.array(
     z.object({
-      n: z.number().describe("The question number"),
+      n: z.number().describe("The question's number, copied from the list"),
       ok: z.boolean().describe("True only if the keyed answer is stated or directly implied by the slides, no other option is also correct, and it doesn't repeat an earlier question"),
       picture: z
         .boolean()
@@ -826,7 +827,7 @@ You are given a numbered list of planned questions: each names the slide it must
 ${EXAM_STYLE}`;
 
 const JUDGE_SYSTEM = `You check quiz questions written for a dental student against their lecture slides. Be strict but fair.
-For each question, ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
+For each question, n is the number the question is listed under. ok = true only if: the keyed answer is stated on the slides or directly implied by them; no other option is also correct; the question is clear; and it does not repeat an earlier question in the list (same fact asked the same way).
 A question marked "picture shown: slide P" shows the student that slide's picture (the whole slide unless the notes mark a clinical-image crop): mark it ok = false if the answer is printed on that slide in a way the student would simply read off.
 Also say, for every question, whether answering it needs something the student has to see (picture = true): a picture, radiograph, diagram, chart or graph, a slide referred to as such ("on slide 12", "the slide's diagram"), or anything labeled, drawn, circled, shaded or pointed at. A question with no "picture shown" that needs one will be given its slide's picture or dropped, so be honest rather than lenient.
 ${NO_COVER_CHECK}
@@ -886,26 +887,27 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
       const slot = bySlot ?? wanted.find((i) => open.has(i) && slots[i].page === q.source_page_id) ?? wanted.find((i) => open.has(i));
       if (slot == null) break;
       open.delete(slot);
-      const correct = checkedAnswer(q.options, q.correct_index, q.correct_answer);
-      if (!isValidChoice(q.options, correct)) continue;
-      // The question must test one of this topic's slides (any slide works when the topic has none).
-      const page = valid.size === 0 ? null : valid.has(q.source_page_id) ? q.source_page_id : null;
-      if (valid.size > 0 && page == null) continue;
+      // The shared check (lib/mcq): exactly four options, the answer text agrees with the index, and the question tests
+      // one of this topic's slides (any slide works when the topic has none). Options are shuffled when the quiz is saved.
+      const v = validateMcq(q, { optionCount: 4, validPageIds: valid, requireSource: true, shuffle: false });
+      if (typeof v === "string") {
+        console.warn(`Section quiz for topic ${topic.id}: Q${slot + 1} dropped (${v})`);
+        continue;
+      }
+      const page = v.source_page_id;
       // A question that talks about a picture must have one to show (the slide it names, or the slide it tests).
       // "generous": a question that merely gets its slide attached loses nothing; a picture question without one is the complaint.
-      const wantsPicture = q.image_page_id != null || mentionsPicture(q.question, "generous");
-      const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page, q.question) : null;
+      const wantsPicture = q.image_page_id != null || mentionsPicture(v.stem, "generous");
+      const picture = wantsPicture ? pictureFor(pages, q.image_page_id, page, v.stem) : null;
       if (wantsPicture && !picture) continue;
       drafts.push({
         slot,
-        question: q.question,
-        options: q.options,
-        correct_index: correct,
+        question: v.stem,
+        options: v.options,
+        correct_index: v.correct_index,
         explanation: q.explanation,
         // Per-option notes are kept only when there is exactly one per option; a good question isn't lost over them.
-        ...(Array.isArray(q.option_notes) && q.option_notes.length === q.options.length && q.option_notes.every((n) => typeof n === "string" && n.trim())
-          ? { option_notes: q.option_notes.map((n) => n.trim()) }
-          : {}),
+        ...(v.option_notes ? { option_notes: v.option_notes } : {}),
         concept: q.concept,
         source_page_id: page,
         image_page_id: picture?.page_id ?? null,
@@ -932,19 +934,28 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
         system: JUDGE_SYSTEM,
         content: `Slides:\n${notes}\n\nQuestions:\n${drafts
           .map(
-            (d, i) =>
-              `${i + 1}. ${d.question}\n${d.options.map((o, k) => `   ${String.fromCharCode(65 + k)}. ${o}`).join("\n")}\n   Keyed answer: ${String.fromCharCode(65 + d.correct_index)}${
+            (d) =>
+              `${d.slot + 1}. ${d.question}\n${d.options.map((o, k) => `   ${String.fromCharCode(65 + k)}. ${o}`).join("\n")}\n   Keyed answer: ${String.fromCharCode(65 + d.correct_index)}${
                 d.source_page_id != null ? ` (slide P${d.source_page_id})` : ""
               }${d.image_page_id != null ? ` (picture shown: slide P${d.image_page_id})` : ""}`,
           )
           .join("\n\n")}`,
       });
-      const rejected = new Set(out.verdicts.filter((v) => v.ok === false).map((v) => v.n - 1));
-      const needsPicture = new Set(out.verdicts.filter((v) => v.picture === true).map((v) => v.n - 1));
+      // Each verdict names the question by the number it was listed under (its slot). Unless the numbers come back
+      // exactly one per question sent, which verdict belongs to which question can't be trusted: all are kept unjudged.
+      const verdicts = Array.isArray(out?.verdicts) ? out.verdicts : [];
+      const sent = new Set(drafts.map((d) => d.slot + 1));
+      const named = new Set(verdicts.map((v) => v?.n));
+      if (verdicts.length !== drafts.length || named.size !== sent.size || ![...sent].every((n) => named.has(n))) {
+        console.warn(`Section quiz check for topic ${topic.id}: the verdicts don't match the ${drafts.length} question(s) sent; keeping them unjudged`);
+        return drafts;
+      }
+      const rejected = new Set(verdicts.filter((v) => v.ok === false).map((v) => v.n - 1));
+      const needsPicture = new Set(verdicts.filter((v) => v.picture === true).map((v) => v.n - 1));
       const out2: Draft[] = [];
-      for (const [i, d] of drafts.entries()) {
-        if (rejected.has(i)) continue;
-        if (d.image_page_id == null && needsPicture.has(i)) {
+      for (const d of drafts) {
+        if (rejected.has(d.slot)) continue;
+        if (d.image_page_id == null && needsPicture.has(d.slot)) {
           const picture = pictureFor(pages, null, d.source_page_id, d.question);
           if (!picture) continue;
           out2.push({ ...d, image_page_id: picture.page_id });

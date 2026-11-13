@@ -1,6 +1,7 @@
 # Lolo's Dental Buddy — project handoff
 
-Written 2026-10-27 for whoever takes the project over (a Claude session or a person). It is tracked in the repo on purpose:
+Written 2026-10-27 for whoever takes the project over (a Claude session or a person); brought up to date on 2026-11-13
+with the code as it is at commit `a06d26e` (the end of audit wave 1). It is tracked in the repo on purpose:
 the older notes live in a `design/` folder that exists only on the owner's PC and is excluded from git (it holds the
 student's real past exam PDFs). Everything a new session needs is here; the PC-only material is listed in §12 so you know
 what you are not seeing.
@@ -18,13 +19,16 @@ and be tested on exactly that material, on her phone, before each exam:
 
 - **Lectures become study sections.** Every slide (including radiographs, diagrams and handwriting) is read by an AI on the
   student's own key; each lecture is split into sections in slide order; every content slide ends up in exactly one section.
-- **Guided study.** Each section has a lesson that covers every slide in plain language, the key slides as pictures,
-  key points (what the professor stressed first), a tutor chat that only answers from her lectures, and a section quiz.
+- **Guided study.** Each section has a lesson that walks through every slide (its picture, then an explanation in plain
+  words, not the slide's own sentences), key points (what was stressed first), highlights she can add, and a section
+  quiz. At the end of a lecture a **lecture review** re-asks what she got wrong. (There was a tutor chat; the owner had it
+  removed on 2026-10-27.)
 - **Questions she can trust.** Section quizzes and practice exams are written strictly from the slides, in the style of
   her real past exams, checked by a second AI pass, never repeat a fact, and show why every option is right or wrong.
   Missed questions come back (next exam, daily spaced review); mastery per concept is tracked.
-- **Practice exams** in tutor or timed mode: recall, clinical cases, picture questions and board-style case sets; she rates
-  her confidence before the answer shows.
+- **Practice exams** in "Learn" or timed mode (the "Learn" mode is stored as `tutor`): recall, clinical cases, picture
+  questions and board-style case sets; she rates her confidence before the answer shows. Every question has a Report
+  button.
 - **A calendar and planner** that paces the work day by day across all her exams, with busy days, schedule import, and
   "re-plan from today".
 - **Nothing lost, nothing confusing on a phone.** Progress is kept across sessions and devices; every failure shows a plain
@@ -70,6 +74,12 @@ CLI is not installed on the owner's PC; the dashboard link is in the deployment 
 | `CLAUDE_MODEL`, `OPENAI_MODEL` | Standard-tier models (defaults `claude-sonnet-5-5`, `gpt-6.1-sol`). |
 | `CLAUDE_QUALITY_MODEL`, `OPENAI_QUALITY_MODEL` | Question-writer models (defaults `claude-opus-5-5`; OpenAI falls back to the standard model). |
 | `QUIZ_JUDGE` | `0` turns off the second-pass question checker (tests only). |
+| `NODE_ENV`, `NEXT_RUNTIME` | Set by Next.js itself; never set them by hand. |
+
+All of these are listed, with comments, in `.env.example`. **Production config check** (`src/instrumentation.ts`
+`missingProductionConfig`): in production the server refuses to start, with a plain log line, when `SECRET_KEY` or
+`APP_PASSCODE` is empty or `DATA_DIR` is missing or not an absolute path (a relative one would put the database in a
+folder a deploy throws away). Railway's health check (`railway.json`) waits up to 300 s for `/login` to answer.
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY` | Nightly backup of the DB + PDFs to a Railway bucket (restore script in `scripts/`). |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Used only by local scripts; the site itself uses each student's own key. |
 
@@ -111,19 +121,36 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
 - Next.js 16 (App Router, Turbopack, `proxy.ts` instead of middleware), React 19, TypeScript, Tailwind v4 with CSS tokens
   in `src/app/globals.css` (four colour themes incl. dark mode, chosen per user), `better-sqlite3`, MuPDF (`mupdf` npm)
   for PDF rendering and image re-encoding, Zod schemas for every AI output, Vitest.
-- Database: `src/lib/db.ts` holds `SCHEMA` (CREATE TABLE IF NOT EXISTS …) and `migrate()` (ALTER TABLE … for columns
-  added later). New columns go in both. Two feature modules create their own tables at import time instead
-  (`lib/reports.ts`, `lib/quizMe.ts`); `quiz_answers` is in SCHEMA. Foreign keys are on; deletes cascade.
-- AI: `src/lib/ai.ts` — `generate()` (structured output, Zod), `chatStream()`, batch reading of slides, `mapLimit`.
-  `generate({ tier: "quality" })` picks the Opus model for question writers; everything else is "standard". Every call
-  is logged to `ai_usage` with the real model and an estimated cost (Settings → Spending; Admin shows per user).
-- Tests: `npx vitest run` — 59 files, **1061 passed + 1 expected fail** at d5eb67e (`tests/sonnet5-coverage` has one
-  deliberate `it.fails`). Each test file gets its own throwaway DB (vitest.config.ts). AI is always mocked. Patterns:
-  `tests/helpers.ts` (`makeUser`, `makeExam`), `vi.hoisted` cookie jar for routes (`tests/perf2-sessions.test.ts`),
-  mocked `generate` answering the `Q<n>:` slots it is asked for (`tests/jobB-quiz.test.ts`).
-- Checks before any commit: `npx tsc --noEmit -p .`, `npx eslint src tests` (enforces `react-hooks/set-state-in-effect`
-  and `react-hooks/purity`: no setState directly in an effect body, no `Date.now()` in render), `npx vitest run`, and
-  `DATA_DIR=<temp> npx next build` before publishing.
+- Database: `src/lib/db.ts` holds `SCHEMA` (CREATE TABLE IF NOT EXISTS …, every table and index, including the ones
+  for Quiz me, reports and reported questions) and `migrate()` (`addColumn` for columns added later; new columns go in
+  both). `quizMe.ts` and `reports.ts` still repeat their own CREATE TABLE IF NOT EXISTS, which is harmless. Foreign keys
+  are on, deletes cascade, `busy_timeout` is 5 s.
+- AI: `src/lib/ai.ts` — `generate()` (structured output, Zod; `cache: true` marks the system prompt and first content
+  block for Anthropic prompt caching), batch reading of slides, `mapLimit`. `generate({ tier: "quality" })` picks the
+  higher-priced model (Opus 5.5 on Anthropic keys) for the question writers; everything else is "standard" (Sonnet 5.5).
+  Every call is logged to `ai_usage` with the real model and an estimated cost (Settings → Spending; Admin per user).
+  `src/lib/inflight.ts` (`track`, `settle`) records background AI work so a deploy waits for it instead of throwing
+  away what was paid for.
+- Shared route helpers: `src/lib/http.ts` (`readJson` never throws on a bad body, `str`, `isKeyProblem`, `aiFailure`
+  for the plain message), `src/lib/mcq.ts` (`validateMcq`, the one question validator), `src/lib/rateLimit.ts`.
+  Client side: `components/clientFetch.ts`, `components/friendlyError.ts`.
+- Tests: `npx vitest run` (or `npm test`) — **79 files, 1714 tests, all passing at `a06d26e`**. Each test file gets its
+  own empty database: `vitest.config.ts` gives the run a throwaway folder, `tests/setup-file.ts` points `DATA_DIR` at a
+  fresh subfolder before every file, and `tests/global-setup.ts` deletes the folder when the run ends (a database
+  shared between files once made results depend on the order files ran in). AI is always mocked. Patterns:
+  `tests/helpers.ts` (`makeUser`, `apiReadyUser`, `makeExam`, `slideNotes`, `makeLecture`, `world`, `ctx`,
+  `postJson`, `getReq`, `sessionCookie`), `vi.hoisted` cookie jar for routes (`tests/perf2-sessions.test.ts`), mocked
+  `generate` answering the `Q<n>:` slots it is asked for (`tests/jobB-quiz.test.ts`). `vi.mock` calls can't be shared
+  from a helper (Vitest hoists them per file), so each file keeps its own. A test named `BUG: …` is a known defect left
+  failing on purpose; once it is fixed the test is renamed to say what it checks.
+- Checks before any commit: `npm run typecheck` (tsc with the memory flag it needs), `npx eslint src tests` (enforces
+  `react-hooks/set-state-in-effect` and `react-hooks/purity`: no setState directly in an effect body, no `Date.now()`
+  in render), `npx vitest run`, and `DATA_DIR=<temp> npx next build` before publishing. New route files need
+  `npx next typegen` before tsc knows their `RouteContext`.
+- **CI** (`.github/workflows/ci.yml`, since audit wave 1): every push and pull request on GitHub runs `npm ci`,
+  `next typegen`, tsc, eslint, the whole Vitest suite and `npm audit --omit=dev --audit-level=high`, with full git
+  history (seven migration tests read old commits). Railway still deploys every push to `main`, so look at the CI
+  result before asking to publish.
 - Conventions you'll see everywhere: plain-language messages to students (never raw errors; key/billing problems are
   named), `components/clientFetch.ts` for every client fetch (only server-written text is shown; any 401 sends the
   student to sign in), `toast()` from `components/Toaster.tsx`, 44 px touch targets, no sideways scroll at 375 px,
@@ -150,47 +177,82 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   explanation }], key_points, connections }`, written and shown slide by slide in plain words, explaining rather than
   repeating the slides: `quotedFacts` in `lessonCoverage.ts` counts facts copied word for word, over 30% of them (or
   a slide with facts that gets no entry, or coverage under 80%) triggers one repair call; a version-3 lesson that
-  already explains is kept, one that mostly copies is rewritten once on open), section quizzes (`QUIZ_VERSION` 3: one question per distinct fact,
-  5–25, planned by `quizPlan.ts`'s `planQuizByFacts`; two writer calls, checker pass, one repair; `option_notes`), tutor
-  prompt, session summary. `examStyle.ts` — how her real exams are written (distilled from 10 past papers) + the checker
-  rules. `questionImage.ts` — which questions need a picture (`mentionsPicture` strict/generous), which slide to show,
-  start-up repair of stored questions.
+  already explains is kept, one that mostly copies is rewritten once on open). `trimRamble` cuts the sign-off filler a
+  writer can drift into at the end of a slide ("Done. Ok. Stop. Bye."), recognised by its words, never by length;
+  `scanLessonsForFiller` cleans every stored lesson at start and from the Admin page, with no AI call.
+  Section quizzes: `QUIZ_VERSION` 5. The size is `quizSize` in `quizPlan.ts`: one question per distinct fact, at most
+  `QUIZ_MAX` = 25, no floor. A denser section is **condensed, not cut**: `planQuizByFacts` bounds the facts per question
+  (ceil(facts / 25)), splits each slide into even chunks and merges thin neighbouring slides, so several related facts
+  become one question that needs all of them. A quiz of up to 4 questions is written in one call, a bigger one in two
+  halves, then a checker pass and one repair call; every question has `option_notes`. Older quizzes (version 3 or 4)
+  whose section has at most 25 facts were written the same way and are kept (`quizIsCurrent`); a quiz with answers is
+  never rewritten behind her back (`quizNeedsWriting`); only "Write new questions" replaces it. `recentFailure` /
+  `FAILURE_COOLDOWN_MS`: a lesson or quiz whose writing just failed is not retried on its own for 10 minutes.
+  `endSession` builds the session note from her answers, with no AI call. `examStyle.ts` — how her real exams are
+  written (distilled from 10 past papers) + the checker rules. `questionImage.ts` — which questions need a picture
+  (`mentionsPicture` strict/generous), which slide to show, start-up repair of stored questions.
 - `src/lib/practice.ts` + `practicePlan.ts` + `attemptView.ts` — practice exams: coverage across sections, no repeats
   (`unusedQuestions`/`inOpenExams`), retries of missed questions with shuffled options, case sets, confidence, scoring,
   the view the runner renders (hides answers in timed mode until finished; carries `option_notes` and the source slide).
+  Questions are written in calls of at most `QUESTIONS_PER_CALL` = 12 (`chunkSizes`), a second tap on Start gets the
+  exam already being written (`writingAttempt`), and an exam left "generating" by a restart is marked failed at start.
+  A reported question leaves the exam and its score (`reportAttemptQuestion`: 8 right of 15 with one reported = 8/14).
 - `src/lib/memory.ts` + `readiness.ts` — concepts and mastery, spaced review cards, FTS search over slides, batched
   readiness per exam and per lecture. `src/lib/quizProgress.ts` — per-student section-quiz answers (`quiz_answers`),
-  retake, one-time migration from `session_checks`. `src/lib/quizMe.ts` — "Quiz me on this". `src/lib/reports.ts` —
-  bug reports + screenshots. `src/lib/marks.ts` + `components/useMarks.ts` — highlights and cross-outs synced to the
-  account (`question_marks`).
+  retake, one-time migration from `session_checks`, `hideQuizQuestionEverywhere` (a report reaches every copy of the
+  exam, copies of copies included). `src/lib/quizMe.ts` — "Quiz me on this" and the **lecture review** (`kind =
+  'lecture'`: the questions she got wrong in a lecture, no AI call; a miss answered right is retired in
+  `lecture_review_done`; misses come back in repeat rounds, up to `REVIEW_MAX_ROUNDS` = 5; reporting hides every copy
+  and settles the round). `src/lib/reportedQuestions.ts` — the Report button's records (a table plus one JSON file per
+  report under `FILES_DIR/reported-questions/`; the section-quiz writer is told the reported stems to steer clear of).
+  `src/lib/reports.ts` — "Tell the site owner" reports + screenshots. `src/lib/marks.ts` + `components/useMarks.ts` —
+  highlights, underlines and cross-outs synced to the account (`question_marks`), on quiz questions, quiz-me and review
+  questions (`quizme:<id>:<n>`), and on the lesson text (`lesson:<topic>:<slide>` keys, character offsets over the
+  rendered text, painted with the browser's CSS highlight API by `components/MarkableText.tsx`).
 - `src/lib/planner.ts`, `busy.ts`, `calendar.ts`, `ics.ts`, `icsImport.ts`, `scheduleImport.ts`, `examImport.ts` — the
   day-by-day plan (learn tasks per section, practice after every few, weak-topic review, timed exam the day before),
   busy days (weekly repeats, skips), per-day hours, re-plan, the ICS feed, `.ics` import, AI schedule import.
 - `src/lib/classes.ts` — invite codes, `copyExam` (documents, pages, topics with `document_id`, lessons, quizzes, question
   bank incl. `option_notes`; shared image folders), class-wide question reports. `src/lib/backup.ts` — nightly backups.
-- `src/instrumentation.ts` — start-up jobs: resume unfinished renders, drop foreign questions from open exams, picture
-  repair, `migrateSessionChecks`, `rebuildLectureMaps`, batch polling, backups.
+- `src/instrumentation.ts` — the production config check, then start-up jobs: resume unfinished renders, drop foreign
+  questions from open exams, fail practice exams a restart cut off, picture repair, `migrateSessionChecks`,
+  `rebuildLectureMaps`, the lesson filler scan, batch polling, backups; on shutdown it waits for tracked AI work.
 
 **Pages and components**
 - Home `src/app/page.tsx` (plan for today, missed-task note, exam cards with "x of y lectures done" and in-progress
   practice exams, weakest concepts, new exam). Exam page `src/app/exams/[id]/page.tsx` (hero with readiness ring,
-  study card "Lecture 2 · Section 3 of 6", one **Lectures** card with upload/Rebuild/status and `<details>` per lecture,
-  Practice card with the Continue-your-exam card, past attempts "63% · 5/8"). Study `src/app/exams/[id]/study/page.tsx`
-  → `components/StudySession.tsx` (lecture-grouped section list, lesson, pictures, "Your professor stressed this", key
-  points, `SectionQuiz` with Retake/Write new questions/report, `TutorChat`, `QuizMe`). Practice
+  study card "Lecture 2 · Section 3 of 6", one **Lectures** card with upload/status and `<details>` per lecture,
+  `LectureReviewCard` under each lecture, Practice card with the Continue-your-exam card, past attempts "63% · 5/8").
+  The Lectures card has two buttons for sections: **"Add them"** (`mode: "auto"`, maps only lectures that have no
+  sections yet; leftover slides join their nearest section with no AI call) and **"Re-split every lecture"**
+  (`mode: "full"`, one AI call per lecture, asks "Are you sure?" first because it bills her key and can reset lessons
+  and quizzes). Study `src/app/exams/[id]/study/page.tsx` → `components/StudySession.tsx` (lecture-grouped section
+  list, slide-by-slide lesson with tap-to-zoom, "★ You emphasized this", key points, `MarkableText` highlights,
+  `SectionQuiz` with Retake/Write new questions/Report, `QuizMe`, the lecture review at the end of a lecture). Practice
   `src/app/attempts/[id]/AttemptRunner.tsx` (questions, confidence, results with `DoubleRing`, by-topic, every question,
   "Study my misses", `QuizMe` on results). Daily review `src/app/review/page.tsx`. Calendar `src/app/calendar/*`
   (`CalendarForms`, `ExamRowsEditor`, `ImportSchedule`, `UndatedExams`, `PlanAdjust`). Classes, Progress, Settings
-  (spend, provider/key, themes, password), Admin (`src/app/admin/page.tsx`: users, spend, reset/remove, **Reports**,
-  backups), Help (`/help/api-keys`), Setup (`/setup`), sign-in flow (`/login` passcode, `/account`).
+  (spend, provider/key, themes, password), Admin (`src/app/admin/page.tsx`, five cards: **Users** with spending,
+  reset and remove; **Reports** from the flag button; **Lesson filler check** with "Check all lessons now";
+  **Reported questions** with a "Download all" JSON link; **Backups** with "Back up now"), Help (`/help/api-keys`),
+  Setup (`/setup`), sign-in flow (`/login` passcode, `/account`). Error screens: `src/app/error.tsx`,
+  `global-error.tsx` and `not-found.tsx` show a plain message and a way back (never raw error text).
 - Shared: `components/ui.tsx` (Icon/ICONS, MasteryChip, Strip, DoubleRing, option states), `OptionRow.tsx` (select,
   cross out, highlight, per-option `note`), `QuestionCard.tsx`, `Highlightable.tsx`, `SlideImage.tsx` (crop + reserved
   aspect ratio), `ReportButton.tsx` (bottom-left on every page), `QuizMe.tsx`, `NavBar.tsx` (phone tab bar),
   `Toaster.tsx`, `clientFetch.ts`, `PageSkeleton.tsx` + `loading.tsx` files, `AutoRefresh.tsx`.
-- API routes under `src/app/api/`: account (signin/signup/signout/password/key), admin (users, reports, backup),
-  attempts (view/answer/finish), exams (create, attempts, upload, topics), sessions (lesson, quiz, check, quiz/retake,
-  quiz/regenerate, quiz/report, chat, end), review, marks, planner, calendar (exams, import read/ics), classes, pages
-  (slide image), questions (flag), reports, quizme, ics/[token] (calendar feed, token-based), login.
+- API routes under `src/app/api/` (61 at `a06d26e`): account (signin/signup/signout/password/key), admin (users,
+  reports, backup, lesson-scan, reported-questions), attempts (view/answer/finish/report), exams (attempts, upload,
+  topics), sessions (lesson, **shown**, quiz, check, quiz/retake, quiz/regenerate, quiz/report, end), review, marks,
+  planner, calendar (exams, busy, import read/ics), classes, shared, documents (remove, retry), pages (slide image),
+  questions (flag), reports, quizme (open, lecture, answer, report), ics/[token] (calendar feed, token-based), login.
+  Creating an exam is a server action (`src/app/actions.ts`). Every route but login, account signin/signup/signout and
+  the token feed answers 401 without a session, and 404 for another student's row; `tests/w2-coverage.test.ts` checks
+  that for every route file it finds, and fails when a new route is not in its tables.
+- **The shown route and when the quiz is written.** Opening a lesson only fetches that lesson. When the lesson is on
+  screen the page calls `POST /api/sessions/[id]/shown`: only then does her place move, the section count as studied,
+  and its quiz start being written in the background (if it has none, or an out-of-date one nobody answered). The next
+  section's lesson is written ahead only once she scrolls to this section's quiz. Sections she skips cost nothing.
 
 ---
 

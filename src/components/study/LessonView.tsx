@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { SlideImage } from "../SlideImage";
 import { Icon, ICONS } from "../ui";
 import { MarkableText } from "../MarkableText";
+import { MarksProvider } from "../useMarks";
 import { Dialog } from "../Dialog";
 import type { LessonData } from "./types";
 
@@ -38,12 +39,15 @@ export function SlideZoom({ pageId, aspect, number, onClose }: { pageId: number;
     </Dialog>
   );
 }
+
+/** The section's lesson: intro, each slide with its explanation (both can be highlighted), what she emphasized, key points. */
 export function LessonView({ data }: { data: LessonData }) {
   const { lesson } = data;
   const [zoom, setZoom] = useState<number | null>(null);
   const slides = lesson.slides ?? [];
   return (
-    <>
+    // Every block's highlights and underlines come from one request for the whole lesson.
+    <MarksProvider prefix={`lesson:${data.topic.id}:`}>
       <section className="card">
         {lesson.intro && (
           <MarkableText marksKey={`lesson:${data.topic.id}:0:${lesson.intro.length}`}>
@@ -119,6 +123,6 @@ export function LessonView({ data }: { data: LessonData }) {
           </div>
         </section>
       )}
-    </>
+    </MarksProvider>
   );
 }

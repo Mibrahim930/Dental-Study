@@ -7,7 +7,7 @@ export type RegenState = "idle" | "confirm" | "working" | "error";
 /**
  * "Write new questions": the one way a section's quiz changes. Asks first (it takes a minute or two and costs a
  * little), then has the server write a fresh 20 (the old ones stay until the new ones are ready), and reloads the quiz.
- * Only draws it: the state and the request live in SectionQuiz, so it can never run twice.
+ * Only draws it: the state and the request live in useSectionQuiz, so it can never run twice.
  */
 export function RegenerateQuiz({
   state,

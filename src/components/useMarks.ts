@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cleanMarks, emptyMarks, type Marks } from "@/lib/marks";
 
 // Highlights and cross-outs on one question. Saved to the student's account (so they follow her between phone and
@@ -39,6 +39,36 @@ function save(key: string, marks: Marks, keepalive = false): Promise<boolean> {
     .catch(() => false);
 }
 
+/** Marks for many keys at once, by the start of their keys (one lesson's blocks); null when the request failed. */
+type Batch = { prefix: string; load: () => Promise<Record<string, unknown> | null> };
+const MarksBatch = createContext<Batch | null>(null);
+
+/**
+ * Loads the saved marks of every key starting with `prefix` (e.g. "lesson:12:") in one request, for the useMarks calls
+ * inside it; a lesson with 25 slides would otherwise send 26. Saving stays one key at a time.
+ */
+export function MarksProvider({ prefix, children }: { prefix: string; children: ReactNode }) {
+  // One request per prefix, made by the first block that asks and shared by the rest.
+  const value = useMemo<Batch>(() => {
+    let request: Promise<Record<string, unknown> | null> | null = null;
+    return {
+      prefix,
+      load: () =>
+        (request ??= fetch(`/api/marks?prefix=${encodeURIComponent(prefix)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j: { marks?: unknown } | null) => (j && typeof j.marks === "object" && j.marks ? (j.marks as Record<string, unknown>) : null))
+          .catch(() => null)),
+    };
+  }, [prefix]);
+  return createElement(MarksBatch.Provider, { value }, children);
+}
+
+/** The account's copy of one key's marks: from the provider's one request when there is one for it, else on its own. */
+function serverMarks(key: string, batch: Batch | null): Promise<{ marks: unknown } | null> {
+  if (batch && key.startsWith(batch.prefix)) return batch.load().then((all) => (all ? { marks: all[key] ?? null } : null));
+  return fetch(`/api/marks?key=${encodeURIComponent(key)}`).then((r) => (r.ok ? r.json() : null));
+}
+
 /** Marks for `key` (null: kept in memory only), and a function to change them. */
 export function useMarks(key: string | null): [Marks, (change: (m: Marks) => Marks) => void] {
   const [state, setState] = useState<{ key: string | null; marks: Marks }>({ key, marks: emptyMarks() });
@@ -46,6 +76,7 @@ export function useMarks(key: string | null): [Marks, (change: (m: Marks) => Mar
   const edited = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<{ key: string; marks: Marks } | null>(null);
+  const batch = useContext(MarksBatch);
 
   const flush = useCallback((keepalive = false) => {
     if (timer.current) clearTimeout(timer.current);
@@ -68,9 +99,8 @@ export function useMarks(key: string | null): [Marks, (change: (m: Marks) => Mar
     queueMicrotask(() => {
       if (!cancelled && local && !edited.current) setState({ key, marks: local.marks });
     });
-    fetch(`/api/marks?key=${encodeURIComponent(key)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: { marks: unknown } | null) => {
+    serverMarks(key, batch)
+      .then((j) => {
         if (cancelled || !j || edited.current) return;
         if (local?.dirty) {
           pending.current = { key, marks: local.marks };
@@ -89,7 +119,7 @@ export function useMarks(key: string | null): [Marks, (change: (m: Marks) => Mar
       // Leaving the question: send anything still waiting.
       if (pending.current) flush(true);
     };
-  }, [key, flush]);
+  }, [key, flush, batch]);
 
   // Closing the tab or switching apps on a phone: send anything still waiting.
   useEffect(() => {

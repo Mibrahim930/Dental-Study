@@ -562,7 +562,7 @@ describe("stored lessons through getLesson", () => {
       throw new Error("AI is down");
     };
     const lesson = await getLesson(w.topic());
-    expect(lessonAiCalls()).toHaveLength(1);
+    expect(lessonAiCalls()).toHaveLength(2); // the one part, tried twice
     expect(error).toHaveBeenCalled();
     expect(lesson.slides.map((s) => s.explanation)).toEqual(facts.map((f) => `${f}.`));
     const s = storedLesson(w);
@@ -703,10 +703,10 @@ describe("fresh lessons", () => {
     lessonWriter = (n) => (n === 1 ? lessonOf(w, (i) => (i === 0 ? RAMBLE : `${GOOD} fact a1`)) : lessonOf(w, (i) => `${GOOD} fact a${i}`));
     await getLesson(w.topic());
     expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
-    const repair = calls[1].content.slice(calls[1].content.indexOf("Your previous lesson"));
-    expect(repair).toContain("These slides have facts or a question but got no entry");
-    expect(repair).toContain(`- [P${w.pages[0]}] L1.pdf slide 1`);
-    expect(repair).not.toContain(`- [P${w.pages[1]}]`);
+    const repair = calls[1].content.slice(calls[1].content.indexOf("Some entries of this lesson need work"));
+    expect(repair).toContain("this slide got no entry");
+    expect(repair).toContain(`[P${w.pages[0]}] L1.pdf slide 1`);
+    expect(repair).not.toContain(`[P${w.pages[1]}]`);
     expect(repair).not.toMatch(/Bye|Keep going|End of slide/);
   });
 
@@ -775,7 +775,7 @@ describe("fresh lessons", () => {
     expect(lesson.slides.map((s) => s.explanation)).toEqual(own);
   });
 
-  it("coverage is computed on the trimmed text: a fact that is only named in the filler tail is asked for in the repair", async () => {
+  it("(documented) coverage trusts the writer's fact numbers, not words: a fact named only in the cut filler tail but claimed is not asked again", async () => {
     const fact = "enamel dentin cementum";
     const w = world(1, () => [fact]);
     const body = "Teeth are built in layers, and each layer has its own job in protecting the nerve.";
@@ -785,10 +785,8 @@ describe("fresh lessons", () => {
     expect(coveredFacts(trim(first).text, [fact]).ratio).toBe(0);
     lessonWriter = (n) => lessonOf(w, () => (n === 1 ? first : `${body} The three layers are enamel, dentin and cementum.`));
     const lesson = await getLesson(w.topic());
-    expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
-    expect(calls[1].content).toContain("These facts from the slides are missing");
-    expect(calls[1].content).toContain(`- ${fact}`);
-    expect(lesson.slides[0].explanation).toMatch(/cementum\.$/);
+    expect(calls.map((c) => c.purpose)).toEqual(["lesson"]);
+    expect(lesson.slides[0].explanation).toBe(body); // the tail is still cut
   });
 
   it("a writer reply with the filler spread across the entry and the intro leaves one clean stored lesson", async () => {

@@ -18,7 +18,7 @@ vi.mock("@/lib/ai", async (orig) => ({
         .map((block) => ({ id: Number(block.match(/^\[P(\d+)\]/)?.[1]), facts: [...block.matchAll(/^- (.+)$/gm)].map((m) => m[1]) }))
         .filter((b) => b.id)
         .map((b) => ({ page_id: b.id, explanation: `In other words: ${b.facts.join("; ")}.` }));
-      return { intro: "What this section is about.", slides, key_points: ["a"], connections: null };
+      return claimAll(opts.content, { intro: "What this section is about.", slides, key_points: ["a"], connections: null });
     }
     if (opts.purpose === "section quiz") {
       if (failQuiz) throw new Error("529 overloaded");
@@ -57,6 +57,7 @@ vi.mock("@/lib/user", async (orig) => ({
 import { db, getMeta, setMeta, type Topic } from "@/lib/db";
 import { FAILURE_COOLDOWN_MS, getLesson, getSectionQuiz, LESSON_VERSION, QUIZ_VERSION, scanLessonsForFiller, scanLessonsForFillerOnce, type QuizQuestion } from "@/lib/study";
 import { FILLER_SCAN_VERSION } from "@/lib/lessonCoverage";
+import { claimAll } from "./lessonClaims";
 import { recordQuizAnswer } from "@/lib/quizProgress";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";

@@ -73,22 +73,27 @@ type Mode = "copy" | "cover" | "miss" | "skip";
 const say = (m: Mode, k: number, tag: string) =>
   m === "copy" ? `${tag} says: ${F(k)}.` : m === "cover" ? `${tag} puts it backwards: ${REV(k)}.` : `${tag} has nothing on this one.`;
 const oneFactEach = (n: number) => Array.from({ length: n }, (_, k) => [F(k)]);
+/** A "miss" entry says it explains none of its slide's facts (the others are filled in with all of them by claimAll). */
 const lessonOf = (w: World, modes: Mode[], tag: string, extra: object = {}) => ({
   intro: "Intro.",
-  slides: w.pages.flatMap((page_id, k) => (modes[k] === "skip" ? [] : [{ page_id, explanation: say(modes[k], k, tag) }])),
+  slides: w.pages.flatMap((page_id, k) => (modes[k] === "skip" ? [] : [{ page_id, explanation: say(modes[k], k, tag), ...(modes[k] === "miss" ? { facts: [] } : {}) }])),
   key_points: ["k"],
   connections: null,
   ...extra,
 });
 const rep = (n: number, m: Mode): Mode[] => Array.from({ length: n }, () => m);
 
-/** Runs getLesson over a one-fact-per-slide section: the first writer answer is `first`, the repair (if asked) `second`. */
+const isRepair = (content: string) => content.includes("Some entries of this lesson need work");
+/** Runs getLesson over a one-fact-per-slide section: every part's writer answer is from `first`, the repair (if asked) from `second`. */
 async function twoSteps(first: Mode[], second: Mode[] | (() => unknown)) {
   const w = world(oneFactEach(first.length));
-  lessonWriter = (n) => (n === 1 ? lessonOf(w, first, "wone") : typeof second === "function" ? second() : lessonOf(w, second, "wtwo"));
+  lessonWriter = (n, content) => (!isRepair(content) ? lessonOf(w, first, "wone") : typeof second === "function" ? second() : lessonOf(w, second, "wtwo"));
   const lesson = await getLesson(w.topic());
-  const repairCall = calls.find((c) => c.purpose === "lesson repair");
-  const ask = repairCall ? repairCall.content.slice(repairCall.content.indexOf("Your previous lesson")) : "";
+  // (more than five slides to repair are asked in calls of at most five: all of them together here)
+  const ask = calls
+    .filter((c) => c.purpose === "lesson repair")
+    .map((c) => c.content.slice(c.content.indexOf("Some entries of this lesson need work")))
+    .join("\n\n");
   const kept = /wtwo/.test(lessonText(lesson)) ? "repair" : /wone/.test(lessonText(lesson)) ? "first" : "other";
   return { w, lesson, ask, kept, purposes: lessonCallsMade() };
 }
@@ -291,51 +296,53 @@ describe("coverage and copying together", () => {
     expect(quotedFacts(text, facts).quoted).toEqual([F(0)]);
   });
 
-  it("a lesson that explains but drops key words (coverage 0.7) and copies nothing: repair asks for the missing facts only", async () => {
+  it("a lesson that explains but leaves three facts unexplained and copies nothing: the repair asks to add just those", async () => {
     const r = await twoSteps([...rep(7, "cover"), ...rep(3, "miss")], rep(10, "cover"));
-    expect(r.purposes).toEqual(["lesson", "lesson repair"]);
-    expect(r.ask).toMatch(/^Your previous lesson left things out\. Write the whole lesson again/);
-    expect(r.ask).not.toMatch(/repeated/);
-    expect(r.ask).not.toMatch(/copied from the slides/);
-    for (const k of [7, 8, 9]) expect(r.ask).toContain(`- ${F(k)}`);
-    expect(r.ask).not.toContain(`- ${F(0)}`);
-    expect(r.kept).toBe("repair");
+    expect(r.purposes).toEqual(["lesson", "lesson", "lesson repair"]); // two parts of five, then the repair
+    expect(r.ask).not.toMatch(/repeats the slide's sentences/);
+    expect(r.ask).not.toMatch(/got no entry/);
+    for (const k of [7, 8, 9]) expect(r.ask).toContain(`To do: explain F${k + 1}, which the entry leaves out`);
+    for (const k of [0, 6]) expect(r.ask).not.toContain(`[P${r.w.pages[k]}]`);
+    // the addition goes after what was there
+    expect(r.lesson.slides[7].explanation).toBe(`${say("miss", 7, "wone")}\n\n${say("cover", 7, "wtwo")}`);
+    expect(r.lesson.slides[0].explanation).toBe(say("cover", 0, "wone"));
   });
 
-  it("a lesson that copies every slide (coverage 1, quoted 1): repair says 'repeated', lists every line, has no 'missing' block", async () => {
+  it("a lesson that copies every slide: the repair asks to rewrite each, with the entry as written, and the rewrites replace the copies", async () => {
     const r = await twoSteps(rep(4, "copy"), rep(4, "cover"));
     expect(r.purposes).toEqual(["lesson", "lesson repair"]);
-    expect(r.ask).toMatch(/^Your previous lesson repeated the slides instead of explaining them\. Write the whole lesson again, keeping every fact/);
-    expect(r.ask).not.toMatch(/left things out/);
-    expect(r.ask).not.toMatch(/are missing/);
+    expect(r.ask.match(/To do: the entry repeats the slide's sentences instead of explaining them\. Write it again in your own words/g)).toHaveLength(4);
+    expect(r.ask).not.toMatch(/leaves out/);
     expect(r.ask).not.toMatch(/got no entry/);
-    for (let k = 0; k < 4; k++) expect(r.ask).toContain(`- ${F(k)}`);
+    for (let k = 0; k < 4; k++) expect(r.ask).toContain(say("copy", k, "wone"));
     expect(r.kept).toBe("repair");
+    expect(lessonText(r.lesson)).not.toContain("wone");
   });
 
-  it("copies plus one fact missing but coverage still 0.9: the wording is the 'left things out and repeated' one, with both lists", async () => {
-    // 10 facts: 4 copied, 5 covered, 1 missed
+  it("copying is judged per part: only the copying part's copied slides are re-asked, together with a missing fact elsewhere", async () => {
+    // part 1 (slides 1-5): 4 of 5 copied; part 2 (slides 6-10): explained, one fact not
     const r = await twoSteps([...rep(4, "copy"), ...rep(5, "cover"), "miss"], rep(10, "cover"));
-    expect(r.purposes).toEqual(["lesson", "lesson repair"]);
-    expect(r.ask).toMatch(/^Your previous lesson left things out and repeated the slides instead of explaining them\./);
-    expect(r.ask).toContain(`- ${F(9)}`);
-    expect(r.ask).toMatch(/copied from the slides word for word/);
-    expect(r.ask).toContain(`- ${F(0)}`);
+    expect(r.purposes).toEqual(["lesson", "lesson", "lesson repair"]);
+    expect(r.ask.match(/repeats the slide's sentences/g)).toHaveLength(4);
+    expect(r.ask).toContain("To do: explain F10, which the entry leaves out");
+    expect(r.ask).not.toContain(`[P${r.w.pages[4]}]`);
   });
 
-  it("copies together with a slide left out: the left-out slide is named and the wording covers both", async () => {
+  it("copies together with a slide left out: the left-out slide is asked to be written", async () => {
     const r = await twoSteps([...rep(5, "copy"), ...rep(4, "cover"), "skip"], rep(10, "cover"));
-    expect(r.ask).toMatch(/^Your previous lesson left things out and repeated/);
-    expect(r.ask).toMatch(/got no entry; add one for each:\n- \[P\d+\] L1\.pdf slide 10/);
+    expect(r.purposes).toEqual(["lesson", "lesson", "lesson repair", "lesson repair"]); // six slides to fix: 3 + 3
+    expect(r.ask.match(/repeats the slide's sentences/g)).toHaveLength(5);
+    expect(r.ask).toMatch(/\[P\d+\] L1\.pdf slide 10: slide 9\ns\n- F10: .*\nTo do: this slide got no entry\. Write it, explaining F10\./);
+    expect(r.lesson.slides).toHaveLength(10);
   });
 
-  it("nothing wrong (coverage 1, 20% copied, no slide left out): no repair", async () => {
-    const r = await twoSteps([...rep(2, "copy"), ...rep(8, "cover")], rep(10, "cover"));
-    expect(r.purposes).toEqual(["lesson"]);
+  it("nothing wrong (every fact explained, one copy in five in each part, no slide left out): no repair", async () => {
+    const r = await twoSteps(["copy", ...rep(4, "cover"), "copy", ...rep(4, "cover")], rep(10, "cover"));
+    expect(r.purposes).toEqual(["lesson", "lesson"]);
     expect(r.kept).toBe("first");
   });
 
-  it("copied lines are listed once each even when the same fact stands on several slides", async () => {
+  it("a fact standing on several slides keeps one number everywhere, in the slide lists and in the repair", async () => {
     const shared = F(0);
     const w = world([[shared], [shared], [shared, F(1)], [F(2)]]);
     const copyAll = () => ({
@@ -344,43 +351,40 @@ describe("coverage and copying together", () => {
       key_points: ["k"],
       connections: null,
     });
-    lessonWriter = (n) => (n === 1 ? copyAll() : { ...copyAll(), slides: w.pages.map((page_id, i) => ({ page_id, explanation: `wtwo: ${[REV(0), REV(0), `${REV(0)}. ${REV(1)}`, REV(2)][i]}` })) });
+    lessonWriter = (n, content) =>
+      isRepair(content) ? { ...copyAll(), slides: w.pages.map((page_id, i) => ({ page_id, explanation: `wtwo: ${[REV(0), REV(0), `${REV(0)}. ${REV(1)}`, REV(2)][i]}` })) } : copyAll();
     await getLesson(w.topic());
+    expect(calls[0].content.match(new RegExp(`- F1: ${shared}`, "g"))).toHaveLength(3);
+    expect(calls[0].content).toContain(`- F2: ${F(1)}`);
+    expect(calls[0].content).toContain(`- F3: ${F(2)}`);
     const c = calls.find((x) => x.purpose === "lesson repair")!.content;
-    const ask = c.slice(c.indexOf("Your previous lesson"));
-    expect(ask.split(`- ${shared}\n`).length - 1 + (ask.endsWith(`- ${shared}`) ? 1 : 0)).toBe(1);
-    expect(ask).toContain(`- ${F(1)}`);
-    expect(ask).toContain(`- ${F(2)}`);
-    // The same slide list in the prompt above repeats the fact per slide, the repair block does not.
-    expect(c.split(`- ${shared}`).length - 1).toBe(4); // 3 slide-list lines + 1 repair line
+    expect(c).toContain("Write it again in your own words, explaining F1, F2.");
+    expect(c).toContain("Write it again in your own words, explaining F3.");
   });
 
-  it("the same fact written with other capitals or punctuation on two slides counts once", async () => {
+  it("the same fact written with other capitals or punctuation on two slides gets one number", async () => {
     const w = world([[F(0)], [F(0).toUpperCase() + "!"], [F(1)], [F(2)]]);
-    lessonWriter = (n) =>
-      n === 1
-        ? { intro: "I", slides: w.pages.map((page_id, i) => ({ page_id, explanation: [F(0), F(0), F(1), F(2)][i] })), key_points: [], connections: null }
-        : { intro: "I", slides: w.pages.map((page_id, i) => ({ page_id, explanation: [REV(0), REV(0), REV(1), REV(2)][i] })), key_points: [], connections: null };
+    lessonWriter = () => ({ intro: "I", slides: w.pages.map((page_id, i) => ({ page_id, explanation: [REV(0), REV(0), REV(1), REV(2)][i] })), key_points: [], connections: null });
     await getLesson(w.topic());
-    const c = calls.find((x) => x.purpose === "lesson repair")!.content;
-    const ask = c.slice(c.indexOf("Your previous lesson"));
-    expect(ask.match(new RegExp(F(0), "gi"))).toHaveLength(1);
+    expect(calls[0].content).toContain(`- F1: ${F(0)}\n`);
+    expect(calls[0].content).toContain(`- F1: ${F(0).toUpperCase()}!`);
+    expect(calls[0].content).toContain(`- F2: ${F(1)}`);
+    expect(lessonCallsMade()).toEqual(["lesson"]);
   });
 
-  it("(documented) a multi-line fact is put in the repair prompt raw, so its line break shows (the slide list collapses it)", async () => {
+  it("a multi-line fact is one line in the repair prompt too, so it can't pose as a bullet of its own", async () => {
     const odd = `${F(0)}\n- an injected bullet`;
     const w = world([[odd], [F(1)], [F(2)]]); // three judged facts, all copied
-    lessonWriter = (n) => ({
+    lessonWriter = (n, content) => ({
       intro: "I",
-      slides: w.pages.map((page_id, i) => ({ page_id, explanation: n === 1 ? [`${F(0)} an injected bullet`, F(1), F(2)][i] : "nothing" })),
+      slides: w.pages.map((page_id, i) => ({ page_id, explanation: isRepair(content) ? "explained now" : [`${F(0)} an injected bullet`, F(1), F(2)][i] })),
       key_points: [],
       connections: null,
     });
     await getLesson(w.topic());
     const c = calls.find((x) => x.purpose === "lesson repair")!.content;
-    const ask = c.slice(c.indexOf("Your previous lesson"));
-    expect(ask).toContain(`- ${F(0)}\n- an injected bullet`);
-    expect(c.slice(0, c.indexOf("Your previous lesson"))).not.toContain("\n- an injected bullet");
+    expect(c).toContain(`- F1: ${F(0)} - an injected bullet`);
+    expect(c).not.toContain("\n- an injected bullet");
   });
 
   it("a section whose facts are all under five words is never repaired for copying, whatever the lesson does", async () => {
@@ -405,71 +409,34 @@ describe("coverage and copying together", () => {
       connections: null,
     });
     const lesson = await getLesson(w.topic());
-    // 1 of 1 judged facts would be ratio 1, but a section with fewer than three judged facts is never called a copier.
+    // 1 of 1 judged facts would be ratio 1, but a part with fewer than three judged facts is never called a copier.
     expect(lessonCallsMade()).toEqual(["lesson"]);
     expect(lesson.version).toBe(LESSON_VERSION);
   });
 });
 
-describe("the repair acceptance rule, branch by branch", () => {
-  it("no copies: a repair with the same coverage is kept; one with a single fact fewer is not (no slack)", async () => {
-    const first = [...rep(14, "cover"), ...rep(6, "miss")]; // 0.7
-    const same = await twoSteps(first, [...rep(14, "cover"), ...rep(6, "miss")]);
-    expect(same.kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    const worse = await twoSteps(first, [...rep(13, "cover"), ...rep(7, "miss")]); // 0.65
-    expect(worse.purposes).toEqual(["lesson", "lesson repair"]);
-    expect(worse.kept).toBe("first");
+describe("merging the repair, slide by slide", () => {
+  it("a rewrite replaces a copied entry when it explains at least the facts the copy claimed; one that claims fewer is ignored", async () => {
+    const w = world(oneFactEach(4));
+    lessonWriter = (n, content) =>
+      isRepair(content)
+        ? { slides: w.pages.map((page_id, k) => ({ page_id, explanation: say("cover", k, "wtwo"), ...(k >= 2 ? { facts: [] } : {}) })) }
+        : lessonOf(w, rep(4, "copy"), "wone");
+    const lesson = await getLesson(w.topic());
+    expect(lesson.slides.map((s) => s.explanation)).toEqual([say("cover", 0, "wtwo"), say("cover", 1, "wtwo"), say("copy", 2, "wone"), say("copy", 3, "wone")]);
   });
 
-  it("with copies: the repair may lose 0.1 of coverage (1 -> 0.9 is kept), not more (1 -> 0.8 is not)", async () => {
-    const first = rep(10, "copy");
-    expect((await twoSteps(first, [...rep(9, "cover"), "miss"])).kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    expect((await twoSteps(first, [...rep(8, "cover"), ...rep(2, "miss")])).kept).toBe("first");
+  it("a left-out slide is written by the repair; one the repair doesn't return stays out", async () => {
+    const r = await twoSteps([...rep(3, "cover"), "skip", "skip"], [...rep(3, "cover"), "cover", "skip"]);
+    expect(r.ask.match(/got no entry/g)).toHaveLength(2);
+    expect(r.lesson.slides.map((s) => s.page_id)).toEqual(r.w.pages.slice(0, 4));
+    expect(r.lesson.slides[3].explanation).toBe(say("cover", 3, "wtwo"));
   });
 
-  // Input: 10 facts; first lesson copies 4, explains 4, misses 2 (coverage 8/10 = 0.8, quoted 0.4, so a repair is asked);
-  // the repair explains 7 and misses 3 (coverage 0.7, quoted 0). The rule says "cover2 >= cover - 0.1", one fact of ten.
-  // Wrong output: the repair is thrown away and the lesson that copies 40% of the slides is stored.
-  // 0.8 - 0.1 is 0.7000000000000001 in floating point, so 7/10 = 0.7 fails the comparison. src/lib/study.ts line 277.
-  it("fixed: the 0.1 coverage slack is lost to floating point: 0.8 -> 0.7 is refused although it is exactly 0.1", async () => {
-    const r = await twoSteps([...rep(4, "copy"), ...rep(4, "cover"), ...rep(2, "miss")], [...rep(7, "cover"), ...rep(3, "miss")]);
-    expect(r.purposes).toEqual(["lesson", "lesson repair"]);
-    expect(r.kept).toBe("repair");
-  });
-
-  it("the quoted limit is max(first ratio, 0.3): a repair that copies as much as before is kept, one that copies more is not", async () => {
-    const first = [...rep(5, "copy"), ...rep(5, "cover")]; // 0.5
-    expect((await twoSteps(first, first)).kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    expect((await twoSteps(first, [...rep(6, "copy"), ...rep(4, "cover")])).kept).toBe("first");
-    calls.length = 0;
-    lessonCalls = 0;
-    // fewer copies but still above the limit is better, so kept
-    expect((await twoSteps(first, [...rep(4, "copy"), ...rep(6, "cover")])).kept).toBe("repair");
-  });
-
-  it("when the repair was asked for coverage only (quoted 0.2), the repair may copy up to 0.3 but not 0.4", async () => {
-    const first = [...rep(2, "copy"), ...rep(5, "cover"), ...rep(3, "miss")]; // cover 0.7, quoted 0.2
-    expect((await twoSteps(first, [...rep(3, "copy"), ...rep(7, "cover")])).kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    expect((await twoSteps(first, [...rep(4, "copy"), ...rep(6, "cover")])).kept).toBe("first");
-  });
-
-  it("slides left out: a repair that restores some is kept, one that restores none but explains is kept, one that loses more is not", async () => {
-    const first: Mode[] = [...rep(6, "cover"), ...rep(2, "copy"), "skip", "skip"]; // left 2, cover 0.8, quoted 0.2
-    expect((await twoSteps(first, [...rep(9, "cover"), "skip"])).kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    expect((await twoSteps(first, [...rep(8, "cover"), "skip", "skip"])).kept).toBe("repair");
-    calls.length = 0;
-    lessonCalls = 0;
-    expect((await twoSteps(first, [...rep(7, "cover"), "skip", "skip", "skip"])).kept).toBe("first");
+  it("no whole-lesson rewrite: the repair only ever asks for the slides that need it, never the whole section", async () => {
+    const r = await twoSteps([...rep(4, "cover"), "miss"], rep(5, "cover"));
+    expect(r.ask.match(/^\[P\d+\]/gm)).toHaveLength(1);
+    expect(r.ask).not.toMatch(/Write the whole lesson/);
   });
 
   it("a repair that throws leaves the first lesson, stored and stamped with the current version", async () => {
@@ -487,19 +454,13 @@ describe("the repair acceptance rule, branch by branch", () => {
   });
 
   it("a repair that returns no slides, junk or null leaves the first lesson", async () => {
-    for (const junk of [() => ({}), () => ({ slides: "nope", intro: 5 }), () => ({ intro: "x", slides: [null, { page_id: 99999, explanation: "wtwo" }] })]) {
+    for (const junk of [() => ({}), () => ({ slides: "nope", intro: 5 }), () => ({ intro: "x", slides: [null, { page_id: 99999, explanation: "wtwo" }] }), () => null]) {
       calls.length = 0;
       lessonCalls = 0;
       const r = await twoSteps(rep(4, "copy"), junk);
       expect(r.kept, String(junk)).toBe("first");
       expect(r.lesson.slides).toHaveLength(4);
     }
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    calls.length = 0;
-    lessonCalls = 0;
-    const r = await twoSteps(rep(4, "copy"), () => null);
-    err.mockRestore();
-    expect(r.kept).toBe("first");
   });
 
   it("a first answer without slides is repaired (every slide with facts is left out) and the repair is kept", async () => {
@@ -684,15 +645,17 @@ describe("rewriting a stored version-3 lesson through getLesson", () => {
       throw new Error("down");
     };
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const got = await getLesson(w.topic());
     err.mockRestore();
+    warn.mockRestore();
     expect(lessonText(got)).toContain("old");
     expect(JSON.parse(w.topic().lesson_json!).version).toBe(3); // untouched
-    expect(lessonCallsMade()).toEqual(["lesson"]);
+    expect(lessonCallsMade()).toEqual(["lesson", "lesson"]); // the part is tried twice
     // the next open tries again (and a working writer wins)
     lessonWriter = () => lessonOf(w, rep(4, "cover"), "new");
     expect(lessonText(await getLesson(w.topic()))).toContain("new");
-    expect(lessonCallsMade().slice(0, 2)).toEqual(["lesson", "lesson"]);
+    expect(lessonCallsMade()).toEqual(["lesson", "lesson", "lesson"]);
   });
 
   it("a rewrite that still copies is stored as v4 anyway and never asked again (the repair is the only retry)", async () => {

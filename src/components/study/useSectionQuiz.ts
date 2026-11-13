@@ -102,6 +102,7 @@ export function useSectionQuiz(sessionId: number, position: number) {
       regenRunning.current = false;
     }
   }
+
   /** "Retake this quiz": the same questions, her answers for this section cleared (asks first). */
   const [retaking, setRetaking] = useState(false);
   async function retake() {
@@ -123,6 +124,7 @@ export function useSectionQuiz(sessionId: number, position: number) {
       setRetaking(false);
     }
   }
+
   /** "Try again" after the quiz didn't load. */
   const retry = () => {
     setError("");
@@ -166,6 +168,7 @@ export function useSectionQuiz(sessionId: number, position: number) {
     if (i !== index) moved.current = true;
     setIndex(i);
   };
+
   // Report: the question leaves this quiz (and its score) at once; the server hides it in every copy of the exam.
   const report = async (questionId: string | undefined, reason: string) => {
     if (!quiz) return;

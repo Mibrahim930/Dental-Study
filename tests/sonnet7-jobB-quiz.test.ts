@@ -227,12 +227,14 @@ describe("the checking pass", () => {
     expect(QUIZ_VERSION).toBe(5);
   });
 
-  it("judge rejects ok:false for the same question twice in verdicts - no double count", async () => {
+  it("a judge that names the same question twice (its numbers don't line up with the questions sent) is ignored: every question kept, nothing refilled", async () => {
     const w = world(5);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     verdicts = (n, call) => (call === 1 ? [{ n: 1, ok: false, reason: "a" }, { n: 1, ok: false, reason: "b" }] : []);
     expect(await getSectionQuiz(w.topic())).toHaveLength(sizeFor(5));
-    // Exactly one slot was refilled.
-    expect([...calls.filter((c) => c.purpose === "section quiz")[2].content.matchAll(/^Q\d+:/gm)]).toHaveLength(1);
+    expect(calls.filter((c) => c.purpose === "section quiz")).toHaveLength(2); // the two halves; no repair
+    expect(warn.mock.calls.some((c) => /don't match/.test(String(c[0])))).toBe(true);
+    warn.mockRestore();
   });
 
   it("QUIZ_JUDGE=0 makes no check calls even when repair is needed", async () => {
