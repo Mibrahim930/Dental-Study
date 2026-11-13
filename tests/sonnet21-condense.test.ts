@@ -258,7 +258,7 @@ describe("planQuizByFacts: invariants over random shapes", () => {
       const slides = randomShape(r);
       const size = 1 + Math.floor(r() * 40);
       const entries = oracleEntries(slides);
-      const plan = planQuizByFacts(slides, size, "condense");
+      const plan = planQuizByFacts(slides, size);
       const label = `shape #${t} size ${size} (${slides.length} slides, ${entries.length} entries)`;
       if (slides.length === 0) {
         expect(plan, label).toHaveLength(size);

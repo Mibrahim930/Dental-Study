@@ -165,9 +165,7 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
     system: SYSTEM,
     effort: "medium",
     maxTokens: 32000,
-    // Cached: the system prompt is the same for every lecture of a build, and a Rebuild or retry soon after sends the
-    // same lecture again. The lecture's slides come first and the concept list (which changes as she studies) after.
-    cache: true,
+    // The lecture's slides come first and the concept list (which changes as she studies) after.
     content:
       `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}\n\n` +
       `Existing concepts from earlier exams (${concepts.length}, most recent first):\n${concepts.join("\n") || "(none yet)"}`,
