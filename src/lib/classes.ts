@@ -182,10 +182,17 @@ function copyExam(sourceId: number, userId: number): number {
     const caseMap = new Map<number, number>();
     const insertCase = db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) SELECT ?, scenario, patient_box, ? FROM cases WHERE id = ?");
     const insertQ = db.prepare(
-      `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id, case_id, root_question_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id, case_id, root_question_id, fact_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    for (const q of db.prepare("SELECT * FROM questions WHERE exam_id = ? AND flagged = 0").all(sourceId) as Question[]) {
+    // A fact key is the fact's text and carries over as it is; a slide's key names the slide, so it follows the slide.
+    const mapFactKey = (key: string | null) => {
+      const slide = key != null ? /^slide:(\d+)$/.exec(key) : null;
+      if (!slide) return key;
+      const page = mapPage(Number(slide[1]));
+      return page != null ? `slide:${page}` : null;
+    };
+    for (const q of db.prepare("SELECT * FROM questions WHERE exam_id = ? AND flagged = 0").all(sourceId) as (Question & { fact_key: string | null })[]) {
       let caseId: number | null = null;
       if (q.case_id != null) {
         if (!caseMap.has(q.case_id)) {
@@ -209,6 +216,7 @@ function copyExam(sourceId: number, userId: number): number {
         mapPage(q.image_page_id),
         caseId,
         q.root_question_id ?? q.id,
+        mapFactKey(q.fact_key),
       );
     }
     return examId;

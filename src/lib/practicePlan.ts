@@ -1,7 +1,6 @@
-// Deciding what goes into a new practice exam: which earlier questions come back, which topics get more questions,
-// and what the AI should avoid repeating. Pure database logic (no AI calls), so it can be tested directly.
+// What earlier practice says about a new practice exam: which questions may come back, what she has pending, when
+// each section was last practised, and the scope. Pure database logic (no AI calls); lib/examPlan.ts plans the exam from it.
 import { db, type Topic } from "./db";
-import { mastery, type ConceptRow } from "./memory";
 
 export type Confidence = "guess" | "unsure" | "sure";
 export const CONFIDENCE: Confidence[] = ["guess", "unsure", "sure"];
@@ -166,22 +165,6 @@ export function isValidChoice(options: string[], correctIndex: number): boolean 
   );
 }
 
-export type FocusPoint = { concept: string | null; source_page_id: number | null; stem: string; why: "missed" | "unsure" };
-
-/** Weak spots per topic: questions missed, or answered right but marked guessed/unsure, on the latest try. */
-export function focusPoints(examId: number, topicIds: number[], pageIds: Set<number> | null = null): Map<number, FocusPoint[]> {
-  const out = new Map<number, FocusPoint[]>();
-  for (const r of latestResults(examId).filter(inScope(topicIds, false, pageIds))) {
-    if (r.topic_id == null) continue;
-    const why = r.correct === 0 ? "missed" : r.confidence === "guess" || r.confidence === "unsure" ? "unsure" : null;
-    if (!why) continue;
-    const list = out.get(r.topic_id) ?? [];
-    list.push({ concept: r.concept, source_page_id: r.source_page_id, stem: r.stem, why });
-    out.set(r.topic_id, list);
-  }
-  return out;
-}
-
 /** What the student will see come back in the next exam over this scope (for the start form). */
 export function pendingCounts(examId: number, topicIds: number[] = []): { missed: number; unsure: number } {
   const results = latestResults(examId).filter(inScope(topicIds));
@@ -226,75 +209,6 @@ export function lastPracticed(examId: number): Map<number, number> {
     )
     .all(examId) as { topic_id: number; last: number }[];
   return new Map(rows.map((r) => [r.topic_id, r.last]));
-}
-
-/**
- * How many new questions each topic gets.
- * Coverage first: every topic gets at least one question, except topics already covered by a missed question
- * coming back. If the exam is too short for that, the topics practised longest ago (or never) go first, so the
- * ones left out lead the next exam.
- * The rest is weighted. Focus on: weak topics (low mastery, recent misses and unsure answers) get more.
- * Focus off: spread by topic size. Lecture-emphasized topics get a little more either way.
- */
-export function allocate(
-  topics: Topic[],
-  total: number,
-  focus: Map<number, FocusPoint[]> | null,
-  coverage: { last?: Map<number, number>; covered?: Set<number> } = {},
-): { topic: Topic; count: number }[] {
-  if (topics.length === 0 || total <= 0) return [];
-  const weights = topicWeights(topics, focus);
-  const counts = topics.map(() => 0);
-
-  // 1. One question for each topic not already covered; stalest first when there isn't room for all.
-  const order = topics
-    .map((_, i) => i)
-    .filter((i) => !coverage.covered?.has(topics[i].id))
-    .sort((a, b) => (coverage.last?.get(topics[a].id) ?? 0) - (coverage.last?.get(topics[b].id) ?? 0) || weights[b] - weights[a]);
-  for (const i of order.slice(0, total)) counts[i] = 1;
-  const rest = total - Math.min(total, order.length);
-
-  // 2. The rest by weight (largest remainder).
-  if (rest > 0) {
-    const sum = weights.reduce((a, b) => a + b, 0);
-    const extra = weights.map((w) => (w / sum) * rest);
-    extra.forEach((x, i) => (counts[i] += Math.floor(x)));
-    let left = rest - extra.reduce((a, x) => a + Math.floor(x), 0);
-    for (const i of extra.map((_, i) => i).sort((a, b) => (extra[b] % 1) - (extra[a] % 1))) {
-      if (left-- <= 0) break;
-      counts[i]++;
-    }
-  }
-  return topics.map((topic, i) => ({ topic, count: counts[i] })).filter((a) => a.count > 0);
-}
-
-function topicWeights(topics: Topic[], focus: Map<number, FocusPoint[]> | null): number[] {
-  return topics.map((t) => {
-    const slides = Math.max(1, (JSON.parse(t.page_ids) as number[]).length);
-    const emphasis = t.emphasized ? 2 : 1;
-    if (!focus) return emphasis * slides;
-    const concepts = db
-      .prepare("SELECT c.attempts, c.correct FROM concepts c JOIN topic_concepts tc ON tc.concept_id = c.id WHERE tc.topic_id = ?")
-      .all(t.id) as ConceptRow[];
-    const ms = concepts.map(mastery).filter((m): m is number => m != null);
-    const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 0.5;
-    return emphasis * (1.5 - avg) * Math.sqrt(slides) * (1 + (focus.get(t.id)?.length ?? 0) / 3);
-  });
-}
-
-/** Questions already written for a topic, newest first, so the AI can be told not to repeat them. */
-export function askedStems(topicId: number, limit = 60): string[] {
-  return (db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL ORDER BY id DESC LIMIT ?").all(topicId, limit) as { stem: string }[]).map(
-    (r) => (r.stem.length > 160 ? r.stem.slice(0, 157) + "…" : r.stem),
-  );
-}
-
-/** How many questions have been written from each slide of a topic. */
-export function slideCoverage(topicId: number): Map<number, number> {
-  const rows = db
-    .prepare("SELECT source_page_id AS id, COUNT(*) AS n FROM questions WHERE topic_id = ? AND source_page_id IS NOT NULL GROUP BY source_page_id")
-    .all(topicId) as { id: number; n: number }[];
-  return new Map(rows.map((r) => [r.id, r.n]));
 }
 
 /** A shuffled copy (Fisher–Yates): every order is equally likely, unlike sort(() => Math.random() - 0.5). */

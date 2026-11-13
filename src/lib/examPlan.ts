@@ -644,7 +644,7 @@ export type Coverage = { facts: number; tested: number; right: number; inThisExa
  * - tested: those she has answered a question on at least once; on slides with old questions written before fact
  *   keys, as many of the slide's untested facts as she answered old questions from it (rule 6);
  * - right: of those, how many her latest answer got right (an unsure right answer is right);
- * - inThisExam (with the exam's slots): distinct keys in scope among its slots that hold a question ("done").
+ * - inThisExam (with the exam's slots): distinct keys in scope among the slots of its plan, written yet or not (what the exam plans to cover).
  * The scope is read like a practice exam's (practicePlan Scope: the whole exam, chosen sections or chosen lectures).
  */
 export function examCoverage(examId: number, scope: Scope, slots?: Slot[]): Coverage {
@@ -672,7 +672,7 @@ export function examCoverage(examId: number, scope: Scope, slots?: Slot[]): Cove
   const out: Coverage = { facts: facts.length, tested, right };
   if (slots) {
     const keys = new Set(facts.map((f) => f.key));
-    out.inThisExam = new Set(slots.filter((s) => s.state === "done" && keys.has(s.key)).map((s) => s.key)).size;
+    out.inThisExam = new Set(slots.filter((s) => keys.has(s.key)).map((s) => s.key)).size;
   }
   return out;
 }

@@ -396,7 +396,7 @@ describe("readers and buildExamPlan", () => {
       { n: 3, topic_id: t, page_id: p3, fact: "f3a", key: factKey("f3a"), kind: "recall", why: "new", state: "todo", question_id: null },
       { n: 4, topic_id: t, page_id: null, fact: null, key: "question:9", kind: "recall", why: "retry", state: "done", question_id: 9 },
     ] as const;
-    expect(examCoverage(w.examId, { kind: "topics", topicIds: [t] }, [...slots]).inThisExam).toBe(1);
+    expect(examCoverage(w.examId, { kind: "topics", topicIds: [t] }, [...slots]).inThisExam).toBe(2); // planned counts too: f1a and the still-unwritten f3a
 
     // buildExamPlan: the missed f1b comes back as it was (via retryQuestions), unsure f1a leads the new slots,
     // slide 2's facts (two old questions, two facts) go last; slide 3 (one old unanswered question) before them.

@@ -7,6 +7,7 @@ import { plannerSettings, todayIn } from "./planner";
 import { pendingCountsByTopic } from "./practicePlan";
 import { examProgress } from "./readiness";
 import { groupByLecture, sectionPlaces } from "./lectures";
+import { examCoverage } from "./examPlan";
 
 export type DocWithProgress = DocumentRow & { done: number; failed: number; batch_id: string | null };
 
@@ -109,6 +110,8 @@ export function loadExamPage(userId: number, examId: number) {
   // The one-time upgrade (or "Re-split every lecture") is turning an old-style map into lecture maps.
   const reorganising = exam.topic_status === "building" && topics.some((t) => t.document_id == null);
   const mapRow = { examId: id, conceptsByTopic, studiedIds, current: started ? lastPosition : null };
+  // The practice card: how many of the facts in this exam's lectures she has been tested on (a few ms; null without sections).
+  const coverage = topics.length > 0 ? examCoverage(id, { kind: "all" }) : null;
 
   return {
     exam,
@@ -141,5 +144,6 @@ export function loadExamPage(userId: number, examId: number) {
     notes,
     reorganising,
     mapRow,
+    coverage,
   };
 }

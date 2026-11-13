@@ -11,6 +11,8 @@ import { QuestionNav } from "./QuestionNav";
 import { ConfidencePicker } from "./ConfidencePicker";
 import { FinishConfirm } from "./FinishConfirm";
 import { AttemptError } from "./AttemptError";
+import { ExamCoverage, ExamProgress } from "./ExamProgress";
+import { planFields } from "@/components/examProgressText";
 
 /** A practice exam: written (with a waiting screen), answered one question at a time, then the results. */
 export function AttemptRunner({ attemptId, initial }: { attemptId: number; initial: AttemptView }) {
@@ -52,7 +54,9 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
   }
 
   const left = questions.length - answeredCount;
-  const requestFinish = (at: "top" | "bottom") => (left > 0 ? setConfirmAt(at) : void finish());
+  // Questions still to be written are lost if she finishes now, so that asks first too.
+  const stillWriting = planFields(view).pending;
+  const requestFinish = (at: "top" | "bottom") => (left > 0 || stillWriting > 0 ? setConfirmAt(at) : void finish());
   const confidence = <ConfidencePicker q={q} current={current} pending={pending} saving={saving} saveError={saveError} lockIn={(c) => lockIn(q, c)} />;
 
   return (
@@ -72,6 +76,8 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
       <div className="px-1">
         <h1 className="text-[26px] font-extrabold tracking-[-0.03em]">Practice exam · {tutor ? "Learn" : "Timed"}</h1>
       </div>
+      <ExamCoverage view={view} />
+      <ExamProgress view={view} count={questions.length} />
 
       <QuestionNav questions={questions} index={index} tutor={tutor} goto={goto} />
 
@@ -105,7 +111,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
           <button className="btn-primary btn-lg" disabled={finishing} onClick={() => requestFinish("bottom")}>Finish exam</button>
         )}
       </div>
-      <FinishConfirm open={confirmAt != null} left={left} finishing={finishing} finish={finish} onClose={() => setConfirmAt(null)} />
+      <FinishConfirm open={confirmAt != null} left={left} stillWriting={stillWriting} finishing={finishing} finish={finish} onClose={() => setConfirmAt(null)} />
     </div>
   );
 }

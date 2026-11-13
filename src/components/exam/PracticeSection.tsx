@@ -3,11 +3,13 @@ import { sinceText } from "@/lib/format";
 import { PracticeForm } from "@/components/PracticeForm";
 import { Icon, ICONS, MasteryChip } from "@/components/ui";
 import type { ExamPageData } from "@/lib/examPage";
+import { examCoverageLine } from "@/components/examProgressText";
 
 /** Practice exams: the one she stepped away from, the form for a new one, and past attempts. */
 export function PracticeSection({ data, focusWeak }: { data: ExamPageData; focusWeak: boolean }) {
   const { exam, topics, practiceTopics, docs, openAttempt, attempts } = data;
   const id = exam.id;
+  const covered = examCoverageLine(data.coverage);
   return (
     <section className="card flex flex-col gap-4">
       <h2 className="section-title">Practice exam</h2>
@@ -15,12 +17,15 @@ export function PracticeSection({ data, focusWeak }: { data: ExamPageData; focus
       {topics.length === 0 ? (
         <p className="text-[15px] text-muted-foreground">Available once your lectures are split into sections.</p>
       ) : (
-        <PracticeForm
+        <>
+          {covered && <p className="text-[15px] font-medium text-muted-foreground">{covered}</p>}
+          <PracticeForm
           examId={id}
           topics={practiceTopics}
           lectures={docs.map((d) => ({ id: d.id, name: d.filename.replace(/\.pdf$/i, "") }))}
           focusWeak={focusWeak}
-        />
+          />
+        </>
       )}
       {attempts.length > 0 && <PastAttempts data={data} />}
     </section>

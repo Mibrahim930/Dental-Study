@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { AttemptView } from "@/lib/attemptView";
 import { Icon, ICONS } from "@/components/ui";
 import { SLOW_AFTER_MS } from "./useAttempt";
+import { planFields, plannedStep, writtenStep } from "@/components/examProgressText";
 
 /** Loading screen while the AI writes the exam: real steps from the exam's plan, and a spinning ring. */
 export function Writing({ view, startedMs }: { view: AttemptView; startedMs: number }) {
@@ -16,7 +17,17 @@ export function Writing({ view, startedMs }: { view: AttemptView; startedMs: num
   }, [slow, startedMs]);
   const plan = view.plan;
   const cases = plan?.style === "caseset";
-  const steps: { label: string; state: "done" | "active" | "todo" }[] = plan
+  // An exam written to a plan reports real progress: how many questions the plan holds and how many are written.
+  const { planned, written } = planFields(view);
+  const sections = typeof plan?.topics === "number" ? plan.topics : null;
+  const steps: { label: string; state: "done" | "active" | "todo" }[] = planned != null && planned > 0
+    ? [
+        { label: plannedStep(planned, sections), state: "done" },
+        ...(plan && plan.retried > 0 ? [{ label: `Brought back ${plan.retried} you missed`, state: "done" as const }] : []),
+        { label: writtenStep(written), state: "active" },
+        { label: "Checking answers against your slides", state: "todo" },
+      ]
+    : plan
     ? [
         {
           label: cases ? `Planned ${plan.cases} case set${plan.cases === 1 ? "" : "s"} across ${plan.topics} topic${plan.topics === 1 ? "" : "s"}` : `Picked ${plan.size} questions across ${plan.topics} topic${plan.topics === 1 ? "" : "s"}`,

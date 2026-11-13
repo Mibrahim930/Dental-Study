@@ -44,11 +44,13 @@ export async function register() {
     } catch (err) {
       console.error("Repairing questions that mention a picture failed", err);
     }
-    // Practice exams that were being written when the server stopped would wait forever: they become "error" (Start again).
+    // Practice exams that were being written when the server stopped would wait forever: one with questions written
+    // becomes a short exam that finishes itself when opened; one with none becomes "error" (Start again).
     try {
-      const { failStaleAttempts } = await import("./lib/practice");
-      const stale = failStaleAttempts();
-      if (stale) console.log(`Marked ${stale} practice exam(s) interrupted while being written as failed`);
+      const { recoverStaleAttempts } = await import("./lib/practice");
+      const { recovered, failed } = recoverStaleAttempts();
+      if (recovered) console.log(`Kept ${recovered} practice exam(s) interrupted while being written; the rest is written when they are opened`);
+      if (failed) console.log(`Marked ${failed} practice exam(s) interrupted while being written as failed`);
     } catch (err) {
       console.error("Marking interrupted practice exams failed", err);
     }

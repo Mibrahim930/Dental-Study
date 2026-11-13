@@ -1,8 +1,29 @@
 import { db } from "./db";
 import { parseNotes } from "./processing";
 import type { Confidence } from "./practicePlan";
-import type { AttemptPlan } from "./practice";
+import { isResuming, openSlots, type AttemptPlan, type ShortReason } from "./practice";
 import { scoreContext } from "./readiness";
+import { examCoverage, type ExamPlan } from "./examPlan";
+import type { Scope } from "./practicePlan";
+
+/**
+ * How complete a planned exam is, for the line above the questions and the coverage line (docs/EXAM-PLAN.md "What
+ * she sees"). Exams from before plans: requested, planned and coverage are null, pending is 0 and short is null.
+ */
+export type AttemptProgress = {
+  /** How many questions she asked for. */
+  requested: number | null;
+  /** Planned questions (can be fewer than requested when the material runs out: that exam is complete). */
+  planned: number | null;
+  /** Questions in the exam now. */
+  written: number;
+  /** Planned questions still to write (todo or failed). */
+  pending: number;
+  /** Why some are still missing, and whether they are being written right now. Null when none are missing. */
+  short: null | { reason: ShortReason; writing: boolean };
+  /** The material in scope: distinct facts, how many this exam's plan covers, how many she has been tested on. */
+  coverage: { facts: number; inThisExam: number; tested: number } | null;
+};
 
 type Row = {
   question_id: number;
@@ -59,9 +80,19 @@ export function attemptView(attemptId: number) {
         adaptive: number;
         plan_json: string | null;
         started_at: string;
+        requested: number | null;
+        slots_json?: string | null;
+        options_json?: string | null;
+        short_reason: string | null;
+        resumed_at: string | null;
       }
     | undefined;
   if (!attempt) return null;
+  // The stored plan and start options are read here, never sent as they are (the options hold a hash of her key).
+  const slotsJson = attempt.slots_json ?? null;
+  const optionsJson = attempt.options_json ?? null;
+  delete attempt.slots_json;
+  delete attempt.options_json;
   const finished = attempt.status === "finished";
   const rows = db
     .prepare(
@@ -141,6 +172,40 @@ export function attemptView(attemptId: number) {
     questions,
     plan: attempt.plan_json ? (JSON.parse(attempt.plan_json) as AttemptPlan) : null,
     context: finished ? scoreContext(attemptId) : null,
+    ...progress(attempt, slotsJson, optionsJson, questions.length),
+  };
+}
+
+function progress(
+  attempt: { id: number; exam_id: number; status: string; requested: number | null; short_reason: string | null },
+  slotsJson: string | null,
+  optionsJson: string | null,
+  written: number,
+): AttemptProgress {
+  let plan: ExamPlan | null = null;
+  let scope: Scope = { kind: "all" };
+  try {
+    plan = slotsJson ? (JSON.parse(slotsJson) as ExamPlan) : null;
+    if (plan && !Array.isArray(plan.slots)) plan = null;
+    const opts = optionsJson ? (JSON.parse(optionsJson) as { scope?: Scope }) : null;
+    if (opts?.scope?.kind) scope = opts.scope;
+  } catch {
+    plan = null;
+  }
+  if (!plan) return { requested: attempt.requested ?? null, planned: null, written, pending: 0, short: null, coverage: null };
+  const pending = openSlots(plan).length;
+  // While the exam is first being written nothing is "missing" yet: the loading screen shows that.
+  const reason = attempt.short_reason as ShortReason | null;
+  const short = attempt.status !== "generating" && pending > 0 && reason ? { reason, writing: isResuming(attempt.id) } : null;
+  // The coverage line counts what the exam plans to cover, whatever each planned question's state.
+  const c = examCoverage(attempt.exam_id, scope, plan.slots.map((s) => ({ ...s, state: "done" as const })));
+  return {
+    requested: attempt.requested ?? null,
+    planned: plan.slots.length,
+    written,
+    pending,
+    short,
+    coverage: { facts: c.facts, inThisExam: c.inThisExam ?? 0, tested: c.tested },
   };
 }
 

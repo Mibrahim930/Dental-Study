@@ -8,6 +8,7 @@ import { DoubleRing, Icon, ICONS, RingLegend } from "@/components/ui";
 import { toast } from "@/components/Toaster";
 import { ServerMessage, failureText, jsonOf, signedOut } from "@/components/clientFetch";
 import { QuizMe } from "@/components/QuizMe";
+import { coverageLine, smallerPlanLine } from "@/components/examProgressText";
 
 /** A finished practice exam: score, what to do next, results by topic, and every question to look back at. */
 export function Results({ view, onReport }: { view: AttemptView; onReport: (questionId: number, reason: string) => Promise<void> }) {
@@ -24,6 +25,9 @@ export function Results({ view, onReport }: { view: AttemptView; onReport: (ques
   const confidentRight = questions.filter((q) => q.correct && q.confidence === "sure").length;
   const unsureRight = questions.filter((q) => q.correct && (q.confidence === "guess" || q.confidence === "unsure")).length;
   const score = attempt.score ?? 0;
+  // Exams written to a plan: how much of the material this one covered, and why it is smaller than asked (if it is).
+  const covered = coverageLine(view);
+  const smaller = smallerPlanLine(view);
 
   const byTopic = new Map<string, { right: number; total: number }>();
   for (const q of questions) {
@@ -97,6 +101,11 @@ export function Results({ view, onReport }: { view: AttemptView; onReport: (ques
           />
         </div>
       </section>
+      {(covered || smaller) && (
+        <p className="px-2 text-[15px] text-muted-foreground">
+          {[covered, smaller].filter(Boolean).join(" ")}
+        </p>
+      )}
 
       <div className="grid grid-cols-3 gap-2.5">
         <div className="tile cb-butter flex h-28 flex-col justify-between px-3.5 py-4">
