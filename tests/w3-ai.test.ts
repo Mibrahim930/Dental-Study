@@ -186,6 +186,10 @@ describe("fake AI, end to end through the real library", () => {
         expect(options[q.correct_index]).not.toMatch(/fake distractor/);
       }
       if (style === "caseset") expect(qs.every((q) => q.type === "case")).toBe(true);
+      // The fake writer answers every planned question of the exam: nothing is left to write.
+      const plan = JSON.parse((db.prepare("SELECT slots_json FROM attempts WHERE id = ?").get(attempt) as { slots_json: string }).slots_json) as { slots: { state: string }[] };
+      expect(plan.slots.every((s) => s.state === "done")).toBe(true);
+      expect(qs).toHaveLength(plan.slots.length);
     }
 
     // Quiz me on a highlighted passage.

@@ -8,27 +8,31 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    const asked = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
-    const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
+    // The planned questions the prompt lists ("Q4: slide P12 — … — recall", "— case 2" in case sets).
+    const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
     if (opts.purpose === "case sets") {
       return {
-        cases: Array.from({ length: asked }, () => ({
+        cases: [...new Set(slots.map((s) => s.caseN))].map((caseN) => ({
           scenario: `scenario ${++counter}`,
           patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
           image_page_id: null,
-          questions: Array.from({ length: 3 }, (_, i) => ({
-            stem: `case-q ${++counter}-${i}`,
-            options: ["A", "B", "C", "D", "E"],
-            correct_index: 0,
-            explanation: "e",
-            source_page_id: page,
-            concept: "Gen concept",
-          })),
+          questions: slots
+            .filter((s) => s.caseN === caseN)
+            .map((s, i) => ({
+              slot: s.n,
+              stem: `case-q ${++counter}-${i}`,
+              options: ["A", "B", "C", "D", "E"],
+              correct_index: 0,
+              explanation: "e",
+              source_page_id: s.page,
+              concept: "Gen concept",
+            })),
         })),
       };
     }
     return {
-      questions: Array.from({ length: asked }, () => ({
+      questions: slots.map((s) => ({
+        slot: s.n,
         type: "recall",
         image_page_id: null,
         patient_box: null,
@@ -36,7 +40,7 @@ vi.mock("@/lib/ai", async (orig) => ({
         options: ["A", "B", "C", "D", "E"],
         correct_index: 0,
         explanation: "e",
-        source_page_id: page,
+        source_page_id: s.page,
         concept: "Gen concept",
       })),
     };
@@ -56,7 +60,7 @@ import { db } from "@/lib/db";
 import { answerQuestion, dropForeignQuestions, startAttempt } from "@/lib/practice";
 import { lecturePageIds, scopeTopicIds } from "@/lib/practicePlan";
 import { POST as attemptsPOST } from "@/app/api/exams/[id]/attempts/route";
-import { makeUser } from "./helpers";
+import { makeUser, slideNotes } from "./helpers";
 
 const OPTS = JSON.stringify(["A", "B", "C", "D", "E"]);
 
@@ -68,7 +72,10 @@ function world(topicDocs: number[][], user = makeUser()) {
   const pageOf: Record<string, number> = {};
   const topicIds = topicDocs.map((ds, t) => {
     const pages = ds.map((d, k) => {
-      const id = Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, text) VALUES (?, ?, '', 'slide text')").run(docs[d], ++pn).lastInsertRowid);
+      // Three facts per slide: exams are planned one question per fact.
+      pn++;
+      const notes = slideNotes({ key_facts: [`fact ${pn}a`, `fact ${pn}b`, `fact ${pn}c`] });
+      const id = Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, text, status, notes_json) VALUES (?, ?, '', 'slide text', 'done', ?)").run(docs[d], pn, notes).lastInsertRowid);
       pageOf[`${t}.${k}`] = id;
       return id;
     });

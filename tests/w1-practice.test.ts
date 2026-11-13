@@ -10,6 +10,8 @@ const gen = vi.hoisted(() => ({
   cases: null as null | ((asked: number, call: number) => unknown[]),
   counter: 0,
 }));
+/** The planned questions a prompt lists ("Q4: slide P12 — fact: … — recall"), grouped by case in case sets. */
+const planned = (content: string) => [...content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
 vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: Call) => {
@@ -17,6 +19,7 @@ vi.mock("@/lib/ai", async (orig) => ({
     const n = gen.calls.length;
     if (gen.gate) await gen.gate;
     if (gen.failOn.has(n)) throw new Error("overloaded_error 529");
+    const slots = planned(opts.content);
     const asked = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
     const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
     const q = (stem: string, source = page) => ({
@@ -30,20 +33,24 @@ vi.mock("@/lib/ai", async (orig) => ({
       concept: "Gen concept",
     });
     if (opts.purpose === "case sets") {
-      if (gen.cases) return { cases: gen.cases(asked, n) };
+      // Each case answers the planned case listed in the same place; its questions take that case's slots in order.
+      const groups = [...new Set(slots.map((s) => s.caseN))].map((c) => slots.filter((s) => s.caseN === c));
+      const withSlots = (cases: { questions: object[] }[]) =>
+        cases.map((c, i) => ({ ...c, questions: c.questions.map((x, j) => ({ slot: groups[i]?.[j]?.n, ...x })) }));
+      if (gen.cases) return { cases: withSlots(gen.cases(asked, n) as { questions: object[] }[]) };
       return {
-        cases: Array.from({ length: asked }, () => {
+        cases: groups.map((g) => {
           const c = ++gen.counter;
           return {
             scenario: `scenario ${c}`,
             patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
             image_page_id: null,
-            questions: [1, 2, 3].map((i) => q(`case ${c} question ${i}`)),
+            questions: g.map((s, i) => ({ slot: s.n, ...q(`case ${c} question ${i + 1}`, s.page) })),
           };
         }),
       };
     }
-    return { questions: Array.from({ length: asked }, () => ({ type: "recall", image_page_id: null, patient_box: null, ...q(`generated stem ${++gen.counter}`) })) };
+    return { questions: slots.map((s) => ({ slot: s.n, type: "recall", image_page_id: null, patient_box: null, ...q(`generated stem ${++gen.counter}`, s.page) })) };
   }),
 }));
 vi.mock("@/lib/credentials", async (orig) => ({
@@ -62,9 +69,9 @@ import {
   CASES_PER_CALL,
   CASESET_CONCURRENCY,
   chunkSizes,
-  failStaleAttempts,
   INTERRUPTED_ATTEMPT,
   QUESTIONS_PER_CALL,
+  recoverStaleAttempts,
   SECTION_CONCURRENCY,
   startAttempt,
   writingAttempt,
@@ -76,12 +83,13 @@ import { POST as attemptsPOST } from "@/app/api/exams/[id]/attempts/route";
 import { POST as taskStartPOST } from "@/app/api/planner/tasks/[id]/start/route";
 import { makeUser } from "./helpers";
 
-const notes = (image: string | null, crop = false) =>
+/** A slide's notes: twelve facts of its own (an exam is planned one question per fact). */
+const notes = (image: string | null, crop = false, slide = 0) =>
   JSON.stringify({
     title: "slide",
     summary: "s",
     image_description: image,
-    key_facts: ["a fact"],
+    key_facts: Array.from({ length: 12 }, (_, k) => `fact ${slide}.${k + 1}`),
     annotations: [],
     emphasized: false,
     emphasis_note: null,
@@ -99,14 +107,14 @@ function student(): number {
   return id;
 }
 
-/** One exam, one topic: a plain slide, a slide with a picture, and a slide with a clinical-image crop. */
+/** One exam, one topic: a plain slide, a slide with a picture, and a slide with a clinical-image crop (36 facts). */
 function world(userId = student()) {
   const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
   const docId = Number(db.prepare("INSERT INTO documents (exam_id, filename) VALUES (?, 'lec.pdf')").run(examId).lastInsertRowid);
   const ins = db.prepare("INSERT INTO pages (document_id, page_number, image_path, aspect, status, text, notes_json) VALUES (?, ?, 'x.jpg', 1.5, 'done', 'slide text', ?)");
-  const plain = Number(ins.run(docId, 1, notes(null)).lastInsertRowid);
-  const photo = Number(ins.run(docId, 2, notes("a radiograph")).lastInsertRowid);
-  const crop = Number(ins.run(docId, 3, notes("clinical photo", true)).lastInsertRowid);
+  const plain = Number(ins.run(docId, 1, notes(null, false, 1)).lastInsertRowid);
+  const photo = Number(ins.run(docId, 2, notes("a radiograph", false, 2)).lastInsertRowid);
+  const crop = Number(ins.run(docId, 3, notes("clinical photo", true, 3)).lastInsertRowid);
   const topicId = Number(
     db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, 0, 'Topic 1', '', ?)").run(examId, JSON.stringify([plain, photo, crop])).lastInsertRowid,
   );
@@ -176,47 +184,52 @@ describe("M3: no AI call asks for more than 12 questions or 3 case sets", () => 
     expect(members(id)).toHaveLength(30);
   });
 
-  it("later turns are told the stems written by the earlier ones", async () => {
+  it("the calls each write their own planned questions, side by side; none is told what the others wrote", async () => {
     const w = world();
     const id = startAttempt(w.examId, { size: 30, mode: "tutor", style: "recall", adaptive: false });
     await ready(id);
-    const [first, second, third] = written("practice questions");
-    expect(first.content).not.toContain("already written for this practice exam");
-    expect(second.content).toContain("generated stem 1\n");
-    expect(second.content).toContain("generated stem 10\n");
-    expect(third.content).toContain("generated stem 1\n");
-    expect(third.content).toContain("generated stem 20\n");
+    const calls = written("practice questions");
+    const lists = calls.map((c) => planned(c.content).map((s) => s.n));
+    expect(lists.flat().sort((a, b) => a - b)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+    for (const c of calls) expect(c.content).not.toContain("already written for this practice exam");
   });
 
-  it("a failing middle turn keeps what the other turns wrote", async () => {
+  it("a failing middle call gets one follow-up for its planned questions; failing twice leaves the exam short", async () => {
     const w = world();
     gen.failOn.add(2);
     const id = startAttempt(w.examId, { size: 30, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
-    expect(written("practice questions")).toHaveLength(3);
-    const stems = members(id).map((m) => m.stem);
-    expect(stems).toHaveLength(20);
-    expect(stems).toContain("generated stem 1");
-    expect(stems).toContain("generated stem 20");
+    const calls = written("practice questions");
+    expect(calls).toHaveLength(4);
+    expect(planned(calls[3].content)).toEqual(planned(calls[1].content));
+    expect(members(id)).toHaveLength(30);
+
+    gen.calls = [];
+    gen.failOn.clear();
+    gen.failOn.add(2).add(4);
+    const short = startAttempt(w.examId, { size: 30, mode: "tutor", style: "recall", adaptive: false });
+    const st = (await ready(short)) as { status: string };
+    expect(st.status).toBe("ready");
+    expect(members(short)).toHaveLength(20);
+    expect((db.prepare("SELECT short_reason FROM attempts WHERE id = ?").get(short) as { short_reason: string }).short_reason).toBe("busy");
   });
 
   it("every turn failing fails the exam with the writer's error", async () => {
     const w = world();
-    [1, 2, 3, 4, 5, 6].forEach((n) => gen.failOn.add(n));
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach((n) => gen.failOn.add(n));
     const id = startAttempt(w.examId, { size: 30, mode: "tutor", style: "recall", adaptive: false });
     const st = await ready(id);
     expect(st.status).toBe("error");
     expect(st.error).toMatch(/overloaded/);
   });
 
-  it("case sets: 8 cases on one topic are written 3 + 3 + 2, each turn told the earlier patients", async () => {
+  it("case sets: 8 cases on one topic are written 3 + 3 + 2, each case one patient", async () => {
     const w = world();
     const id = startAttempt(w.examId, { size: 32, mode: "tutor", style: "caseset", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
     const calls = written("case sets");
     expect(calls.map(asked)).toEqual([3, 3, 2]);
-    expect(calls[1].content).toContain("scenario 1");
-    expect(calls[2].content).toContain("scenario 6");
+    expect(calls.map((c) => new Set(planned(c.content).map((s) => s.caseN)).size)).toEqual([3, 3, 2]);
     expect(new Set(members(id).map((m) => m.case_id)).size).toBe(8);
   });
 
@@ -351,13 +364,13 @@ describe("R1: practice exams cut off by a restart", () => {
     const stale = add("generating", "-6 minutes");
     const fresh = add("generating", "-1 minutes");
     const oldReady = add("ready", "-60 minutes");
-    expect(failStaleAttempts()).toBeGreaterThanOrEqual(1);
+    expect(recoverStaleAttempts().failed).toBeGreaterThanOrEqual(1);
     const row = (id: number) => db.prepare("SELECT status, error FROM attempts WHERE id = ?").get(id) as { status: string; error: string | null };
     expect(row(stale)).toEqual({ status: "error", error: INTERRUPTED_ATTEMPT });
     expect(INTERRUPTED_ATTEMPT).toBe("This practice exam was interrupted while it was being written. Start it again; questions already written are reused.");
     expect(row(fresh)).toEqual({ status: "generating", error: null });
     expect(row(oldReady)).toEqual({ status: "ready", error: null });
-    expect(failStaleAttempts()).toBe(0);
+    expect(recoverStaleAttempts()).toEqual({ recovered: 0, failed: 0 });
   });
 });
 

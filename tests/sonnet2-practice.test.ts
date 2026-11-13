@@ -9,37 +9,45 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    const count = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
-    const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
+    // The planned questions the prompt lists ("Q4: slide P12 — … — recall", "— case 2" in case sets).
+    const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
     if (opts.purpose === "case sets") {
+      const cases = [...new Set(slots.map((s) => s.caseN))];
       return {
-        cases: Array.from({ length: caseGen(count) }, () => ({
+        cases: cases.slice(0, caseGen(cases.length)).map((caseN) => ({
           scenario: `scenario ${++counter}`,
           patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
           image_page_id: null,
-          questions: Array.from({ length: 3 }, (_, i) => ({
-            stem: `case-q ${++counter}-${i}`,
-            options: ["A", "B", "C", "D", "E"],
-            correct_index: 0,
-            explanation: "e",
-            source_page_id: page,
-            concept: "Gen concept",
-          })),
+          questions: slots
+            .filter((s) => s.caseN === caseN)
+            .map((s, i) => ({
+              slot: s.n,
+              stem: `case-q ${++counter}-${i}`,
+              options: ["A", "B", "C", "D", "E"],
+              correct_index: 0,
+              explanation: "e",
+              source_page_id: s.page,
+              concept: "Gen concept",
+            })),
         })),
       };
     }
+    // The stems given, one per planned question in the order listed.
     return {
-      questions: questionStems(count).map((g) => ({
-        type: "recall",
-        image_page_id: null,
-        patient_box: null,
-        stem: g.stem,
-        options: ["A", "B", "C", "D", "E"],
-        correct_index: 0,
-        explanation: "e",
-        source_page_id: page,
-        concept: g.concept ?? "Gen concept",
-      })),
+      questions: questionStems(slots.length)
+        .slice(0, slots.length)
+        .map((g, i) => ({
+          slot: slots[i].n,
+          type: "recall",
+          image_page_id: null,
+          patient_box: null,
+          stem: g.stem,
+          options: ["A", "B", "C", "D", "E"],
+          correct_index: 0,
+          explanation: "e",
+          source_page_id: slots[i].page,
+          concept: g.concept ?? "Gen concept",
+        })),
     };
   }),
 }));
@@ -51,12 +59,20 @@ vi.mock("@/lib/credentials", async (orig) => ({
 import { db } from "@/lib/db";
 import { answerQuestion, startAttempt, finishAttempt } from "@/lib/practice";
 import { retryCases, retryQuestions } from "@/lib/practicePlan";
-import { makeUser, world as makeWorld } from "./helpers";
+import { makeUser, slideNotes, world as makeWorld } from "./helpers";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
+/** Topics of `slidesEach` slides with two facts each (exams are planned one question per fact). */
 function world(topics = 2, slidesEach = 3) {
-  const w = makeWorld({ userId: makeUser(), sections: topics, slidesEach, lectureStatus: "pending", pageStatus: "pending", linkLectures: false, session: false });
+  const w = makeWorld({
+    userId: makeUser(),
+    sections: topics,
+    slidesEach,
+    linkLectures: false,
+    session: false,
+    notes: (n) => slideNotes({ key_facts: [`fact ${n}a`, `fact ${n}b`] }),
+  });
   return { userId: w.userId, examId: w.examId, docId: w.docIds[0], topicIds: w.topicIds, pageIds: w.pageIds };
 }
 function q(examId: number, topicId: number | null, stem: string, extra: { caseId?: number; type?: string; conceptId?: number } = {}): number {
@@ -234,9 +250,11 @@ describe("B4 unusedQuestions skips questions in open attempts", () => {
   });
 
   it("a finished attempt with the question unanswered does not block reuse; an answered one does", async () => {
-    const w = world(1);
+    // One slide; both questions written from it (a question with no slide cannot stand in for a planned one).
+    const w = world(1, 1);
     const unanswered = q(w.examId, w.topicIds[0], "unanswered");
     const answered = q(w.examId, w.topicIds[0], "answered-right");
+    db.prepare("UPDATE questions SET source_page_id = ? WHERE id IN (?, ?)").run(w.pageIds[0][0], unanswered, answered);
     const a = att(w.examId, [unanswered, answered], "finished");
     answerQuestion(a, answered, 0);
     const id = startAttempt(w.examId, { size: 1, mode: "tutor", style: "mixed", adaptive: false });
@@ -292,8 +310,11 @@ describe("B5 AI stems identical to existing ones are dropped", () => {
     const id = startAttempt(w.examId, { size: 4, mode: "tutor", style: "mixed", adaptive: false });
     await ready(id);
     const stems = (db.prepare("SELECT q.stem FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id WHERE aq.attempt_id = ?").all(id) as { stem: string }[]).map((r) => r.stem);
-    expect(stems.filter((s) => /pulp/i.test(s)).length).toBe(1);
+    expect(stems.filter((s) => /pulp/i.test(s)).length).toBeLessThanOrEqual(1);
     expect(stems.filter((s) => /brand new one/i.test(s)).length).toBeLessThanOrEqual(1);
+    // The duplicates were never stored.
+    expect(db.prepare("SELECT COUNT(*) n FROM questions WHERE stem LIKE '%pulp%'").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT COUNT(*) n FROM questions WHERE lower(stem) LIKE 'brand new one%'").get()).toEqual({ n: 1 });
   });
 
   it("NOTE: stems with only non-latin characters normalize to empty and collide", async () => {

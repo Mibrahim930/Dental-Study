@@ -55,21 +55,23 @@ vi.mock("@/lib/ai", async (orig) => ({
       if (failTopics.has(title) || (failRatio > 0 && Math.random() < failRatio)) {
         throw Object.assign(new Error("429 rate_limit_error"), { status: 429 });
       }
-      const asked = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
-      const count = Math.min(asked, shortTopics.get(title) ?? asked);
-      const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
+      // The planned questions the prompt lists ("Q4: slide P12 — … — recall", "— case 2" in case sets).
+      const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
       if (opts.purpose === "case sets") {
         return {
-          cases: Array.from({ length: count }, () => ({
+          cases: [...new Set(slots.map((s) => s.caseN))].map((caseN) => ({
             scenario: `scenario ${++counter}`,
             patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
             image_page_id: null,
-            questions: Array.from({ length: 3 }, (_, i) => ({ stem: `case-q ${++counter}-${i}`, options: ["A", "B", "C", "D", "E"], correct_index: 0, explanation: "e", source_page_id: page, concept: "Gen concept" })),
+            questions: slots
+              .filter((s) => s.caseN === caseN)
+              .map((s, i) => ({ slot: s.n, stem: `case-q ${++counter}-${i}`, options: ["A", "B", "C", "D", "E"], correct_index: 0, explanation: "e", source_page_id: s.page, concept: "Gen concept" })),
           })),
         };
       }
       return {
-        questions: Array.from({ length: count }, () => ({
+        questions: slots.slice(0, shortTopics.get(title) ?? slots.length).map((s) => ({
+          slot: s.n,
           type: "recall",
           image_page_id: null,
           patient_box: null,
@@ -77,7 +79,7 @@ vi.mock("@/lib/ai", async (orig) => ({
           options: ["A", "B", "C", "D", "E"],
           correct_index: 0,
           explanation: "e",
-          source_page_id: page,
+          source_page_id: s.page,
           concept: "Gen concept",
         })),
       };
@@ -106,7 +108,7 @@ import { startAttempt } from "@/lib/practice";
 import { mastery, topicConcepts, topicConceptsForExam, type ConceptRow } from "@/lib/memory";
 import { pendingCounts, pendingCountsByTopic } from "@/lib/practicePlan";
 import { examProgress } from "@/lib/readiness";
-import { makeUser } from "./helpers";
+import { makeUser, slideNotes } from "./helpers";
 import { claimAll, slidesInPrompt } from "./lessonClaims";
 
 const notes = (i: number) =>
@@ -377,7 +379,15 @@ function practiceWorld(topics: number) {
   let pn = 0;
   const topicIds: number[] = [];
   for (let t = 0; t < topics; t++) {
-    const pages = Array.from({ length: 2 }, () => Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, text) VALUES (?, ?, '', 'slide text')").run(docId, ++pn).lastInsertRowid));
+    // Two slides of two facts each: exams are planned one question per fact.
+    const pages = Array.from({ length: 2 }, () => {
+      pn++;
+      return Number(
+        db
+          .prepare("INSERT INTO pages (document_id, page_number, image_path, text, status, notes_json) VALUES (?, ?, '', 'slide text', 'done', ?)")
+          .run(docId, pn, slideNotes({ key_facts: [`fact ${pn}a`, `fact ${pn}b`] })).lastInsertRowid,
+      );
+    });
     topicIds.push(Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, ?, ?, '', ?)").run(examId, t, `Topic ${t + 1}`, JSON.stringify(pages)).lastInsertRowid));
   }
   return { userId, examId, topicIds };
@@ -399,15 +409,21 @@ const members = (attemptId: number) =>
   }[];
 
 describe("job 3: practice exams with 8 sections at once", () => {
-  it("20 sections, 12 rate limited (only 8 work): the exam still reaches its full size, no repeats", async () => {
+  // Since exams are planned, the sections that fail are not backfilled from the others: the exam is short ("busy")
+  // and their planned questions are written when she comes back.
+  it("20 sections, 12 rate limited (only 8 work): ready and short with every question the 8 planned, no repeats", async () => {
     const w = practiceWorld(20);
     for (let t = 9; t <= 20; t++) failTopics.add(`Topic ${t}`);
     const id = startAttempt(w.examId, { size: 25, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
     const rows = members(id);
-    expect(rows).toHaveLength(25);
-    expect(new Set(rows.map((r) => r.id)).size).toBe(25);
-    expect(new Set(rows.map((r) => r.stem)).size).toBe(25);
+    const plan = JSON.parse((db.prepare("SELECT slots_json FROM attempts WHERE id = ?").get(id) as { slots_json: string }).slots_json) as { slots: { topic_id: number }[] };
+    const working = new Set(w.topicIds.slice(0, 8));
+    expect(rows).toHaveLength(plan.slots.filter((s) => working.has(s.topic_id)).length);
+    expect(rows.every((r) => working.has(r.topic_id))).toBe(true);
+    expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length);
+    expect(new Set(rows.map((r) => r.stem)).size).toBe(rows.length);
+    expect((db.prepare("SELECT short_reason FROM attempts WHERE id = ?").get(id) as { short_reason: string }).short_reason).toBe("busy");
     expect(maxInFlight).toBeLessThanOrEqual(8);
   });
 
@@ -429,13 +445,14 @@ describe("job 3: practice exams with 8 sections at once", () => {
     }
   });
 
-  it("sections that write fewer than asked, mixed with failures, still end in a ready exam of the right size from the full ones", async () => {
+  it("sections that write fewer than asked, mixed with failures, end in a ready exam that is short by exactly what they missed", async () => {
     const w = practiceWorld(12);
     failTopics.add("Topic 1").add("Topic 2");
     for (let t = 3; t <= 6; t++) shortTopics.set(`Topic ${t}`, 1);
     const id = startAttempt(w.examId, { size: 24, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
-    expect(members(id)).toHaveLength(24);
+    // Two planned per section: Topics 1-2 none; Topics 3-6 one per call, so both after the follow-up; the rest both.
+    expect(members(id)).toHaveLength(24 - 4);
   });
 
   it("two exams started together are built one after another: never more than 8 calls at once, and no shared questions", async () => {

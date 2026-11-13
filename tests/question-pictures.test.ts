@@ -248,13 +248,16 @@ describe("section quiz", () => {
 describe("practice exam", () => {
   it("attaches a picture to picture questions (named or inferred), the whole slide when none is marked", async () => {
     const w = world();
-    practiceWriter = () => [
-      { type: "image", image_page_id: w.cropped, patient_box: null, stem: "Look at the clinical image. What is the diagnosis?", options: ["a", "b", "c", "d", "e"], correct_index: 0, correct_answer: "a", explanation: "e", source_page_id: w.cropped, concept: "C" },
-      { type: "recall", image_page_id: null, patient_box: null, stem: "On the radiograph shown, where is the lesion?", options: ["a", "b", "c", "d", "e"], correct_index: 1, correct_answer: "b", explanation: "e", source_page_id: w.photo, concept: "C" },
-      { type: "recall", image_page_id: null, patient_box: null, stem: "In the picture below, which instrument is held?", options: ["a", "b", "c", "d", "e"], correct_index: 2, correct_answer: "c", explanation: "e", source_page_id: w.plain, concept: "C" },
-      { type: "recall", image_page_id: null, patient_box: null, stem: "What is the most common irrigant?", options: ["a", "b", "c", "d", "e"], correct_index: 3, correct_answer: "d", explanation: "e", source_page_id: w.plain, concept: "C" },
-    ];
-    const attemptId = startAttempt(w.examId, { size: 5, mode: "tutor", style: "mixed", adaptive: false });
+    // A recall exam over the plain slide's four facts: each answer takes the next planned question's number.
+    const listed = (content: string) => [...content.matchAll(/^Q(\d+): /gm)].map((m) => Number(m[1]));
+    practiceWriter = (content) =>
+      [
+        { type: "image", image_page_id: w.cropped, patient_box: null, stem: "Look at the clinical image. What is the diagnosis?", options: ["a", "b", "c", "d", "e"], correct_index: 0, correct_answer: "a", explanation: "e", source_page_id: w.cropped, concept: "C" },
+        { type: "recall", image_page_id: null, patient_box: null, stem: "On the radiograph shown, where is the lesion?", options: ["a", "b", "c", "d", "e"], correct_index: 1, correct_answer: "b", explanation: "e", source_page_id: w.photo, concept: "C" },
+        { type: "recall", image_page_id: null, patient_box: null, stem: "In the picture below, which instrument is held?", options: ["a", "b", "c", "d", "e"], correct_index: 2, correct_answer: "c", explanation: "e", source_page_id: w.plain, concept: "C" },
+        { type: "recall", image_page_id: null, patient_box: null, stem: "What is the most common irrigant?", options: ["a", "b", "c", "d", "e"], correct_index: 3, correct_answer: "d", explanation: "e", source_page_id: w.plain, concept: "C" },
+      ].map((x, i) => ({ slot: listed(content)[i], ...x }));
+    const attemptId = startAttempt(w.examId, { size: 4, mode: "tutor", style: "recall", adaptive: false });
     for (let i = 0; i < 100; i++) {
       const s = (db.prepare("SELECT status FROM attempts WHERE id = ?").get(attemptId) as { status: string }).status;
       if (s !== "generating") break;

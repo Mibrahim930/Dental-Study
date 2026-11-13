@@ -7,27 +7,31 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    const count = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
-    const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
+    // The planned questions the prompt lists ("Q4: slide P12 — … — recall", "— case 2" in case sets).
+    const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
     if (opts.purpose === "case sets") {
       return {
-        cases: Array.from({ length: count }, () => ({
+        cases: [...new Set(slots.map((s) => s.caseN))].map((caseN) => ({
           scenario: `scenario ${++counter}`,
           patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
           image_page_id: null,
-          questions: Array.from({ length: 3 }, (_, i) => ({
-            stem: `case-q ${++counter}-${i}`,
-            options: ["A", "B", "C", "D", "E"],
-            correct_index: 0,
-            explanation: "e",
-            source_page_id: page,
-            concept: "Gen concept",
-          })),
+          questions: slots
+            .filter((s) => s.caseN === caseN)
+            .map((s, i) => ({
+              slot: s.n,
+              stem: `case-q ${++counter}-${i}`,
+              options: ["A", "B", "C", "D", "E"],
+              correct_index: 0,
+              explanation: "e",
+              source_page_id: s.page,
+              concept: "Gen concept",
+            })),
         })),
       };
     }
     return {
-      questions: Array.from({ length: count }, () => ({
+      questions: slots.map((s) => ({
+        slot: s.n,
         type: "recall",
         image_page_id: null,
         patient_box: null,
@@ -35,7 +39,7 @@ vi.mock("@/lib/ai", async (orig) => ({
         options: ["A", "B", "C", "D", "E"],
         correct_index: 0,
         explanation: "e",
-        source_page_id: page,
+        source_page_id: s.page,
         concept: "Gen concept",
       })),
     };
@@ -50,13 +54,20 @@ import { db } from "@/lib/db";
 import { answerQuestion, startAttempt, finishAttempt, dueCards, reviewCard } from "@/lib/practice";
 import { attemptView } from "@/lib/attemptView";
 import { retryQuestions } from "@/lib/practicePlan";
-import { makeUser, world as makeWorld } from "./helpers";
+import { makeUser, slideNotes, world as makeWorld } from "./helpers";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
-/** An exam whose topics each have real slide pages (so prompts contain [P<id>] slides). */
-function world(topics = 2, slidesEach = 3) {
-  const w = makeWorld({ userId: makeUser(), sections: topics, slidesEach, lectureStatus: "pending", pageStatus: "pending", linkLectures: false, session: false });
+/** An exam whose topics each have real slide pages with `factsEach` facts each (exams are planned one question per fact). */
+function world(topics = 2, slidesEach = 3, factsEach = 2) {
+  const w = makeWorld({
+    userId: makeUser(),
+    sections: topics,
+    slidesEach,
+    linkLectures: false,
+    session: false,
+    notes: (n) => slideNotes({ key_facts: Array.from({ length: factsEach }, (_, k) => `fact ${n}.${k + 1}`) }),
+  });
   return { userId: w.userId, examId: w.examId, docId: w.docIds[0], topicIds: w.topicIds, pageIds: w.pageIds };
 }
 
@@ -138,18 +149,19 @@ describe("startAttempt end to end (AI mocked)", () => {
     return { prompt: calls.map((c) => c.content).join(" | "), id, wrong };
   }
 
-  it("includes the already-had stems in the prompt, and the focus section only when adaptive is on", async () => {
+  // Was "includes the already-had stems in the prompt, and the focus section only when adaptive is on". Exams are
+  // planned now: one fact per planned question replaces the old-stem list, the slide marks and the focus list.
+  it("the prompt has no old-stem list, slide marks or focus list; adaptive is stored; wrong answers repeat with focus off", async () => {
     const on = await promptFor(true);
-    expect(on.prompt).toContain("already had");
-    expect(on.prompt).toContain("STEM-MISSED-ONE");
-    expect(on.prompt).toContain("STEM-UNSURE-ONE");
-    expect(on.prompt).toContain("missed or wasn't sure");
-    expect(on.prompt).toContain("(asked 1x)");
+    expect(on.prompt).not.toContain("already had");
+    expect(on.prompt).not.toContain("STEM-UNSURE-ONE");
+    expect(on.prompt).not.toContain("missed or wasn't sure");
+    expect(on.prompt).not.toContain("(asked 1x)");
+    expect(on.prompt).toMatch(/^Q\d+: slide P\d+ — fact: "fact /m);
     expect(db.prepare("SELECT adaptive FROM attempts WHERE id = ?").get(on.id)).toEqual({ adaptive: 1 });
 
     const off = await promptFor(false);
-    expect(off.prompt).toContain("already had");
-    expect(off.prompt).not.toContain("missed or wasn't sure");
+    expect(off.prompt).not.toContain("already had");
     expect(db.prepare("SELECT adaptive FROM attempts WHERE id = ?").get(off.id)).toEqual({ adaptive: 0 });
     // Wrong answers still repeat with focus off.
     expect(members(off.id).map((r) => r.question_id)).toContain(off.wrong);
@@ -181,8 +193,9 @@ describe("startAttempt end to end (AI mocked)", () => {
   });
 
   it("reuses never-answered questions instead of generating, and never reuses answered ones", async () => {
-    const w = world(1);
-    const spare = Array.from({ length: 3 }, (_, i) => q(w.examId, w.topicIds[0], `spare ${i}`));
+    // One fact per slide and a spare written from each slide: the plan's first question on each slide is the spare.
+    const w = world(1, 3, 1);
+    const spare = w.pageIds[0].map((p, i) => q(w.examId, w.topicIds[0], `spare ${i}`, { sourcePage: p }));
     const done = q(w.examId, w.topicIds[0], "done");
     answerQuestion(att(w.examId, [done]), done, 0, "sure");
     const id = startAttempt(w.examId, { size: 5, mode: "tutor", style: "mixed" });

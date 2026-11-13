@@ -130,24 +130,30 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
       .run(examId, opts.mode, opts.mode === "timed" ? opts.size * SECONDS_PER_QUESTION : null, opts.taskId ?? null, adaptive ? 1 : 0, opts.size, JSON.stringify(stored))
       .lastInsertRowid,
   );
-  // Exams for the same course are built one after another, so two started together never pick the same questions.
-  const previous = buildQueue.get(examId) ?? Promise.resolve();
-  // Tracked, so a deploy waits a little for an exam being written instead of throwing away what was paid for.
-  const build = track(
-    previous
-      .then(() => generateAttempt(attemptId, examId, stored))
-      .catch((err) => {
-        db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
-      }),
+  queued(examId, () =>
+    generateAttempt(attemptId, examId, stored).catch((err) => {
+      db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
+    }),
   );
-  buildQueue.set(examId, build);
-  void build.finally(() => {
-    if (buildQueue.get(examId) === build) buildQueue.delete(examId);
-  });
   return attemptId;
 }
 
 const buildQueue = new Map<number, Promise<void>>();
+
+/**
+ * Writing for one course runs one piece at a time (a new exam, or the rest of a short one), so two never pick the
+ * same unused questions: questions a resume has written sit in no exam until it appends them. Tracked, so a deploy
+ * waits a little for an exam being written instead of throwing away what was paid for. `work` never rejects.
+ */
+function queued(examId: number, work: () => Promise<void>): Promise<void> {
+  const previous = buildQueue.get(examId) ?? Promise.resolve();
+  const run = track(previous.then(work));
+  buildQueue.set(examId, run);
+  void run.finally(() => {
+    if (buildQueue.get(examId) === run) buildQueue.delete(examId);
+  });
+  return run;
+}
 
 /**
  * A practice exam this student started on this exam (from this plan task, or from no task) that is still being
@@ -440,14 +446,16 @@ async function askQuestions(run: Run, w: SectionWriter, slots: Slot[]): Promise<
       if (!slot) continue;
       const q = validateMcq(raw, { optionCount: 5, validPageIds: w.valid });
       if (typeof q === "string") continue;
+      // (A stem with no letters or digits normalises to nothing: nothing to compare.)
       const key = normStem(q.stem);
-      if (seen.has(key)) continue;
+      if (key && seen.has(key)) continue;
       const source = q.source_page_id ?? slot.page_id;
       // A question about a picture must have one to show: the slide it names, else the slide it was written from.
       // "generous": there is no checking pass on practice exams, so a missed picture question would be shown without
       // its picture. A planned picture question always needs one.
       const wantsPicture = slot.kind === "image" || raw.type === "image" || raw.image_page_id != null || mentionsPicture(q.stem, "generous");
-      const picture = wantsPicture ? pictureFor(w.pages, raw.image_page_id ?? (slot.kind === "image" ? slot.page_id : null), source, q.stem) : null;
+      // A planned picture question may fall back on its slide's picture; any other only on the slide it cites.
+      const picture = wantsPicture ? pictureFor(w.pages, raw.image_page_id, slot.kind === "image" ? source : q.source_page_id, q.stem) : null;
       if (wantsPicture && !picture) continue;
       const imagePage = picture?.page_id ?? null;
       const type = imagePage != null && (slot.kind === "image" || raw.type === "image") ? "image" : slot.kind === "image" ? "recall" : slot.kind;
@@ -469,7 +477,7 @@ async function askQuestions(run: Run, w: SectionWriter, slots: Slot[]): Promise<
           slot.key,
         ).lastInsertRowid,
       );
-      seen.add(key);
+      if (key) seen.add(key);
       open.delete(slot.n);
       filled.add(slot.n);
       updates.push({ n: slot.n, state: "done", question_id: id });
@@ -605,7 +613,7 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
         // check as single questions); otherwise it goes.
         let picture = image;
         if (picture == null && mentionsPicture(q.stem, "generous")) {
-          picture = pictureFor(w.pages, null, q.source_page_id ?? slot.page_id, q.stem)?.page_id ?? null;
+          picture = pictureFor(w.pages, null, q.source_page_id, q.stem)?.page_id ?? null;
           if (picture == null) continue;
         }
         kept.set(slot.n, { slot, q, explanation: raw.explanation, concept: raw.concept, picture });
@@ -747,17 +755,19 @@ export function resumeAttempt(attemptId: number): boolean {
 
   db.prepare("UPDATE attempts SET resumed_at = datetime('now') WHERE id = ?").run(attemptId);
   const run = newRun(attemptId, a.exam_id);
-  const ns = new Set(open.map((s) => s.n));
-  const work = track(
-    (async () => {
-      try {
-        await writeSlots(run, plan, opts, ns);
-        appendWritten(attemptId, ns, run);
-      } catch (err) {
-        console.error(`Practice exam ${attemptId}: writing the missing questions failed`, err);
-      }
-    })().finally(() => resuming.delete(attemptId)),
-  );
+  const work = queued(a.exam_id, async () => {
+    try {
+      // Read again: it may have waited behind another exam of this course, and she may have finished it meanwhile.
+      const now = readPlan(attemptId);
+      const status = (db.prepare("SELECT status FROM attempts WHERE id = ?").get(attemptId) as { status: string } | undefined)?.status;
+      if (!now || status !== "ready") return;
+      const ns = new Set(openSlots(now).map((s) => s.n));
+      await writeSlots(run, now, opts, ns);
+      appendWritten(attemptId, ns, run);
+    } catch (err) {
+      console.error(`Practice exam ${attemptId}: writing the missing questions failed`, err);
+    }
+  }).finally(() => resuming.delete(attemptId));
   resuming.set(attemptId, work);
   return true;
 }

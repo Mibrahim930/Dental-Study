@@ -27,32 +27,33 @@ vi.mock("@/lib/ai", async (orig) => ({
       if (pr.gate) await pr.gate;
       const failure = pr.failOn.get(n);
       if (failure) throw new Error(failure);
-      const asked = Number(/Write (\d+) /.exec(call.content)?.[1] ?? 1);
-      const page = Number(/\[P(\d+)\]/.exec(call.content)?.[1] ?? 0);
-      const q = (stem: string) => ({
+      // One answer per planned question ("Q4: slide P12 — …"), its number echoed; in case sets one case per "case N".
+      const slots = [...call.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
+      const q = (stem: string, slot: { n: number; page: number }) => ({
+        slot: slot.n,
         stem,
         options: ["A1", "B2", "C3", "D4", "E5"],
         correct_index: 0,
         correct_answer: "A1",
         explanation: "e",
         option_notes: ["n1", "n2", "n3", "n4", "n5"],
-        source_page_id: page,
+        source_page_id: slot.page,
         concept: "Gen concept",
       });
       if (opts.purpose === "case sets") {
         return {
-          cases: Array.from({ length: asked }, () => {
+          cases: [...new Set(slots.map((s) => s.caseN))].map((caseN) => {
             const c = ++pr.counter;
             return {
               scenario: `scenario ${c}`,
               patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
               image_page_id: null,
-              questions: [1, 2, 3].map((i) => q(`case ${c} question ${i}`)),
+              questions: slots.filter((s) => s.caseN === caseN).map((s, i) => q(`case ${c} question ${i + 1}`, s)),
             };
           }),
         };
       }
-      return { questions: Array.from({ length: asked }, () => ({ type: "recall", image_page_id: null, patient_box: null, ...q(`generated stem ${++pr.counter}`) })) };
+      return { questions: slots.map((s) => ({ type: "recall", image_page_id: null, patient_box: null, ...q(`generated stem ${++pr.counter}`, s) })) };
     }
     calls.push(call);
     if (opts.purpose === "lesson" || opts.purpose === "lesson repair") {
@@ -78,7 +79,7 @@ vi.mock("@/lib/user", async (orig) => ({
 
 import { db, getMeta, setMeta, type Topic } from "@/lib/db";
 import { FAILURE_COOLDOWN_MS, getLesson, getSectionQuiz, LESSON_VERSION, QUIZ_VERSION, recentFailure, type QuizQuestion } from "@/lib/study";
-import { chunkSizes, failStaleAttempts, INTERRUPTED_ATTEMPT, startAttempt, writingAttempt } from "@/lib/practice";
+import { chunkSizes, INTERRUPTED_ATTEMPT, recoverStaleAttempts, startAttempt, writingAttempt } from "@/lib/practice";
 import { recordQuizAnswer } from "@/lib/quizProgress";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
@@ -838,8 +839,9 @@ describe("study flow: end note", () => {
 
 // ------------------------------------------------------------------------------------------------------- practice
 
+/** One section of 50 slides with two facts each: 100 facts, room for a 100-question exam planned one per fact. */
 function practiceWorld() {
-  const w = world(3);
+  const w = world(50);
   return { ...w };
 }
 async function ready(attemptId: number) {
@@ -856,51 +858,50 @@ const askedIn = (c: { content: string }) => Number(/Write (\d+) /.exec(c.content
 const attemptRows = (examId: number) => (db.prepare("SELECT COUNT(*) n FROM attempts WHERE exam_id = ?").get(examId) as { n: number }).n;
 
 describe("practice: a 100-question request on one topic", () => {
-  it("nine sequential calls of 12 or 11, each told every earlier stem, 100 questions delivered, output room under the cap", async () => {
+  it("nine calls of 12 or 11, four at a time, 100 questions delivered, output room under the cap", async () => {
     const w = practiceWorld();
     const id = startAttempt(w.examId, { size: 100, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
     expect(pr.calls).toHaveLength(9);
     expect(pr.calls.map(askedIn)).toEqual(chunkSizes(100, 12));
     expect(pr.calls.every((c) => askedIn(c) <= 12 && (c.maxTokens ?? 0) < 32000)).toBe(true);
-    expect(pr.calls[0].content).not.toContain("already written for this practice exam");
-    expect(pr.calls[8].content).toContain("generated stem 1\n");
-    expect(pr.calls[8].content).toContain("generated stem 89\n");
+    expect(pr.calls.some((c) => c.content.includes("already written for this practice exam"))).toBe(false);
     expect(members(id)).toHaveLength(100);
   });
 
-  it("turn 3 of 9 failing with an overload: the other eight still run; 89 questions, ready", async () => {
+  it("call 3 of 9 failing with an overload: one follow-up call writes its questions; 100, ready", async () => {
     const w = practiceWorld();
     pr.failOn.set(3, "overloaded_error 529");
     const id = startAttempt(w.examId, { size: 100, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
-    expect(pr.calls).toHaveLength(9);
-    expect(members(id)).toHaveLength(89);
+    expect(pr.calls).toHaveLength(10);
+    expect(members(id)).toHaveLength(100);
   });
 
-  // (documented) A key problem on turn 3 of 9 stops the rest: she gets the 23 questions of turns 1 and 2 in a "ready"
-  // exam (its timer follows what was delivered) and no word that 77 are missing; the shortfall loop skips a section
-  // that came up short. Only a key problem on the FIRST turn shows her the provider's message.
-  it("(documented) turn 3 of 9 failing on her key: stops there, ready with 23 questions, timer fitted to 23, no error shown", async () => {
+  // Was (documented): a key problem on turn 3 stopped the rest with no word that questions were missing. Now the calls
+  // run four at a time: calls 1, 2 and 4 finish, nothing more is asked, and the exam is short for "key" (it finishes
+  // itself once her key is fixed).
+  it("call 3 of 9 failing on her key: no later call; ready with the 34 questions of calls 1, 2 and 4, timer fitted, short for 'key'", async () => {
     const w = practiceWorld();
     pr.failOn.set(3, "Your credit balance is too low to access the API");
     const id = startAttempt(w.examId, { size: 100, mode: "timed", style: "recall", adaptive: false });
     const done = await ready(id);
     expect(done.status).toBe("ready");
     expect(done.error).toBeNull();
-    expect(pr.calls).toHaveLength(3);
-    expect(members(id)).toHaveLength(23);
-    expect(done.time_limit_sec).toBe(23 * 72);
+    expect(pr.calls).toHaveLength(4);
+    expect(members(id)).toHaveLength(34);
+    expect(done.time_limit_sec).toBe(34 * 72);
+    expect((db.prepare("SELECT short_reason FROM attempts WHERE id = ?").get(id) as { short_reason: string }).short_reason).toBe("key");
   });
 
-  it("a key problem on the first turn fails the exam with the provider's own words after one call", async () => {
+  it("a key problem on every call already running fails the exam with the provider's own words; nothing more is asked", async () => {
     const w = practiceWorld();
-    pr.failOn.set(1, "Your credit balance is too low to access the API");
+    [1, 2, 3, 4].forEach((n) => pr.failOn.set(n, "Your credit balance is too low to access the API"));
     const id = startAttempt(w.examId, { size: 100, mode: "tutor", style: "recall", adaptive: false });
     const done = await ready(id);
     expect(done.status).toBe("error");
     expect(done.error).toMatch(/credit balance/);
-    expect(pr.calls).toHaveLength(1);
+    expect(pr.calls).toHaveLength(4);
   });
 
   it("the route clamps a 100,000-question request to 100 and a 1-question one to 5", async () => {
@@ -1022,19 +1023,19 @@ describe("practice: stale attempts at boot", () => {
 
   it("299 seconds old stays; 301 seconds old fails; ready, finished and error attempts of any age are untouched; a second call changes nothing", () => {
     const w = practiceWorld();
-    failStaleAttempts();
+    recoverStaleAttempts();
     const young = add(w.examId, "generating", "-299 seconds");
     const old = add(w.examId, "generating", "-301 seconds");
     const ancientReady = add(w.examId, "ready", "-2 days");
     const ancientDone = add(w.examId, "finished", "-2 days");
     const ancientError = add(w.examId, "error", "-2 days");
-    expect(failStaleAttempts()).toBe(1);
+    expect(recoverStaleAttempts()).toEqual({ recovered: 0, failed: 1 });
     expect(row(young)).toEqual({ status: "generating", error: null });
     expect(row(old)).toEqual({ status: "error", error: INTERRUPTED_ATTEMPT });
     expect(row(ancientReady).status).toBe("ready");
     expect(row(ancientDone).status).toBe("finished");
     expect(row(ancientError)).toEqual({ status: "error", error: null });
-    expect(failStaleAttempts()).toBe(0);
+    expect(recoverStaleAttempts()).toEqual({ recovered: 0, failed: 0 });
   });
 
   it("a stale attempt no longer counts as 'being written' for a second tap once the boot sweep marked it failed", () => {
@@ -1042,7 +1043,7 @@ describe("practice: stale attempts at boot", () => {
     // Six minutes old: inside the ten-minute reuse window, but past the five minutes after which a restart's sweep fails it.
     const old = add(w.examId, "generating", "-6 minutes");
     expect(writingAttempt(w.userId, w.examId)).toBe(old);
-    failStaleAttempts();
+    recoverStaleAttempts();
     expect(writingAttempt(w.userId, w.examId)).toBeNull();
     expect(row(old).status).toBe("error");
   });
@@ -1060,7 +1061,7 @@ describe("practice: stale attempts at boot", () => {
     const id = add(w.examId, "generating", "-10 minutes");
     const q = Number(db.prepare("INSERT INTO questions (exam_id, topic_id, type, stem, options, correct_index, explanation) VALUES (?, ?, 'recall', 's', '[\"a\",\"b\"]', 0, 'e')").run(w.examId, w.topicId).lastInsertRowid);
     db.prepare("INSERT INTO attempt_questions (attempt_id, question_id, position) VALUES (?, ?, 0)").run(id, q);
-    failStaleAttempts();
+    recoverStaleAttempts();
     expect(members(id)).toHaveLength(1);
   });
 });

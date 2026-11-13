@@ -8,30 +8,34 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    const asked = Number(/Write (\d+) /.exec(opts.content)?.[1] ?? 1);
+    // The planned questions the prompt lists ("Q4: slide P12 — … — recall", "— case 2" in case sets).
+    const slots = [...opts.content.matchAll(/^Q(\d+): slide P(\d+)(?: — case (\d+))?/gm)].map((m) => ({ n: Number(m[1]), page: Number(m[2]), caseN: m[3] ? Number(m[3]) : null }));
     const title = /Topic: (Topic \d+)/.exec(opts.content)?.[1] ?? "";
     if (behaviour.throwsFor.has(title)) throw new Error("AI down for " + title);
-    const count = Math.min(asked, behaviour.returns.get(title) ?? asked);
-    const page = Number(/\[P(\d+)\]/.exec(opts.content)?.[1] ?? 0);
     if (opts.purpose === "case sets") {
+      const cases = [...new Set(slots.map((s) => s.caseN))];
       return {
-        cases: Array.from({ length: count }, () => ({
+        cases: cases.slice(0, behaviour.returns.get(title) ?? cases.length).map((caseN) => ({
           scenario: `scenario ${++counter}`,
           patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
           image_page_id: null,
-          questions: Array.from({ length: 3 }, (_, i) => ({
-            stem: `case-q ${++counter}-${i}`,
-            options: ["A", "B", "C", "D", "E"],
-            correct_index: 0,
-            explanation: "e",
-            source_page_id: page,
-            concept: "Gen concept",
-          })),
+          questions: slots
+            .filter((s) => s.caseN === caseN)
+            .map((s, i) => ({
+              slot: s.n,
+              stem: `case-q ${++counter}-${i}`,
+              options: ["A", "B", "C", "D", "E"],
+              correct_index: 0,
+              explanation: "e",
+              source_page_id: s.page,
+              concept: "Gen concept",
+            })),
         })),
       };
     }
     return {
-      questions: Array.from({ length: count }, () => ({
+      questions: slots.slice(0, behaviour.returns.get(title) ?? slots.length).map((s) => ({
+        slot: s.n,
         type: "recall",
         image_page_id: null,
         patient_box: null,
@@ -39,7 +43,7 @@ vi.mock("@/lib/ai", async (orig) => ({
         options: ["A", "B", "C", "D", "E"],
         correct_index: 0,
         explanation: "e",
-        source_page_id: page,
+        source_page_id: s.page,
         concept: "Gen concept",
       })),
     };
@@ -52,14 +56,22 @@ vi.mock("@/lib/credentials", async (orig) => ({
 
 import { db } from "@/lib/db";
 import { answerQuestion, startAttempt, finishAttempt } from "@/lib/practice";
-import { makeUser, world as makeWorld } from "./helpers";
+import { makeUser, slideNotes, world as makeWorld } from "./helpers";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
-/** An exam with `docs` lectures; topics are spread round-robin over the lectures, each with real slides. */
+/** An exam with `docs` lectures; topics are spread round-robin over the lectures, each with two slides of two facts. */
 function world(topics: number, docs = 1) {
   const lectures = Array.from({ length: docs }, (_, d) => `lec${d}.pdf`);
-  const w = makeWorld({ userId: makeUser(), sections: topics, slidesEach: 2, lectures, lectureStatus: "pending", pageStatus: "pending", linkLectures: false, session: false });
+  const w = makeWorld({
+    userId: makeUser(),
+    sections: topics,
+    slidesEach: 2,
+    lectures,
+    linkLectures: false,
+    session: false,
+    notes: (n) => slideNotes({ key_facts: [`fact ${n}a`, `fact ${n}b`] }),
+  });
   return { userId: w.userId, examId: w.examId, docIds: w.docIds, topicIds: w.topicIds, docOf: w.topicIds.map((_, t) => w.docIds[t % docs]) };
 }
 
@@ -174,7 +186,11 @@ describe("1. whole exam, size >= topics: every topic appears", () => {
 
   it("topics with unused (never answered) questions to reuse are still included once", async () => {
     const w = world(8);
-    for (const t of w.topicIds) for (let i = 0; i < 5; i++) q(w.examId, t, `spare ${t}-${i}`);
+    // A spare written from each slide (a question with no slide cannot stand in for a planned one).
+    for (const t of w.topicIds) {
+      const pages = JSON.parse((db.prepare("SELECT page_ids FROM topics WHERE id = ?").get(t) as { page_ids: string }).page_ids) as number[];
+      for (const p of pages) db.prepare("UPDATE questions SET source_page_id = ? WHERE id = ?").run(p, q(w.examId, t, `spare ${t}-${p}`));
+    }
     const e = await sitExam(w.examId, { size: 8 });
     expect(e.topics.size).toBe(8);
     expect(e.rows.length).toBe(8);
@@ -484,12 +500,14 @@ describe("edge cases", () => {
     expect(e.status).toBe("error");
   });
 
-  it("topic with no slides still gets a question", async () => {
+  // Was "still gets a question": exams are planned from the slides' facts now, so a section with no slides has
+  // nothing to plan and is left out; the others are asked.
+  it("topic with no slides is left out; the others are asked", async () => {
     const w = world(3);
     db.prepare("UPDATE topics SET page_ids = '[]' WHERE id = ?").run(w.topicIds[1]);
     const e = await sitExam(w.examId, { size: 3 });
     expect(e.status).toBe("ready");
-    expect(e.topics.size).toBe(3);
+    expect(e.topics).toEqual(new Set([w.topicIds[0], w.topicIds[2]]));
   });
 
   it("a deleted topic is neither asked nor blocks the others", async () => {
@@ -513,32 +531,39 @@ describe("edge cases", () => {
     expect(e2.topics.has(w.topicIds[1])).toBe(true);
   });
 
-  it("AI returns zero for a topic: the exam still has `size` questions (backfill)", async () => {
+  // Since exams are planned (docs/EXAM-PLAN.md), a section that comes up short is not backfilled from the others: its
+  // planned questions stay open, the exam is short for "busy", and they are written when she comes back.
+  const shortReason = (id: number) => (db.prepare("SELECT short_reason FROM attempts WHERE id = ?").get(id) as { short_reason: string | null }).short_reason;
+
+  it("AI returns zero for a topic: no backfill from the others; the exam is short and that topic's questions stay open", async () => {
     const w = world(6);
     behaviour.returns.set("Topic 2", 0);
     const e1 = await sitExam(w.examId, { size: 12 });
-    expect(e1.rows.length).toBe(12);
+    expect(e1.rows.length).toBe(10);
     expect(e1.topics.has(w.topicIds[1])).toBe(false);
+    expect(shortReason(e1.id)).toBe("busy");
   });
 
-  it("backfill: two sections come back short and one throws, the exam is still full", async () => {
+  it("two sections come back short and one throws: each gets one follow-up call, the rest stay open", async () => {
     const w = world(6);
     behaviour.returns.set("Topic 2", 0);
     behaviour.returns.set("Topic 4", 1);
     behaviour.throwsFor.add("Topic 5");
     const e1 = await sitExam(w.examId, { size: 18 });
     expect(e1.status).toBe("ready");
-    expect(e1.rows.length).toBe(18);
-    expect(new Set(e1.rows.map((r) => r.question_id)).size).toBe(18);
+    // 3 planned per section: Topic 2 none, Topic 4 one per call (two calls), Topic 5 none.
+    expect(e1.rows.length).toBe(18 - 3 - 1 - 3);
+    expect(new Set(e1.rows.map((r) => r.question_id)).size).toBe(11);
+    expect(calls.length).toBe(6 + 3);
   });
 
-  it("backfill stops when every section is short (no endless AI calls)", async () => {
+  it("every section short: one follow-up each, no more calls", async () => {
     const w = world(3);
     for (const t of ["Topic 1", "Topic 2", "Topic 3"]) behaviour.returns.set(t, 1);
     const e1 = await sitExam(w.examId, { size: 9 });
     expect(e1.status).toBe("ready");
-    expect(e1.rows.length).toBe(3);
-    expect(calls.length).toBe(3);
+    expect(e1.rows.length).toBe(6);
+    expect(calls.length).toBe(6);
   });
 
   it("AI THROWS for one topic mid-exam: the exam still forms", async () => {
