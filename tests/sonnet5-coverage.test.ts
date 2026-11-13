@@ -38,7 +38,8 @@ vi.mock("@/lib/ai", async (orig) => ({
         slot: s.n,
         type: "recall",
         image_page_id: null,
-        patient_box: null,
+        // A planned case question needs its patient (practice.ts refuses one without); kept only for case questions.
+        patient_box: { patient: "p", chief_complaint: "c", medical_history: "m", medications: "m", allergies: "a", dental_history: "d", findings: "f" },
         stem: `generated ${++counter}`,
         options: ["A", "B", "C", "D", "E"],
         correct_index: 0,

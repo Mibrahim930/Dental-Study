@@ -13,6 +13,8 @@ export type PlanFields = {
   smaller?: boolean | null;
   written?: number | null;
   pending?: number | null;
+  /** Planned questions taken out for good (never written). */
+  dropped?: number | null;
   short?: { reason: "key" | "busy" | "interrupted" | string; writing: boolean } | null;
   coverage?: { facts: number; inThisExam?: number | null; tested: number } | null;
 };
@@ -27,6 +29,7 @@ export function planFields(view: PlanFields | object) {
     smaller: typeof v.smaller === "boolean" ? v.smaller : null,
     written: num(v.written),
     pending: Math.max(0, num(v.pending) ?? 0),
+    dropped: Math.max(0, num(v.dropped) ?? 0),
     short: v.short && typeof v.short === "object" ? v.short : null,
     coverage: v.coverage && typeof v.coverage === "object" && num(v.coverage.facts) != null ? v.coverage : null,
   };
@@ -57,15 +60,38 @@ export function progressLine(v: PlanFields | object): { text: string; settings: 
 }
 
 /**
- * When the lectures hold less than she asked for: a complete exam, smaller than asked. Null otherwise. The server says
- * whether the shortfall is real (`smaller`: a case set naturally plans a few questions more or less than asked, as its
- * cases hold 3-5 each); a view without it compares the numbers.
+ * Why the exam has fewer questions than she asked for, in one sentence, or null. Two reasons, said together when both
+ * apply: the lectures hold less than she asked for (a complete exam, smaller than asked), and some planned questions
+ * couldn't be written (said once nothing is still being written). The server says whether the first shortfall is real
+ * (`smaller`: a case set naturally plans a few questions more or less than asked, as its cases hold 3-5 each); a view
+ * without it compares the numbers. The results and the exam screen both show this one sentence.
  */
 export function smallerPlanLine(v: PlanFields | object): string | null {
-  const { planned, requested, smaller } = planFields(v);
-  if (smaller === false) return null;
-  if (planned == null || requested == null || planned <= 0 || planned >= requested) return null;
-  return `These lectures have material for ${plural(planned, "question")}, so this exam has ${planned} (you asked for ${requested}).`;
+  const { planned, requested, smaller, dropped, pending } = planFields(v);
+  if (planned == null) return null;
+  // What the material held: the plan as made, dropped questions included.
+  const material = planned + dropped;
+  const isSmaller = smaller !== false && requested != null && material > 0 && material < requested;
+  const lost = dropped > 0 && pending === 0;
+  const has = `so this exam has ${planned}`;
+  if (lost && isSmaller)
+    return `These lectures have material for ${plural(material, "question")}, but ${dropped} couldn't be written, ${has} (you asked for ${requested}).`;
+  if (lost) return droppedLine(v);
+  if (!isSmaller) return null;
+  // Some were dropped but others are still being written: the size is not final yet, so no count of what it has.
+  if (dropped > 0) return `These lectures have material for ${plural(material, "question")} (you asked for ${requested}).`;
+  return `These lectures have material for ${plural(material, "question")}, ${has} (you asked for ${requested}).`;
+}
+
+/**
+ * Some planned questions couldn't be written (their lecture was removed, or the writer kept failing on them) and
+ * nothing is still being written: "2 questions couldn't be written, so this exam has 28." Null otherwise. Prefer
+ * smallerPlanLine on a screen, which folds this in when the exam is also smaller than asked.
+ */
+export function droppedLine(v: PlanFields | object): string | null {
+  const { planned, dropped, pending } = planFields(v);
+  if (!(dropped > 0) || pending > 0 || planned == null) return null;
+  return `${dropped === 1 ? "1 question couldn't" : `${dropped} questions couldn't`} be written, so this exam has ${planned}.`;
 }
 
 /** The exam screen and the results: what this exam covers and how much she has been tested on. Null without facts. */

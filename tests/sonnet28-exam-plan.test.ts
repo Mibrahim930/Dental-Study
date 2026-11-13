@@ -1,6 +1,8 @@
 // QA attack tests for exams written to a plan (docs/EXAM-PLAN.md): a hostile or sloppy writer, the money a plan costs,
 // persistence and races, resume rules, old data, the plan through startAttempt, timed exams and copyExam.
-// "BUG:" tests fail on purpose (a real defect, described above them); "(documented)" tests pin odd but accepted behaviour.
+// "(documented)" tests pin odd but accepted behaviour. The defects this file first found ("BUG:") are fixed; their tests
+// now pin the fix (a lecture removed never breaks an exam, a slot is tried at most MAX_TRIES times, damaged rows read as
+// old exams, a finished exam has nothing pending, a busy exam backs off).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Call = { purpose: string; content: string; ref?: string; maxTokens?: number };
@@ -76,7 +78,23 @@ vi.mock("next/headers", async () => {
 });
 
 import { db } from "@/lib/db";
-import { answerQuestion, finishAttempt, isResuming, KEY_RETRY_SEC, QUESTIONS_PER_CALL, RESUME_SPACING_SEC, recoverStaleAttempts, reportAttemptQuestion, resumeAttempt, SECONDS_PER_QUESTION, SECTION_CONCURRENCY, startAttempt } from "@/lib/practice";
+import {
+  answerQuestion,
+  finishAttempt,
+  isResuming,
+  KEY_RETRY_SEC,
+  MAX_RESUME_SPACING_SEC,
+  MAX_TRIES,
+  QUESTIONS_PER_CALL,
+  RESUME_SPACING_SEC,
+  recoverStaleAttempts,
+  reportAttemptQuestion,
+  resumeAttempt,
+  SECONDS_PER_QUESTION,
+  SECTION_CONCURRENCY,
+  startAttempt,
+} from "@/lib/practice";
+import { smallerPlanLine } from "@/components/examProgressText";
 import { attemptView, type AttemptProgress } from "@/lib/attemptView";
 import { answerHistory, examCoverage, factKey, type ExamPlan } from "@/lib/examPlan";
 import { removeDocument } from "@/lib/processing";
@@ -130,10 +148,18 @@ const inExam = (id: number) =>
        FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id WHERE aq.attempt_id = ? ORDER BY aq.position`,
     )
     .all(id) as InExam[];
-const progress = (id: number): Omit<AttemptProgress, "smaller"> => {
+const progress = (id: number): Omit<AttemptProgress, "smaller" | "dropped"> & { dropped?: number } => {
   const v = attemptView(id)!;
   return { requested: v.requested, planned: v.planned, written: v.written, pending: v.pending, short: v.short, coverage: v.coverage };
 };
+/** As `progress`, with the dropped count. */
+const progressAll = (id: number) => ({ ...progress(id), dropped: attemptView(id)!.dropped });
+/** Every slot's try count back to none (tests of the resume spacing that need several failing resumes). */
+const untried = (id: number) => {
+  const p = planOf(id);
+  db.prepare("UPDATE attempts SET slots_json = ? WHERE id = ?").run(JSON.stringify({ ...p, slots: p.slots.map((s) => ({ ...s, tries: 0 })) }), id);
+};
+const storedOptions = (id: number) => JSON.parse(attemptRow(id).options_json!) as { busyWait?: number };
 const KEY_ERROR = "401 authentication_error: invalid x-api-key";
 const BUSY_ERROR = "overloaded_error 529";
 const count = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { n: number }).n;
@@ -313,17 +339,24 @@ describe("a hostile or sloppy writer: which questions are accepted for a slot", 
     }
   });
 
-  // BUG: style "case": a planned case slot answered with type "case" and patient_box null (the schema allows null).
-  // The question is stored as type 'case' with patient_box NULL: the student gets an INBDE "case" question with no
-  // patient to read. src/lib/practice.ts:462 builds `box` as null when raw.patient_box is empty and never refuses it
-  // (the single-question path has no "case needs a patient_box" check, unlike the case-set path which has a schema).
-  it("BUG: a case slot answered with no patient box is refused (it would show a case question without a patient)", async () => {
+  // Style "case": a planned case slot answered with patient_box null (the schema allows null), {}, or blanks would show
+  // an INBDE "case" question with no patient to read. It is refused like any invalid question; the follow-up replaces it.
+  it("a case slot answered with no usable patient box is refused, and the one follow-up call replaces it", async () => {
     const w = exam(1, 3);
-    gen.answer = (slots) => ({ questions: slots.map((s: SlotLine) => ({ ...question(s.n, s.page, "case"), patient_box: null })) });
+    gen.answer = (slots, call) => ({
+      questions: slots.map((s: SlotLine, i: number) => ({
+        ...question(s.n, s.page, "case"),
+        ...(call === 1 ? { patient_box: [null, {}, { ...box, patient: " ", chief_complaint: "" }, "x"][i % 4] } : {}),
+      })),
+    });
     const id = startAttempt(w.examId, { size: 3, mode: "tutor", style: "case", adaptive: false });
-    await settled(id);
+    const row = await settled(id);
+    expect(gen.calls).toHaveLength(2);
+    expect(slotsOf(gen.calls[1].content)).toHaveLength(slotsOf(gen.calls[0].content).length);
     const rows = db.prepare("SELECT type, patient_box FROM questions WHERE exam_id = ?").all(w.examId) as { type: string; patient_box: string | null }[];
     expect(rows.filter((r) => r.type === "case" && r.patient_box == null)).toHaveLength(0);
+    for (const r of rows.filter((r) => r.type === "case")) expect(JSON.parse(r.patient_box!)).toMatchObject({ patient: "p", chief_complaint: "c" });
+    expect(row).toMatchObject({ status: "ready", short_reason: null });
   });
 });
 
@@ -505,14 +538,16 @@ describe("persistence and races", () => {
     for (const q of written) expect(reused).toContain(q);
   });
 
-  // (documented) A finished exam that was short keeps pending > 0 and short = busy: the slots were written later but
-  // never reached the exam. The screens show the "rest will be written" line only while the exam is in progress.
-  it("(documented) a finished short exam still reports its missing questions as pending", async () => {
+  // A finished exam can no longer get its missing questions: nothing is pending, nothing is "written shortly"; what was
+  // missing counts as dropped, and the results say so.
+  it("a finished short exam reports nothing pending: its missing questions count as dropped", async () => {
     const { id } = await shortExam();
     finishAttempt(id);
-    expect(progress(id)).toMatchObject({ planned: 6, written: 3, pending: 3, short: { reason: "busy", writing: false } });
+    expect(progressAll(id)).toMatchObject({ planned: 3, written: 3, pending: 0, dropped: 3, short: null });
+    expect(smallerPlanLine(attemptView(id)!)).toBe("3 questions couldn't be written, so this exam has 3.");
     ago(id, 600);
     expect(resumeAttempt(id)).toBe(false);
+    expect(gen.calls).toHaveLength(0);
   });
 
   it("a reported question never comes back and its slot is not rewritten; the rest is appended after it", async () => {
@@ -534,13 +569,9 @@ describe("persistence and races", () => {
     expect(attemptView(id)!.questions.some((q: { id: number }) => q.id === first.question_id)).toBe(false);
   });
 
-  // Deleting a lecture: its section goes with it, but the plan's slots for that section stay "todo"/"failed".
-  // Input: 2 lectures, one section each; section 2's writing failed (busy) so the exam is short; lecture 2 is removed
-  // (removeDocument deletes topic 2); the exam is opened again. Output: pending stays 3 and short stays "busy"
-  // forever ("The rest will be written shortly"), resume re-runs every two minutes and fails each slot again.
-  // Responsible: src/lib/practice.ts:397 (writeSlots marks a slot failed when its section is gone, never drops it),
-  // src/lib/practice.ts:746 (openSlots counts it forever) and :790 (short_reason kept while `left` > 0).
-  it("BUG: slots of a lecture she deleted do not stay pending forever", async () => {
+  // Deleting a lecture: its section goes with it, and the plan's open slots for that section are dropped (2 lectures,
+  // one section each; section 2's writing failed so the exam is short; lecture 2 is removed; the exam is opened again).
+  it("slots of a lecture she deleted are dropped: nothing pending, not short, no AI call", async () => {
     const w = world({ lectures: ["a.pdf", "b.pdf"], sections: 2, slidesEach: 3, ready: true, notes: factNotes });
     gen.fail = (_n: number, opts: Call) => (opts.content.includes("Topic: Topic 2\n") ? BUSY_ERROR : null);
     const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
@@ -553,15 +584,30 @@ describe("persistence and races", () => {
     const v = attemptView(id)!;
     expect(v.pending).toBe(0);
     expect(v.short).toBeNull();
+    expect(v).toMatchObject({ planned: 3, dropped: 3, written: 3 });
+    expect(gen.calls.filter((c: Call) => c.content.includes("Topic: Topic 2\n")).length).toBe(2); // the first write only
+    expect(attemptRow(id).short_reason).toBeNull();
+    expect(planOf(id).slots.filter((s) => s.state === "dropped")).toHaveLength(3);
+    ago(id, 600);
+    expect(resumeAttempt(id)).toBe(false);
   });
 
-  // Input: one section holds slides of two lectures (a topic may); the exam is short; the second lecture is removed;
-  // the exam is opened. The writer (perfect, as the prompt told it) answers every slot citing the slot's slide; for the
-  // removed slides validateMcq clears the citation and practice.ts falls back on slot.page_id, a page that no longer
-  // exists: INSERT hits the FOREIGN KEY. The transaction rolls back the WHOLE call, so questions for the slides that
-  // still exist (already paid for) are lost too, the slots stay open, and every later resume pays for the same call again.
-  // Responsible: src/lib/practice.ts:452 (`source = q.source_page_id ?? slot.page_id`), :442 (one transaction per call).
-  it("BUG: after a lecture of a section is removed, the slots whose slides still exist are still written and appended", async () => {
+  it("a done slot whose question was removed with its lecture is dropped, so planned matches the exam", async () => {
+    const w = world({ lectures: ["a.pdf", "b.pdf"], sections: 2, slidesEach: 3, ready: true, notes: factNotes });
+    const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await settled(id);
+    await removeDocument(w.docIds[1]); // its never-answered questions go
+    expect(progressAll(id)).toMatchObject({ planned: 3, written: 3, pending: 0, dropped: 3, short: null });
+    ago(id, 600);
+    expect(resumeAttempt(id)).toBe(false);
+    expect(planOf(id).slots.filter((s) => s.state === "dropped")).toHaveLength(3);
+    expect(gen.calls).toHaveLength(2);
+  });
+
+  // One section holds slides of two lectures (a topic may); the exam is short; the second lecture is removed; the exam
+  // is opened. The slots of the removed slides are dropped before the resume, so the call asks only for slides that
+  // still exist, and every question is stored and appended.
+  it("after a lecture of a section is removed, the slots whose slides still exist are still written and appended", async () => {
     const w = world({
       lectures: ["a.pdf", "b.pdf"],
       sections: [
@@ -583,6 +629,7 @@ describe("persistence and races", () => {
     expect(before).toBeGreaterThan(0);
     await removeDocument(w.docIds[1]);
     ago(id, 180);
+    gen.calls = [];
     expect(() => resumeAttempt(id)).not.toThrow();
     await settled(id);
     log.mockRestore();
@@ -590,13 +637,49 @@ describe("persistence and races", () => {
     expect(slotsLeft.length).toBeGreaterThan(0);
     expect(slotsLeft.every((s) => s.state === "done")).toBe(true);
     expect(inExam(id).length).toBe(before + slotsLeft.length);
+    const removed = planOf(id).slots.filter((s) => s.page_id != null && w.pageIds[2].includes(s.page_id));
+    expect(removed.every((s) => s.state === "dropped")).toBe(true);
+    expect(gen.calls.flatMap((c: Call) => slotsOf(c.content).map((s: SlotLine) => s.page)).some((p: number) => w.pageIds[2].includes(p))).toBe(false);
+    expect(progress(id)).toMatchObject({ pending: 0, short: null });
   });
 
-  // Input: two lectures; while the first exam is being written (calls in flight) lecture 2 is removed. Output: the
-  // exam ends "error" (raw "FOREIGN KEY constraint failed" shown to her) although section 1's questions were
-  // written and paid for; they sit in the plan as done and never reach an exam. Responsible: src/lib/practice.ts:463
-  // (insert with the deleted topic_id), :133-136 (any throw turns the whole attempt into an error).
-  it("BUG: removing a lecture while the exam is first written leaves a ready exam with the other section's questions", async () => {
+  // The same section, but the lecture is removed while the call is running: the writer answers every slot citing its
+  // slide. The questions on removed slides are refused before the insert (no foreign-key error), and the others of the
+  // same call are kept.
+  it("a lecture removed while a call runs: its questions are refused before the insert, the call's other questions are kept", async () => {
+    const w = world({
+      lectures: ["a.pdf", "b.pdf"],
+      sections: [
+        { lecture: 0, slides: 2 },
+        { lecture: 1, slides: 2 },
+      ],
+      ready: true,
+      notes: factNotes,
+    });
+    db.prepare("UPDATE topics SET page_ids = ? WHERE id = ?").run(JSON.stringify([...w.pageIds[0], ...w.pageIds[1]]), w.topicIds[0]);
+    db.prepare("DELETE FROM topics WHERE id = ?").run(w.topicIds[1]);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    hold();
+    const id = startAttempt(w.examId, { size: 8, mode: "tutor", style: "recall", adaptive: false });
+    await waitCalls(1);
+    await removeDocument(w.docIds[1]);
+    release!();
+    const row = await settled(id);
+    const errors = log.mock.calls.map((c) => String(c[1] ?? c[0]));
+    log.mockRestore();
+    expect(gen.calls).toHaveLength(1); // the refused ones are dropped (their slide is gone): no follow-up for them
+    expect(row).toMatchObject({ status: "ready", short_reason: null });
+    expect(errors.some((e) => /FOREIGN KEY|SQLITE/i.test(e))).toBe(false);
+    const plan = planOf(id);
+    expect(plan.slots.filter((s) => w.pageIds[0].includes(s.page_id!)).every((s) => s.state === "done")).toBe(true);
+    expect(plan.slots.filter((s) => w.pageIds[1].includes(s.page_id!)).every((s) => s.state === "dropped")).toBe(true);
+    expect(inExam(id)).toHaveLength(4);
+    expect(progressAll(id)).toMatchObject({ planned: 4, written: 4, pending: 0, dropped: 4 });
+  });
+
+  // Two lectures; while the first exam is being written (calls in flight) lecture 2 is removed: section 1's questions
+  // make a ready exam (smaller), lecture 2's slots are dropped, and no follow-up is paid for the removed section.
+  it("removing a lecture while the exam is first written leaves a ready exam with the other section's questions", async () => {
     const w = world({ lectures: ["a.pdf", "b.pdf"], sections: 2, slidesEach: 3, ready: true, notes: factNotes });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     hold();
@@ -607,7 +690,27 @@ describe("persistence and races", () => {
     const row = await settled(id);
     log.mockRestore();
     expect(row.status).toBe("ready");
-    expect(inExam(id).length).toBeGreaterThan(0);
+    expect(row.error).toBeNull();
+    expect(row.short_reason).toBeNull();
+    expect(inExam(id)).toHaveLength(3);
+    expect(gen.calls).toHaveLength(2);
+    expect(progressAll(id)).toMatchObject({ planned: 3, written: 3, pending: 0, dropped: 3, short: null });
+  });
+
+  it("removing every lecture while the exam is first written: an error she can read, never SQL text", async () => {
+    const w = world({ lectures: ["a.pdf"], sections: 1, slidesEach: 3, ready: true, notes: factNotes });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    hold();
+    const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    await waitCalls(1);
+    await removeDocument(w.docIds[0]);
+    release!();
+    const row = await settled(id);
+    log.mockRestore();
+    expect(row.status).toBe("error");
+    expect(row.error).toContain("No questions could be generated.");
+    expect(row.error).not.toMatch(/SQLITE|constraint|FOREIGN/i);
+    expect(gen.calls).toHaveLength(1);
   });
 
   it("deleting the exam while it is being written, or while a resume writes, throws nothing and leaves no rows", async () => {
@@ -694,6 +797,7 @@ describe("resume rules", () => {
 
   it("a resume whose every call fails again: slots stay open, resumed_at moves, one try only, no tight loop", async () => {
     const { id } = await shortExam();
+    untried(id); // (a short exam's open slots have had two of their three tries: see the MAX_TRIES tests)
     ago(id, 300);
     gen.fail = () => BUSY_ERROR;
     expect(resumeAttempt(id)).toBe(true);
@@ -747,18 +851,114 @@ describe("resume rules", () => {
     expect(gen.calls).toHaveLength(0);
   });
 
-  // (documented) Nothing counts how often one slot has been refused: a slot the writer keeps getting wrong costs two
-  // calls (the call and its follow-up) at every resume, which the page triggers every two minutes while it is open.
-  it("(documented) a slot the writer always refuses is tried again at every resume, two calls each time", async () => {
-    const { id } = await shortExam();
-    gen.answer = () => ({ questions: [] });
+  // Every call that asks for a slot counts one try (the first call, its follow-up, each resume). After MAX_TRIES a slot
+  // still empty is dropped: a fact the writer keeps refusing costs a bounded number of calls, and the exam completes.
+  it("a slot the writer always refuses is tried at most three times across resumes, then dropped: the exam completes", async () => {
+    expect(MAX_TRIES).toBe(3);
+    const w = exam(1, 3);
+    gen.answer = (slots) => ({ questions: slots.filter((s: SlotLine) => s.n !== 1).map((s: SlotLine) => question(s.n, s.page)) });
+    const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
+    expect(await settled(id)).toMatchObject({ status: "ready", short_reason: "busy" });
+    expect(planOf(id).slots.find((s) => s.n === 1)).toMatchObject({ state: "failed", tries: 2 });
+    for (let i = 0; i < 5; i++) {
+      ago(id, 3700);
+      resumeAttempt(id);
+      await settled(id);
+    }
+    const asked = gen.calls.filter((c: Call) => slotsOf(c.content).some((s: SlotLine) => s.n === 1)).length;
+    expect(asked).toBe(3);
+    expect(gen.calls).toHaveLength(3);
+    expect(planOf(id).slots.find((s) => s.n === 1)).toMatchObject({ state: "dropped", tries: 3 });
+    expect(attemptRow(id).short_reason).toBeNull();
+    expect(progressAll(id)).toMatchObject({ planned: 5, written: 5, pending: 0, dropped: 1, short: null });
+    expect(smallerPlanLine(attemptView(id)!)).toBe("1 question couldn't be written, so this exam has 5.");
+    // Later opens cost nothing.
+    jar.cookie = sessionCookie(w.userId);
+    ago(id, 3700);
+    await attemptGET(getReq(), ctx(id));
+    expect(resumeAttempt(id)).toBe(false);
+    expect(gen.calls).toHaveLength(3);
+  });
+
+  it("a key problem does not count as a try: the slot is tried again once her key is fixed", async () => {
+    const { w, id } = await shortExam(); // two tries each
+    gen.fail = () => KEY_ERROR;
     for (let i = 0; i < 3; i++) {
-      ago(id, 300);
+      ago(id, 31 * 60);
       expect(resumeAttempt(id)).toBe(true);
       await settled(id);
     }
-    expect(gen.calls).toHaveLength(6);
+    expect(gen.calls).toHaveLength(3);
+    expect(planOf(id).slots.filter((s) => s.state === "failed").every((s) => s.tries === 2)).toBe(true);
+    gen.fail = null;
+    db.prepare("UPDATE users SET provider = 'openai' WHERE id = ?").run(w.userId);
+    expect(resumeAttempt(id)).toBe(true);
+    await settled(id);
+    expect(progressAll(id)).toMatchObject({ written: 6, pending: 0, dropped: 0 });
+  });
+
+  it("resumed_at is set when a resume starts and again when it ends, so a slow resume is not followed at once by another", async () => {
+    const { id } = await shortExam();
+    untried(id);
+    ago(id, 300);
+    hold();
+    gen.fail = () => BUSY_ERROR;
+    expect(resumeAttempt(id)).toBe(true);
+    await waitCalls(1);
+    expect(count("SELECT COUNT(*) n FROM attempts WHERE id = ? AND resumed_at >= datetime('now', '-20 seconds')", id)).toBe(1); // at the start
+    ago(id, 900); // the call took fifteen minutes
+    release!();
+    await settled(id);
+    expect(count("SELECT COUNT(*) n FROM attempts WHERE id = ? AND resumed_at >= datetime('now', '-20 seconds')", id)).toBe(1); // and at the end
     expect(progress(id).pending).toBe(3);
+    expect(resumeAttempt(id)).toBe(false);
+  });
+
+  it("a busy exam backs off: each resume that writes nothing doubles the wait (2, 4, 8 … minutes, at most 60); one that writes resets it", async () => {
+    expect(MAX_RESUME_SPACING_SEC).toBe(3600);
+    const { id } = await shortExam();
+    gen.fail = () => BUSY_ERROR;
+    const waits: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      untried(id); // (only the spacing is tested here)
+      const wait = storedOptions(id).busyWait ?? RESUME_SPACING_SEC;
+      waits.push(wait);
+      ago(id, wait - 5);
+      expect(resumeAttempt(id)).toBe(false);
+      ago(id, wait + 1);
+      expect(resumeAttempt(id)).toBe(true);
+      await settled(id);
+    }
+    expect(waits).toEqual([120, 240, 480, 960, 1920, 3600, 3600]);
+    expect(storedOptions(id).busyWait).toBe(3600);
+    expect(progress(id).pending).toBe(3);
+    // A resume that writes one of the three: the wait is back to two minutes.
+    gen.fail = null;
+    const target = openNs(id)[0];
+    gen.answer = (slots) => ({ questions: slots.filter((s: SlotLine) => s.n === target).map((s: SlotLine) => question(s.n, s.page)) });
+    untried(id);
+    ago(id, 3601);
+    expect(resumeAttempt(id)).toBe(true);
+    await settled(id);
+    expect(storedOptions(id).busyWait).toBeUndefined();
+    expect(progress(id).pending).toBe(2);
+    ago(id, 118);
+    expect(resumeAttempt(id)).toBe(false);
+    ago(id, 121);
+    expect(resumeAttempt(id)).toBe(true);
+    await settled(id);
+  });
+
+  it("a key error worded in a way isKeyProblem does not know is treated as busy: backed off, and bounded per slot", async () => {
+    const { id } = await shortExam();
+    gen.fail = () => "The provider said: your account is suspended";
+    for (let i = 0; i < 4; i++) {
+      ago(id, 3700);
+      resumeAttempt(id);
+      await settled(id);
+    }
+    expect(gen.calls).toHaveLength(1); // the third and last try of each open slot (one call), then they are dropped
+    expect(progressAll(id)).toMatchObject({ pending: 0, dropped: 3, short: null });
   });
 });
 
@@ -791,15 +991,17 @@ describe("old data", () => {
     expect(resumeAttempt(id)).toBe(false);
   });
 
-  it("slots whose question was since deleted: no throw; the slot stays done, nothing pending, never rewritten", async () => {
+  it("slots whose question was since deleted: no throw; the slot is dropped, nothing pending, never rewritten", async () => {
     const w = exam(2, 3);
     const id = startAttempt(w.examId, { size: 6, mode: "tutor", style: "recall", adaptive: false });
     await settled(id);
     const victims = planOf(id).slots.slice(0, 2).map((s) => s.question_id);
     db.prepare(`DELETE FROM questions WHERE id IN (${victims.map(() => "?").join(",")})`).run(...victims);
-    expect(progress(id)).toMatchObject({ planned: 6, written: 4, pending: 0, short: null });
+    expect(progressAll(id)).toMatchObject({ planned: 4, written: 4, pending: 0, dropped: 2, short: null });
     ago(id, 600);
     expect(resumeAttempt(id)).toBe(false);
+    expect(planOf(id).slots.filter((s) => s.state === "dropped").map((s) => s.question_id)).toEqual(victims);
+    expect(gen.calls).toHaveLength(2);
   });
 
   it("an exam from before plans gets the same fields whether or not it has options", () => {
@@ -807,26 +1009,49 @@ describe("old data", () => {
     expect(progress(id)).toEqual(old);
   });
 
-  // Input: slots_json {"slots":[null]}. Output: attemptView throws "Cannot read properties of null (reading 'state')",
-  // and with it GET /api/attempts/[id] answers 500 for ever. Responsible: src/lib/attemptView.ts:200 (openSlots over
-  // unchecked entries; practice.ts:293 has the same shape). Needs a hand-damaged row: low.
-  it("BUG: a plan whose slots hold a null entry does not make attemptView throw", () => {
-    const { id } = oldAttempt('{"style":"recall","requested":2,"slots":[null],"cases":[]}');
-    expect(() => attemptView(id)).not.toThrow();
+  // A hand-damaged plan (null entries, entries of the wrong shape, damaged cases): the attempt reads as an old one, is
+  // never resumed, and the route answers 200.
+  it("a plan whose slots hold a null or wrongly shaped entry reads as an old exam: no throw, no resume, the route answers 200", async () => {
+    const good = { n: 1, topic_id: 1, page_id: 1, fact: "f", key: "f", kind: "recall", why: "new", state: "todo", question_id: null };
+    for (const slots of [
+      [null],
+      [good, null],
+      [good, 7],
+      [{ ...good, n: "1" }],
+      [{ ...good, state: "weird" }],
+      [{ ...good, key: null }],
+      [{ ...good, kind: 3 }],
+      [{ ...good, question_id: "x" }],
+    ]) {
+      const { w, id } = oldAttempt(JSON.stringify({ style: "recall", requested: 2, slots, cases: [] }));
+      expect(() => attemptView(id)).not.toThrow();
+      expect(progress(id)).toEqual(old);
+      expect(resumeAttempt(id)).toBe(false);
+      jar.cookie = sessionCookie(w.userId);
+      expect((await attemptGET(getReq(), ctx(id))).status).toBe(200);
+    }
+    const { id } = oldAttempt(JSON.stringify({ style: "recall", requested: 2, slots: [good], cases: [null] }));
+    expect(progress(id)).toEqual(old);
+    expect(gen.calls).toHaveLength(0);
   });
 
-  // Input: a plan with open slots and options_json that is not JSON. Output: resumeAttempt throws a SyntaxError, so
-  // GET /api/attempts/[id] answers 500 every time she opens the exam. Responsible: src/lib/practice.ts:751
-  // (JSON.parse of options_json without try/catch). Needs a damaged row: low.
-  it("BUG: damaged options_json with open slots does not make resumeAttempt throw", () => {
+  it("damaged options_json with open slots: no throw, never resumed, reads as an old exam, the route answers 200", async () => {
     const slots = JSON.stringify({
       style: "recall",
       requested: 2,
       cases: [],
       slots: [{ n: 1, topic_id: 1, page_id: 1, fact: "f", key: "f", kind: "recall", why: "new", state: "todo", question_id: null }],
     });
-    const { id } = oldAttempt(slots, "{broken");
-    expect(() => resumeAttempt(id)).not.toThrow();
+    for (const options of ["{broken", "null", "7", '{"style":"recall"}']) {
+      const { w, id } = oldAttempt(slots, options);
+      ago(id, 600);
+      expect(() => resumeAttempt(id)).not.toThrow();
+      expect(resumeAttempt(id)).toBe(false);
+      if (options === "{broken") expect(progress(id)).toEqual(old);
+      jar.cookie = sessionCookie(w.userId);
+      expect((await attemptGET(getReq(), ctx(id))).status).toBe(200);
+    }
+    expect(gen.calls).toHaveLength(0);
   });
 
   it("the boot sweep turns a damaged plan, or one whose done questions are gone, into an error instead of a ready exam with nothing in it", async () => {
@@ -964,6 +1189,7 @@ describe("timed exams", () => {
     db.prepare("UPDATE attempts SET started_at = datetime('now', '-10 minutes') WHERE id = ?").run(id);
     const started = attemptRow(id).started_at;
     // A failing resume changes nothing.
+    untried(id);
     ago(id, 300);
     gen.fail = () => BUSY_ERROR;
     resumeAttempt(id);
@@ -973,7 +1199,8 @@ describe("timed exams", () => {
     // A report does not move it.
     reportAttemptQuestion(w.userId, id, inExam(id)[0].question_id, null);
     limits.push(attemptRow(id).time_limit_sec!);
-    ago(id, 300);
+    untried(id);
+    ago(id, 600); // (the failed resume doubled the wait to four minutes)
     expect(resumeAttempt(id)).toBe(true);
     await settled(id);
     limits.push(attemptRow(id).time_limit_sec!);

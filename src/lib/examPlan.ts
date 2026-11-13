@@ -42,7 +42,9 @@ import type { Style } from "./practice";
 
 export type SlotKind = "recall" | "case" | "image";
 export type SlotWhy = "missed" | "unsure" | "new" | "starred" | "rotation" | "retry" | "unused";
-export type SlotState = "todo" | "done" | "failed";
+/** "dropped": taken out of the exam for good (its lecture was removed, or it was tried too often): never written, not
+ *  counted as planned. Set by lib/practice.ts only. */
+export type SlotState = "todo" | "done" | "failed" | "dropped";
 
 /** One planned question. See docs/EXAM-PLAN.md "Words". */
 export type Slot = {
@@ -61,6 +63,8 @@ export type Slot = {
   question_id: number | null;
   /** Case sets: the case this slot belongs to. */
   case_n?: number;
+  /** How many writing calls have asked for it (lib/practice.ts MAX_TRIES). Absent: none yet. */
+  tries?: number;
 };
 
 /** Case sets: one patient case, its slots (by n) in the order they are asked. */

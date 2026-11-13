@@ -19,7 +19,7 @@ const server = {
   APP_PASSCODE: "e2e",
   AI_FAKE: "1",
   // Every fake answer waits this long, so "writing…" screens are on screen long enough to be seen.
-  AI_FAKE_DELAY_MS: "700",
+  AI_FAKE_DELAY_MS: "1500",
   NEXT_TELEMETRY_DISABLED: "1",
 };
 // The tests sign cookies and write rows with the same settings the server runs with.

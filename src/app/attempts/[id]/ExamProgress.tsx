@@ -4,11 +4,14 @@ import { useState } from "react";
 import { SETTINGS_WORD, completeLine, coverageLine, progressLine, smallerPlanLine, type PlanFields } from "@/components/examProgressText";
 
 /**
- * Above the questions: how many are in while the rest are still being written, and (when the lectures hold less than
- * she asked for) why the exam is smaller. Shown only for exams that need it, so old attempts look as before.
+ * Above the questions: how many are in while the rest are still being written, and why the exam is smaller than she
+ * asked for (the lectures hold less, or some questions couldn't be written: one sentence, see smallerPlanLine). Shown
+ * only for exams that need it, so old attempts look as before. Every field is read through planFields, so a view
+ * without the newer ones (`dropped`) shows what it can.
  */
 export function ExamProgress({ view, count }: { view: PlanFields | object; count: number }) {
   const line = progressLine(view);
+  // The lectures hold less than asked, or questions were dropped (`dropped`), or both: one plain sentence.
   const smaller = smallerPlanLine(view);
   // Once shown, the box stays for the rest of the visit: when the last question arrives its text changes in place,
   // and the last progress sentence is kept (invisible) so the box keeps its height.

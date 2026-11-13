@@ -1,19 +1,21 @@
 import { db } from "./db";
 import { parseNotes } from "./processing";
 import type { Confidence } from "./practicePlan";
-import { isResuming, openSlots, type AttemptPlan, type ShortReason } from "./practice";
+import { goneSlots, isResuming, parsePlan, type AttemptPlan, type ShortReason } from "./practice";
 import { scoreContext } from "./readiness";
-import { examCoverage, type ExamPlan } from "./examPlan";
+import { examCoverage, type ExamPlan, type Slot } from "./examPlan";
 import type { Scope } from "./practicePlan";
 
 /**
  * How complete a planned exam is, for the line above the questions and the coverage line (docs/EXAM-PLAN.md "What
- * she sees"). Exams from before plans: requested, planned and coverage are null, pending is 0 and short is null.
+ * she sees"). Exams from before plans (or with a damaged plan): requested, planned and coverage are null, pending and
+ * dropped are 0 and short is null.
  */
 export type AttemptProgress = {
   /** How many questions she asked for. */
   requested: number | null;
-  /** Planned questions (can be fewer than requested when the material runs out: that exam is complete). */
+  /** Planned questions (can be fewer than requested when the material runs out: that exam is complete). Dropped ones
+   *  are not counted. */
   planned: number | null;
   /** The plan is really smaller than asked (the material ran out), so the screens say so. Case sets plan whole cases
    *  of 3-5 questions, so theirs counts cases: fewer than the planner aims for (one per four questions asked). */
@@ -21,8 +23,11 @@ export type AttemptProgress = {
   /** Questions in the exam now. While it is first being written: the planned questions written so far (questions
    *  coming back as they were are not counted; they go in when the exam is ready). */
   written: number;
-  /** Planned questions still to write (todo or failed). */
+  /** Planned questions still to write (todo or failed). Always 0 once she has finished: she can no longer get them. */
   pending: number;
+  /** Planned questions taken out for good: their lecture was removed, the writer kept refusing them, or she finished
+   *  before they were written. */
+  dropped: number;
   /** Why some are still missing, and whether they are being written right now. Null when none are missing. */
   short: null | { reason: ShortReason; writing: boolean };
   /** The material in scope: distinct facts, how many this exam's plan covers, how many she has been tested on. */
@@ -174,10 +179,21 @@ export function attemptView(attemptId: number) {
   return {
     attempt,
     questions,
-    plan: attempt.plan_json ? (JSON.parse(attempt.plan_json) as AttemptPlan) : null,
+    plan: readAttemptPlan(attempt.plan_json),
     context: finished ? scoreContext(attemptId) : null,
     ...progress(attempt, slotsJson, optionsJson, questions.length),
   };
+}
+
+/** The writing screen's plan summary; null when missing or damaged. */
+function readAttemptPlan(json: string | null): AttemptPlan | null {
+  if (!json) return null;
+  try {
+    const plan = JSON.parse(json) as AttemptPlan | null;
+    return plan && typeof plan === "object" ? plan : null;
+  } catch {
+    return null;
+  }
 }
 
 function progress(
@@ -186,26 +202,31 @@ function progress(
   optionsJson: string | null,
   written: number,
 ): AttemptProgress {
-  let plan: ExamPlan | null = null;
+  // A damaged plan or damaged options: the attempt reads as one from before plans.
+  let plan: ExamPlan | null = parsePlan(slotsJson);
   let scope: Scope = { kind: "all" };
   try {
-    plan = slotsJson ? (JSON.parse(slotsJson) as ExamPlan) : null;
-    if (plan && !Array.isArray(plan.slots)) plan = null;
-    const opts = optionsJson ? (JSON.parse(optionsJson) as { scope?: Scope }) : null;
-    if (opts?.scope?.kind) scope = opts.scope;
+    const opts = optionsJson ? (JSON.parse(optionsJson) as { scope?: Scope } | null) : null;
+    if (opts?.scope && typeof opts.scope === "object" && typeof opts.scope.kind === "string") scope = opts.scope;
   } catch {
     plan = null;
   }
-  if (!plan) return { requested: attempt.requested ?? null, planned: null, smaller: false, written, pending: 0, short: null, coverage: null };
-  const pending = openSlots(plan).length;
+  if (!plan) return { requested: attempt.requested ?? null, planned: null, smaller: false, written, pending: 0, dropped: 0, short: null, coverage: null };
+  // Dropped: as stored, plus what is gone since (a removed lecture; saved at the next resume), plus, once she has
+  // finished, whatever was still to write.
+  const finished = attempt.status === "finished";
+  const gone = goneSlots(plan);
+  const open = (s: Slot) => s.state === "todo" || s.state === "failed";
+  const kept = plan.slots.filter((s) => s.state !== "dropped" && !gone.has(s.n) && !(finished && open(s)));
+  const pending = kept.filter(open).length;
   // While the exam is first being written nothing is "missing" yet (the loading screen shows that), and nothing is in
   // the exam yet either: what has been written so far is what the planned questions say.
   const generating = attempt.status === "generating";
   const reason = attempt.short_reason as ShortReason | null;
   const short = !generating && pending > 0 && reason ? { reason, writing: isResuming(attempt.id) } : null;
-  if (generating) written = plan.slots.filter((s) => s.state === "done" && s.why !== "retry" && s.why !== "unused").length;
-  // The coverage line counts what the exam plans to cover, whatever each planned question's state.
-  const c = examCoverage(attempt.exam_id, scope, plan.slots);
+  if (generating) written = kept.filter((s) => s.state === "done" && s.why !== "retry" && s.why !== "unused").length;
+  // The coverage line counts what the exam plans to cover, whatever each planned question's state (not dropped ones).
+  const c = examCoverage(attempt.exam_id, scope, kept);
   const requested = attempt.requested ?? null;
   // As planCaseSet in lib/examPlan.ts: it aims for one case per four questions asked.
   const smaller =
@@ -213,10 +234,11 @@ function progress(
     (plan.style === "caseset" ? (Array.isArray(plan.cases) ? plan.cases.length : 0) < Math.max(1, Math.round(requested / 4)) : plan.slots.length < requested);
   return {
     requested,
-    planned: plan.slots.length,
+    planned: kept.length,
     smaller,
     written,
     pending,
+    dropped: plan.slots.length - kept.length,
     short,
     coverage: { facts: c.facts, inThisExam: c.inThisExam ?? 0, tested: c.tested },
   };

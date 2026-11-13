@@ -100,7 +100,17 @@ type AttemptOptions = {
  * her stored (encrypted) key and provider when her key last stopped the writing: writing is tried again once it
  * changes. Never the key itself, and never sent to the browser.
  */
-type StoredOptions = { style: Style; size: number; topicIds: number[]; documentIds: number[]; adaptive: boolean; scope: Scope; keyMark?: string };
+type StoredOptions = {
+  style: Style;
+  size: number;
+  topicIds: number[];
+  documentIds: number[];
+  adaptive: boolean;
+  scope: Scope;
+  keyMark?: string;
+  /** Seconds to wait before the next resume of a short exam (see RESUME_SPACING_SEC); absent: two minutes. */
+  busyWait?: number;
+};
 
 /** Slides a practice exam may draw from: null means every slide of each chosen topic. */
 type PageFilter = Set<number> | null;
@@ -132,11 +142,23 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
   );
   queued(examId, () =>
     generateAttempt(attemptId, examId, stored).catch((err) => {
-      db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
+      db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(storedError(err), attemptId);
     }),
   );
   return attemptId;
 }
+
+/** The error she is shown for an exam that could not be written: the AI's own words, never database text. */
+function storedError(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  const text = String(err);
+  if ((typeof code === "string" && code.startsWith("SQLITE")) || /SQLITE|constraint failed/i.test(text)) {
+    console.error("Practice exam: writing stopped on a database error", err);
+    return NO_QUESTIONS;
+  }
+  return text;
+}
+const NO_QUESTIONS = "No questions could be generated.";
 
 const buildQueue = new Map<number, Promise<void>>();
 
@@ -187,8 +209,9 @@ export function recoverStaleAttempts(): { recovered: number; failed: number } {
   let recovered = 0;
   let failed = 0;
   for (const a of stale) {
-    const plan = parsePlan(a.slots_json);
-    if (plan && plan.slots.some((s) => s.state === "done") && finishGeneration(a.id, "interrupted", false)) recovered++;
+    // Planned questions of a removed lecture (or whose question is gone) are dropped first.
+    const plan = parsePlan(a.slots_json) ? dropGone(a.id) : null;
+    if (plan && plan.slots.some((s) => s.state === "done") && finishGeneration(a.id, openSlots(plan).length ? "interrupted" : null, false)) recovered++;
     else {
       db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ? AND status = 'generating'").run(INTERRUPTED_ATTEMPT, a.id);
       failed++;
@@ -246,8 +269,10 @@ async function generateAttempt(attemptId: number, examId: number, opts: StoredOp
     unused: caseset ? [] : topics.flatMap((t) => unusedQuestions(t.id, opts.style, 1000, pages)),
     unusedCases: caseset ? topics.flatMap((t) => unusedCases(t.id, 1000, pages)) : [],
   });
-  if (plan.slots.length === 0) throw new Error("No questions could be generated.");
+  if (plan.slots.length === 0) throw new Error(NO_QUESTIONS);
   db.prepare("UPDATE attempts SET slots_json = ? WHERE id = ?").run(JSON.stringify(plan), attemptId);
+  // A lecture removed while the plan was made: its planned questions are dropped before anything is paid for.
+  const ready = dropGone(attemptId) ?? plan;
   savePlan(attemptId, {
     style: opts.style,
     ...(caseset ? { cases: plan.cases.length } : { size: plan.slots.length }),
@@ -257,11 +282,12 @@ async function generateAttempt(attemptId: number, examId: number, opts: StoredOp
   });
 
   const run = newRun(attemptId, examId);
-  await writeSlots(run, plan, opts, new Set(plan.slots.filter((s) => s.state === "todo").map((s) => s.n)));
-  const after = readPlan(attemptId);
+  await writeSlots(run, ready, opts, new Set(ready.slots.filter((s) => s.state === "todo").map((s) => s.n)));
+  // A lecture removed while it was being written: its planned questions are dropped, and the exam is the rest.
+  const after = dropGone(attemptId);
   const left = after ? openSlots(after).length : 0;
   if (!finishGeneration(attemptId, left ? shortOf(run) : null, true)) {
-    throw run.firstError instanceof Error ? run.firstError : new Error("No questions could be generated.");
+    throw run.firstError instanceof Error ? run.firstError : new Error(NO_QUESTIONS);
   }
   if (run.stopped) rememberKey(attemptId, examId);
 }
@@ -274,14 +300,64 @@ function savePlan(attemptId: number, plan: AttemptPlan) {
 
 // ---- The stored plan (attempts.slots_json) ----
 
-function parsePlan(json: string | null | undefined): ExamPlan | null {
+const STATES = new Set(["todo", "done", "failed", "dropped"]);
+const KINDS = new Set(["recall", "case", "image"]);
+const idOrNull = (x: unknown) => x == null || Number.isInteger(x);
+
+/** A stored slot as the writer and the screens need it; anything else means the plan was damaged by hand. */
+function isSlot(x: unknown): x is Slot {
+  const s = x as Partial<Slot> | null;
+  return (
+    !!s &&
+    typeof s === "object" &&
+    Number.isInteger(s.n) &&
+    typeof s.key === "string" &&
+    STATES.has(s.state as string) &&
+    KINDS.has(s.kind as string) &&
+    idOrNull(s.topic_id) &&
+    idOrNull(s.page_id) &&
+    idOrNull(s.question_id) &&
+    (s.fact == null || typeof s.fact === "string") &&
+    (s.tries == null || Number.isInteger(s.tries)) &&
+    (s.case_n == null || Number.isInteger(s.case_n))
+  );
+}
+const isCase = (x: unknown): x is CaseGroup => {
+  const c = x as Partial<CaseGroup> | null;
+  return !!c && typeof c === "object" && Number.isInteger(c.case_n) && Array.isArray(c.slots) && c.slots.every((n) => Number.isInteger(n));
+};
+
+/**
+ * The stored plan, or null when there is none or it is damaged (unparsable, or an entry of the wrong shape): such an
+ * attempt reads as one from before plans and is never resumed.
+ */
+export function parsePlan(json: string | null | undefined): ExamPlan | null {
   if (!json) return null;
   try {
     const plan = JSON.parse(json) as ExamPlan;
-    return Array.isArray(plan?.slots) ? { ...plan, cases: Array.isArray(plan.cases) ? plan.cases : [] } : null;
+    if (!plan || typeof plan !== "object" || !Array.isArray(plan.slots) || !plan.slots.every(isSlot)) return null;
+    const cases = Array.isArray(plan.cases) ? plan.cases : [];
+    return cases.every(isCase) ? { ...plan, cases } : null;
   } catch {
     return null;
   }
+}
+
+/** The stored start options, or null when missing or damaged (then the exam is never resumed). */
+function parseOptions(json: string | null | undefined): StoredOptions | null {
+  if (!json) return null;
+  try {
+    const o = JSON.parse(json) as StoredOptions;
+    return o && typeof o === "object" && typeof o.style === "string" && Array.isArray(o.topicIds) && Array.isArray(o.documentIds) ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Change the stored start options (her key mark, the busy wait); nothing when they are missing or damaged. */
+function updateOptions(attemptId: number, change: (o: StoredOptions) => StoredOptions) {
+  const opts = parseOptions((db.prepare("SELECT options_json FROM attempts WHERE id = ?").get(attemptId) as { options_json: string | null } | undefined)?.options_json);
+  if (opts) db.prepare("UPDATE attempts SET options_json = ? WHERE id = ?").run(JSON.stringify(change(opts)), attemptId);
 }
 
 /** The plan as stored now. Always read again: calls running side by side save their slots into the same row. */
@@ -291,28 +367,92 @@ function readPlan(attemptId: number): ExamPlan | null {
 
 /** Planned questions that still need writing. */
 export const openSlots = (plan: ExamPlan) => plan.slots.filter((s) => s.state === "todo" || s.state === "failed");
+const isOpen = (s: Slot) => s.state === "todo" || s.state === "failed";
+
+/**
+ * How many writing calls may ask for one planned question (the first call, its follow-up, then one each resume): a
+ * fact the writer keeps refusing costs a bounded number of calls, and the exam completes without it ("dropped").
+ */
+export const MAX_TRIES = 3;
 
 type SlotUpdate = { n: number; state: Slot["state"]; question_id?: number | null };
 
 /**
  * Save what one call did to its slots, by slot number, re-reading the row first (one small transaction per call, run
  * inside the caller's transaction when it has one). `drop`: slots taken out of the plan (the planned questions a
- * written case set left out: the case is complete with the questions it has).
+ * written case set left out: the case is complete with the questions it has). `tried`: slots this call asked for,
+ * each counted as one try; one still open after MAX_TRIES is dropped.
  */
-function saveSlots(attemptId: number, updates: SlotUpdate[], drop: number[] = []) {
+function saveSlots(attemptId: number, updates: SlotUpdate[], drop: number[] = [], tried: number[] = []) {
   db.transaction(() => {
     const plan = readPlan(attemptId);
     if (!plan) return;
     const byN = new Map(updates.map((u) => [u.n, u]));
     const gone = new Set(drop);
+    const asked = new Set(tried);
     const slots = plan.slots
       .filter((s) => !gone.has(s.n))
       .map((s) => {
         const u = byN.get(s.n);
-        return u ? { ...s, state: u.state, question_id: u.question_id !== undefined ? u.question_id : s.question_id } : s;
+        // A dropped slot stays dropped: a call ending later never reopens it.
+        let out: Slot = u && s.state !== "dropped" ? { ...s, state: u.state, question_id: u.question_id !== undefined ? u.question_id : s.question_id } : s;
+        if (asked.has(s.n)) out = { ...out, tries: (out.tries ?? 0) + 1 };
+        if (isOpen(out) && (out.tries ?? 0) >= MAX_TRIES) out = { ...out, state: "dropped" };
+        return out;
       });
     const cases = plan.cases.map((c) => ({ ...c, slots: c.slots.filter((n) => !gone.has(n)) })).filter((c) => c.slots.length > 0);
     db.prepare("UPDATE attempts SET slots_json = ? WHERE id = ?").run(JSON.stringify({ ...plan, slots, cases }), attemptId);
+  })();
+}
+
+/**
+ * Planned questions that can no longer be in this exam: an unwritten one whose section or slide is gone (a lecture
+ * was removed), and a written one whose question is gone (removed with its lecture). Reads only.
+ */
+export function goneSlots(plan: ExamPlan): Set<number> {
+  const out = new Set<number>();
+  const sectionPages = new Map<number, Set<number> | null>();
+  const topicRow = db.prepare("SELECT page_ids FROM topics WHERE id = ?");
+  const pageRow = db.prepare("SELECT 1 FROM pages WHERE id = ?");
+  const questionRow = db.prepare("SELECT 1 FROM questions WHERE id = ?");
+  const pagesOf = (topicId: number) => {
+    if (!sectionPages.has(topicId)) {
+      const t = topicRow.get(topicId) as { page_ids: string } | undefined;
+      let ids: Set<number> | null = null;
+      try {
+        ids = t ? new Set(JSON.parse(t.page_ids) as number[]) : null;
+      } catch {
+        ids = new Set();
+      }
+      sectionPages.set(topicId, ids);
+    }
+    return sectionPages.get(topicId)!;
+  };
+  for (const s of plan.slots) {
+    if (s.state === "done") {
+      if (s.question_id != null && !questionRow.get(s.question_id)) out.add(s.n);
+    } else if (isOpen(s)) {
+      const pages = s.topic_id == null ? null : pagesOf(s.topic_id);
+      if (!pages || (s.page_id != null && (!pages.has(s.page_id) || !pageRow.get(s.page_id)))) out.add(s.n);
+    }
+  }
+  return out;
+}
+
+/**
+ * Drop the planned questions that can no longer be in the exam (goneSlots) and save the plan; with nothing left to
+ * write, the exam is no longer short. Returns the plan as saved (null when there is none, or it is damaged).
+ */
+function dropGone(attemptId: number): ExamPlan | null {
+  return db.transaction(() => {
+    const plan = readPlan(attemptId);
+    if (!plan) return null;
+    const gone = goneSlots(plan);
+    if (gone.size === 0) return plan;
+    const next = { ...plan, slots: plan.slots.map((s) => (gone.has(s.n) ? { ...s, state: "dropped" as const } : s)) };
+    db.prepare("UPDATE attempts SET slots_json = ? WHERE id = ?").run(JSON.stringify(next), attemptId);
+    if (openSlots(next).length === 0) db.prepare("UPDATE attempts SET short_reason = NULL WHERE id = ? AND short_reason IS NOT NULL").run(attemptId);
+    return next;
   })();
 }
 
@@ -323,12 +463,30 @@ type Run = { attemptId: number; examId: number; userId: number; stopped: boolean
 const newRun = (attemptId: number, examId: number): Run => ({ attemptId, examId, userId: examOwner(examId), stopped: false, busy: false, firstError: null });
 const shortOf = (run: Run): ShortReason => (run.stopped ? "key" : "busy");
 
-/** A failed call: her key or billing stops this run's further calls; anything else is a busy service. */
-function failed(run: Run, err: unknown) {
+/**
+ * A failed call: her key or billing stops this run's further calls; anything else is a busy service. Returns whether
+ * it was her key (that call is not counted against its planned questions: they are not the problem).
+ */
+function failed(run: Run, err: unknown): boolean {
   run.firstError ??= err;
   console.error(`Practice exam ${run.attemptId}: a writing call failed`, err);
-  if (isKeyProblem(err instanceof Error ? err.message : String(err))) run.stopped = true;
-  else run.busy = true;
+  if (isKeyProblem(err instanceof Error ? err.message : String(err))) return (run.stopped = true);
+  run.busy = true;
+  return false;
+}
+
+const sectionExists = (topicId: number) => !!db.prepare("SELECT 1 FROM topics WHERE id = ?").get(topicId);
+const pageExists = (pageId: number) => !!db.prepare("SELECT 1 FROM pages WHERE id = ?").get(pageId);
+
+/**
+ * Of these planned questions, the ones still open in the stored plan: not written, not dropped meanwhile (tried too
+ * often, or their slide removed while the call ran: dropped here, so no follow-up is paid for them).
+ */
+function stillOpen<T>(attemptId: number, items: T[], slotsOf: (x: T) => Slot[]): T[] {
+  const plan = dropGone(attemptId);
+  if (!plan) return [];
+  const open = new Set(openSlots(plan).map((s) => s.n));
+  return items.filter((x) => slotsOf(x).every((s) => open.has(s.n)));
 }
 
 /** A section as the writer needs it: its slides (only the chosen lectures'), their notes, its concept names. */
@@ -374,8 +532,19 @@ async function writeSlots(run: Run, plan: ExamPlan, opts: StoredOptions, only: S
     return out;
   };
 
+  // One call going wrong in an unexpected way (not the AI: that is handled in the call) costs only its own slots.
+  const guarded = async (slots: Slot[], work: () => Promise<void>) => {
+    try {
+      await work();
+    } catch (err) {
+      failed(run, err);
+      saveSlots(run.attemptId, slots.filter((s) => s.state !== "dropped").map((s) => ({ n: s.n, state: "failed" as const })));
+    }
+  };
+
   if (opts.style === "caseset") {
-    const slotOf = new Map(plan.slots.map((s) => [s.n, s]));
+    // Dropped slots are no longer part of their case.
+    const slotOf = new Map(plan.slots.filter((s) => s.state !== "dropped").map((s) => [s.n, s]));
     const groups = plan.cases
       .map((g) => ({ group: g, slots: g.slots.map((n) => slotOf.get(n)).filter((s): s is Slot => !!s) }))
       .filter((g) => g.slots.length > 0 && g.slots.every((s) => only.has(s.n)));
@@ -383,9 +552,10 @@ async function writeSlots(run: Run, plan: ExamPlan, opts: StoredOptions, only: S
       chunks(gs, CASES_PER_CALL).map((part) => ({ topicId, part })),
     );
     await mapLimit(calls, CASESET_CONCURRENCY, async ({ topicId, part }) => {
+      const slots = part.flatMap((g) => g.slots);
       const w = writerFor(topicId);
-      if (!w) return saveSlots(run.attemptId, part.flatMap((g) => g.slots.map((s) => ({ n: s.n, state: "failed" as const }))));
-      await writeCaseCall(run, w, part);
+      if (!w) return saveSlots(run.attemptId, slots.map((s) => ({ n: s.n, state: "failed" as const })));
+      await guarded(slots, () => writeCaseCall(run, w, part));
     });
     return;
   }
@@ -395,7 +565,7 @@ async function writeSlots(run: Run, plan: ExamPlan, opts: StoredOptions, only: S
   await mapLimit(calls, SECTION_CONCURRENCY, async ({ topicId, part }) => {
     const w = writerFor(topicId);
     if (!w) return saveSlots(run.attemptId, part.map((s) => ({ n: s.n, state: "failed" as const })));
-    await writeQuestionCall(run, w, part);
+    await guarded(part, () => writeQuestionCall(run, w, part));
   });
 }
 
@@ -403,9 +573,10 @@ async function writeSlots(run: Run, plan: ExamPlan, opts: StoredOptions, only: S
 async function writeQuestionCall(run: Run, w: SectionWriter, slots: Slot[]) {
   if (run.stopped) return;
   let left = slots;
-  for (let round = 0; round < 2 && left.length > 0 && !run.stopped; round++) {
+  // Not when the section was removed meanwhile (its planned questions are dropped), nor for a slot tried too often.
+  for (let round = 0; round < 2 && left.length > 0 && !run.stopped && sectionExists(w.topic.id); round++) {
     const filled = await askQuestions(run, w, left);
-    left = left.filter((s) => !filled.has(s.n));
+    left = stillOpen(run.attemptId, left.filter((s) => !filled.has(s.n)), (s) => [s]);
   }
   // Tried twice (or stopped by her key after trying): what is still empty failed this time.
   if (left.length) saveSlots(run.attemptId, left.map((s) => ({ n: s.n, state: "failed" as const })));
@@ -414,10 +585,18 @@ async function writeQuestionCall(run: Run, w: SectionWriter, slots: Slot[]) {
 /** Ask for these planned questions; store the ones that fit their slot. Returns the slot numbers filled. */
 async function askQuestions(run: Run, w: SectionWriter, slots: Slot[]): Promise<Set<number>> {
   const filled = new Set<number>();
+  const tried = slots.map((s) => s.n);
   let out: z.infer<typeof GeneratedQuestions>;
+  let creds: ReturnType<typeof credentials>;
+  try {
+    creds = credentials(run.userId);
+  } catch (err) {
+    failed(run, err); // no call was made: nothing counted
+    return filled;
+  }
   try {
     out = await generate({
-      creds: credentials(run.userId),
+      creds,
       purpose: "practice questions",
       ref: `attempt:${run.attemptId}`,
       tier: "quality",
@@ -428,10 +607,15 @@ async function askQuestions(run: Run, w: SectionWriter, slots: Slot[]): Promise<
       content: `Topic: ${w.topic.title}\nConcept names: ${w.concepts.join("; ")}\n\nWrite ${slots.length} questions, one for each of these planned questions:\n${slots.map(slotLine).join("\n")}\n\nSlides:\n${markPictures(slideNotesText(w.pages), w.pages)}`,
     });
   } catch (err) {
-    failed(run, err);
+    if (!failed(run, err)) saveSlots(run.attemptId, [], [], tried);
     return filled;
   }
   const open = new Map(slots.map((s) => [s.n, s]));
+  // The section may have been removed while the call ran: nothing of it is stored (its planned questions are dropped).
+  if (!sectionExists(w.topic.id)) {
+    saveSlots(run.attemptId, [], [], tried);
+    return filled;
+  }
   // Drop anything that repeats an existing question on this topic word for word.
   const seen = new Set((db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL").all(w.topic.id) as { stem: string }[]).map((r) => normStem(r.stem)));
   const insert = db.prepare(
@@ -458,33 +642,55 @@ async function askQuestions(run: Run, w: SectionWriter, slots: Slot[]): Promise<
       const picture = wantsPicture ? pictureFor(w.pages, raw.image_page_id, slot.kind === "image" ? source : q.source_page_id, q.stem) : null;
       if (wantsPicture && !picture) continue;
       const imagePage = picture?.page_id ?? null;
+      // Never a slide that is gone (a lecture removed while the call ran): the question would cite nothing.
+      if ((source != null && !pageExists(source)) || (imagePage != null && !pageExists(imagePage))) continue;
       const type = imagePage != null && (slot.kind === "image" || raw.type === "image") ? "image" : slot.kind === "image" ? "recall" : slot.kind;
-      const box = type === "case" && raw.patient_box ? JSON.stringify(raw.patient_box) : null;
-      const id = Number(
-        insert.run(
-          w.topic.exam_id,
-          w.topic.id,
-          upsertConcept(run.userId, raw.concept),
-          type,
-          box,
-          q.stem,
-          JSON.stringify(q.options),
-          q.correct_index,
-          raw.explanation,
-          q.option_notes ? JSON.stringify(q.option_notes) : null,
-          source,
-          imagePage,
-          slot.key,
-        ).lastInsertRowid,
-      );
+      // A case question shows its patient: without a usable patient box it is refused like any other bad question.
+      const patient = type === "case" ? patientBox(raw.patient_box) : null;
+      if (type === "case" && !patient) continue;
+      const box = patient ? JSON.stringify(patient) : null;
+      // Each question on its own: one that cannot be stored never costs the others of this call.
+      let id: number;
+      try {
+        id = db.transaction(() =>
+          Number(
+            insert.run(
+              w.topic.exam_id,
+              w.topic.id,
+              upsertConcept(run.userId, raw.concept),
+              type,
+              box,
+              q.stem,
+              JSON.stringify(q.options),
+              q.correct_index,
+              raw.explanation,
+              q.option_notes ? JSON.stringify(q.option_notes) : null,
+              source,
+              imagePage,
+              slot.key,
+            ).lastInsertRowid,
+          ),
+        )();
+      } catch (err) {
+        console.error(`Practice exam ${run.attemptId}: a written question could not be stored`, err);
+        continue;
+      }
       if (key) seen.add(key);
       open.delete(slot.n);
       filled.add(slot.n);
       updates.push({ n: slot.n, state: "done", question_id: id });
     }
-    if (updates.length) saveSlots(run.attemptId, updates);
+    saveSlots(run.attemptId, updates, [], tried);
   })();
   return filled;
+}
+
+/** The patient box of a case question as the question card shows it (label → text), or null when it is unusable. */
+function patientBox(raw: unknown): Record<string, string> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const box: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) if (typeof v === "string" && v.trim()) box[k] = v.trim();
+  return box.patient && box.chief_complaint ? box : null;
 }
 
 // ---- Board-style case sets: one patient, several questions ----
@@ -547,9 +753,9 @@ type CasePart = { group: CaseGroup; slots: Slot[] };
 async function writeCaseCall(run: Run, w: SectionWriter, part: CasePart[]) {
   if (run.stopped) return;
   let left = part;
-  for (let round = 0; round < 2 && left.length > 0 && !run.stopped; round++) {
+  for (let round = 0; round < 2 && left.length > 0 && !run.stopped && sectionExists(w.topic.id); round++) {
     const written = await askCases(run, w, left);
-    left = left.filter((g) => !written.has(g.group.case_n));
+    left = stillOpen(run.attemptId, left.filter((g) => !written.has(g.group.case_n)), (g) => g.slots);
   }
   if (left.length) saveSlots(run.attemptId, left.flatMap((g) => g.slots.map((s) => ({ n: s.n, state: "failed" as const }))));
 }
@@ -566,10 +772,18 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
   const usedPatients = (
     db.prepare("SELECT scenario FROM cases WHERE id IN (SELECT case_id FROM questions WHERE topic_id = ?) ORDER BY id DESC LIMIT 30").all(w.topic.id) as { scenario: string }[]
   ).map((c) => `- ${c.scenario.slice(0, 200)}`);
+  const tried = part.flatMap((g) => g.slots.map((s) => s.n));
   let out: z.infer<typeof GeneratedCases>;
+  let creds: ReturnType<typeof credentials>;
+  try {
+    creds = credentials(run.userId);
+  } catch (err) {
+    failed(run, err); // no call was made: nothing counted
+    return written;
+  }
   try {
     out = await generate({
-      creds: credentials(run.userId),
+      creds,
       purpose: "case sets",
       ref: `attempt:${run.attemptId}`,
       tier: "quality",
@@ -584,7 +798,11 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
       }\n\nSlides:\n${notes}`,
     });
   } catch (err) {
-    failed(run, err);
+    if (!failed(run, err)) saveSlots(run.attemptId, [], [], tried);
+    return written;
+  }
+  if (!sectionExists(w.topic.id)) {
+    saveSlots(run.attemptId, [], [], tried);
     return written;
   }
 
@@ -602,7 +820,7 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
       const target = qsIn.map((q) => (Number.isInteger(q?.slot) ? groupOf.get(q.slot) : undefined)).find((g) => g && !written.has(g.group.case_n));
       if (!target) continue;
       const mine = new Map(target.slots.map((s) => [s.n, s]));
-      const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
+      const image = c.image_page_id != null && imageIds.has(c.image_page_id) && pageExists(c.image_page_id) ? c.image_page_id : null;
       const kept = new Map<number, { slot: Slot; q: Exclude<ReturnType<typeof validateMcq>, string>; explanation: string; concept: string; picture: number | null }>();
       for (const raw of qsIn) {
         const slot = Number.isInteger(raw?.slot) ? mine.get(raw.slot) : undefined;
@@ -616,34 +834,47 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
           picture = pictureFor(w.pages, null, q.source_page_id, q.stem)?.page_id ?? null;
           if (picture == null) continue;
         }
+        // Never a slide that is gone (a lecture removed while the call ran).
+        const source = q.source_page_id ?? slot.page_id;
+        if ((source != null && !pageExists(source)) || (picture != null && !pageExists(picture))) continue;
         kept.set(slot.n, { slot, q, explanation: raw.explanation, concept: raw.concept, picture });
       }
       // A case is a set: one with fewer than three usable questions (or fewer than a smaller planned case) isn't one.
       if (kept.size < Math.min(3, target.slots.length)) continue;
-      const box = JSON.stringify(c.patient_box);
-      const caseId = Number(insertCase.run(w.topic.exam_id, c.scenario, box, image).lastInsertRowid);
+      const patient = patientBox(c.patient_box);
+      if (!patient) continue;
+      const box = JSON.stringify(patient);
       const updates: SlotUpdate[] = [];
-      for (const s of target.slots) {
-        const k = kept.get(s.n);
-        if (!k) continue;
-        const id = Number(
-          insertQ.run(
-            w.topic.exam_id,
-            w.topic.id,
-            upsertConcept(run.userId, k.concept),
-            box,
-            k.q.stem,
-            JSON.stringify(k.q.options),
-            k.q.correct_index,
-            k.explanation,
-            k.q.option_notes ? JSON.stringify(k.q.option_notes) : null,
-            k.q.source_page_id ?? s.page_id,
-            k.picture,
-            caseId,
-            s.key,
-          ).lastInsertRowid,
-        );
-        updates.push({ n: s.n, state: "done", question_id: id });
+      // Each case on its own: one that cannot be stored never costs the other cases of this call.
+      try {
+        db.transaction(() => {
+          const caseId = Number(insertCase.run(w.topic.exam_id, c.scenario, box, image).lastInsertRowid);
+          for (const s of target.slots) {
+            const k = kept.get(s.n);
+            if (!k) continue;
+            const id = Number(
+              insertQ.run(
+                w.topic.exam_id,
+                w.topic.id,
+                upsertConcept(run.userId, k.concept),
+                box,
+                k.q.stem,
+                JSON.stringify(k.q.options),
+                k.q.correct_index,
+                k.explanation,
+                k.q.option_notes ? JSON.stringify(k.q.option_notes) : null,
+                k.q.source_page_id ?? s.page_id,
+                k.picture,
+                caseId,
+                s.key,
+              ).lastInsertRowid,
+            );
+            updates.push({ n: s.n, state: "done", question_id: id });
+          }
+        })();
+      } catch (err) {
+        console.error(`Practice exam ${run.attemptId}: a written case could not be stored`, err);
+        continue;
       }
       written.add(target.group.case_n);
       saveSlots(
@@ -652,6 +883,7 @@ async function askCases(run: Run, w: SectionWriter, part: CasePart[]): Promise<S
         target.slots.filter((s) => !kept.has(s.n)).map((s) => s.n),
       );
     }
+    saveSlots(run.attemptId, [], [], tried);
   })();
   return written;
 }
@@ -708,10 +940,7 @@ function keyMark(examId: number): string {
 }
 
 function rememberKey(attemptId: number, examId: number) {
-  const row = db.prepare("SELECT options_json FROM attempts WHERE id = ?").get(attemptId) as { options_json: string | null } | undefined;
-  if (!row?.options_json) return;
-  const opts = JSON.parse(row.options_json) as StoredOptions;
-  db.prepare("UPDATE attempts SET options_json = ? WHERE id = ?").run(JSON.stringify({ ...opts, keyMark: keyMark(examId) }), attemptId);
+  updateOptions(attemptId, (o) => ({ ...o, keyMark: keyMark(examId) }));
 }
 
 /** Resumes running now, one per attempt. */
@@ -720,8 +949,13 @@ const resuming = new Map<number, Promise<void>>();
 /** Whether the missing questions of this attempt are being written right now. */
 export const isResuming = (attemptId: number) => resuming.has(attemptId);
 
-/** How long a short exam waits between tries, and how long one stopped by her key waits when the key is unchanged. */
+/**
+ * How long a short exam waits between tries, and how long one stopped by her key waits when the key is unchanged. A
+ * resume that writes nothing doubles the wait (2, 4, 8 … minutes, at most an hour: options_json `busyWait`), so a
+ * service that stays down, or a key error worded in a way isKeyProblem does not know, is not tried every two minutes.
+ */
 export const RESUME_SPACING_SEC = 120;
+export const MAX_RESUME_SPACING_SEC = 60 * 60;
 export const KEY_RETRY_SEC = 30 * 60;
 
 /**
@@ -733,6 +967,16 @@ export const KEY_RETRY_SEC = 30 * 60;
  */
 export function resumeAttempt(attemptId: number): boolean {
   if (resuming.has(attemptId)) return false;
+  try {
+    return startResume(attemptId);
+  } catch (err) {
+    // Opening the exam never fails over this.
+    console.error(`Practice exam ${attemptId}: could not check for missing questions`, err);
+    return false;
+  }
+}
+
+function startResume(attemptId: number): boolean {
   const a = db
     .prepare(
       `SELECT exam_id, status, slots_json, options_json, short_reason,
@@ -740,18 +984,21 @@ export function resumeAttempt(attemptId: number): boolean {
        FROM attempts WHERE id = ?`,
     )
     .get(attemptId) as { exam_id: number; status: string; slots_json: string | null; options_json: string | null; short_reason: string | null; since: number | null } | undefined;
-  if (!a || a.status !== "ready" || !a.options_json) return false;
-  const plan = parsePlan(a.slots_json);
+  if (!a || a.status !== "ready") return false;
+  const opts = parseOptions(a.options_json);
+  if (!opts || !parsePlan(a.slots_json)) return false;
+  // Planned questions of a removed lecture are dropped before anything else (no AI call: done on every open).
+  const plan = dropGone(attemptId);
   if (!plan) return false;
   const open = openSlots(plan);
   if (open.length === 0) {
     if (a.short_reason) db.prepare("UPDATE attempts SET short_reason = NULL WHERE id = ?").run(attemptId);
     return false;
   }
-  const opts = JSON.parse(a.options_json) as StoredOptions;
-  // Her key: not before she changed it (then at once), or half an hour passed. Anything else: two minutes apart.
+  // Her key: not before she changed it (then at once), or half an hour passed. Anything else: two minutes apart, more
+  // after resumes that wrote nothing.
   const waited = (sec: number) => a.since == null || a.since >= sec;
-  if (a.short_reason === "key" ? opts.keyMark === keyMark(a.exam_id) && !waited(KEY_RETRY_SEC) : !waited(RESUME_SPACING_SEC)) return false;
+  if (a.short_reason === "key" ? opts.keyMark === keyMark(a.exam_id) && !waited(KEY_RETRY_SEC) : !waited(busyWait(opts))) return false;
 
   db.prepare("UPDATE attempts SET resumed_at = datetime('now') WHERE id = ?").run(attemptId);
   const run = newRun(attemptId, a.exam_id);
@@ -767,14 +1014,24 @@ export function resumeAttempt(attemptId: number): boolean {
     } catch (err) {
       console.error(`Practice exam ${attemptId}: writing the missing questions failed`, err);
     }
+    // The wait before the next try counts from the end of this one, so a slow resume is not followed at once by another.
+    db.prepare("UPDATE attempts SET resumed_at = datetime('now') WHERE id = ?").run(attemptId);
   }).finally(() => resuming.delete(attemptId));
   resuming.set(attemptId, work);
   return true;
 }
 
-/** After a resume: the newly written questions go at the end of the exam, in plan order. */
+/** The wait before the next resume of a short exam (not one stopped by her key). */
+const busyWait = (opts: StoredOptions) =>
+  Number.isFinite(opts.busyWait) ? Math.min(MAX_RESUME_SPACING_SEC, Math.max(RESUME_SPACING_SEC, opts.busyWait!)) : RESUME_SPACING_SEC;
+
+/**
+ * After a resume: the newly written questions go at the end of the exam, in plan order. Planned questions of a lecture
+ * removed meanwhile are dropped. A resume that wrote nothing doubles the wait before the next; one that wrote
+ * something resets it.
+ */
 function appendWritten(attemptId: number, ns: Set<number>, run: Run) {
-  const plan = readPlan(attemptId);
+  const plan = dropGone(attemptId);
   if (!plan) return;
   const fresh = plan.slots.filter((s) => ns.has(s.n) && s.state === "done" && s.question_id != null).sort((a, b) => a.n - b.n);
   const left = openSlots(plan).length;
@@ -792,6 +1049,8 @@ function appendWritten(attemptId: number, ns: Set<number>, run: Run) {
     ).run(left ? shortOf(run) : null, ids.length * SECONDS_PER_QUESTION, attemptId);
   })();
   if (run.stopped) rememberKey(attemptId, run.examId);
+  else if (fresh.length > 0) updateOptions(attemptId, (o) => ({ ...o, busyWait: undefined }));
+  else if (left > 0) updateOptions(attemptId, (o) => ({ ...o, busyWait: Math.min(MAX_RESUME_SPACING_SEC, busyWait(o) * 2) }));
 }
 
 const styleTypes = (style: Style) => (style === "recall" ? ["recall"] : style === "case" ? ["case", "image"] : ["recall", "case", "image"]);

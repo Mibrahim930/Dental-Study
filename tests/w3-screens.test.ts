@@ -17,6 +17,7 @@ import {
   addedToast,
   completeLine,
   coverageLine,
+  droppedLine,
   examCoverageLine,
   finishPendingLine,
   planFields,
@@ -90,6 +91,32 @@ describe("smallerPlanLine (the lectures hold less than she asked for)", () => {
     expect(smallerPlanLine({ planned: 24, requested: 25, smaller: null })).not.toBeNull();
     expect(planFields({ smaller: "yes" }).smaller).toBeNull();
   });
+
+  it("questions that couldn't be written: one sentence once nothing is pending, singular handled", () => {
+    expect(droppedLine({ planned: 28, requested: 30, dropped: 2, pending: 0 })).toBe("2 questions couldn't be written, so this exam has 28.");
+    expect(droppedLine({ planned: 5, requested: 6, dropped: 1, pending: 0 })).toBe("1 question couldn't be written, so this exam has 5.");
+    // On a screen, smallerPlanLine says it (the material was not smaller than asked: planned + dropped = requested).
+    expect(smallerPlanLine({ planned: 28, requested: 30, dropped: 2, pending: 0, smaller: false })).toBe("2 questions couldn't be written, so this exam has 28.");
+    expect(smallerPlanLine({ planned: 28, requested: 30, dropped: 2, pending: 0 })).toBe("2 questions couldn't be written, so this exam has 28.");
+    // Still writing: not yet (the progress line speaks), and never "smaller than asked" for what is only dropped.
+    expect(droppedLine({ planned: 28, requested: 30, dropped: 2, pending: 3 })).toBeNull();
+    expect(smallerPlanLine({ planned: 28, requested: 30, dropped: 2, pending: 3, smaller: false })).toBeNull();
+    // Nothing dropped, or an old attempt / a server without the field: nothing.
+    expect(droppedLine({ planned: 30, requested: 30, dropped: 0, pending: 0 })).toBeNull();
+    expect(droppedLine({ planned: 30, requested: 30, pending: 0 })).toBeNull();
+    expect(droppedLine({ dropped: 2 })).toBeNull();
+    expect(droppedLine({ planned: 3, dropped: "2" })).toBeNull();
+  });
+
+  it("smaller than asked AND some couldn't be written: one combined sentence, never two that disagree", () => {
+    const v = { planned: 28, requested: 100, dropped: 2, pending: 0, smaller: true };
+    expect(smallerPlanLine(v)).toBe("These lectures have material for 30 questions, but 2 couldn't be written, so this exam has 28 (you asked for 100).");
+    expect(smallerPlanLine({ ...v, dropped: 1, planned: 29 })).toBe("These lectures have material for 30 questions, but 1 couldn't be written, so this exam has 29 (you asked for 100).");
+    // While the rest is still being written, the size is not final: the material only.
+    expect(smallerPlanLine({ ...v, pending: 4 })).toBe("These lectures have material for 30 questions (you asked for 100).");
+    // Without anything dropped, exactly as before.
+    expect(smallerPlanLine({ planned: 30, requested: 100, dropped: 0, pending: 0 })).toBe("These lectures have material for 30 questions, so this exam has 30 (you asked for 100).");
+  });
 });
 
 describe("coverageLine (exam screen and results)", () => {
@@ -148,8 +175,10 @@ describe("the other sentences", () => {
     expect(completeLine(30)).toBe("All 30 questions are in.");
   });
   it("planFields reads an old attempt (no plan fields) as nothing pending", () => {
-    expect(planFields({ attempt: {}, questions: [] })).toEqual({ requested: null, planned: null, smaller: null, written: null, pending: 0, short: null, coverage: null });
+    expect(planFields({ attempt: {}, questions: [] })).toEqual({ requested: null, planned: null, smaller: null, written: null, pending: 0, dropped: 0, short: null, coverage: null });
     expect(planFields({ pending: "3", coverage: { tested: 1 } })).toMatchObject({ pending: 0, coverage: null });
+    expect(planFields({ dropped: "2" })).toMatchObject({ dropped: 0 });
+    expect(planFields({ dropped: -1 })).toMatchObject({ dropped: 0 });
   });
 });
 

@@ -108,7 +108,7 @@ const inExam = (id: number) =>
   db
     .prepare("SELECT aq.question_id, aq.position, aq.option_order, q.fact_key, q.case_id, q.stem FROM attempt_questions aq JOIN questions q ON q.id = aq.question_id WHERE aq.attempt_id = ? ORDER BY aq.position")
     .all(id) as { question_id: number; position: number; option_order: string | null; fact_key: string | null; case_id: number | null; stem: string }[];
-const progress = (id: number): AttemptProgress => {
+const progress = (id: number): Omit<AttemptProgress, "dropped"> => {
   const v = attemptView(id)!;
   return { requested: v.requested, planned: v.planned, smaller: v.smaller, written: v.written, pending: v.pending, short: v.short, coverage: v.coverage };
 };
@@ -522,8 +522,11 @@ describe("resumeAttempt", () => {
     expect(progress(id).short).toBeNull();
   });
 
-  it("a short exam that fails again stays short, with the slots open for the next try", async () => {
+  it("a short exam that fails again stays short, with the slots open for the next try (while they have tries left)", async () => {
     const { id } = await shortExam();
+    // The first write already tried these twice (the call and its follow-up); give them their tries back.
+    const p = planOf(id);
+    db.prepare("UPDATE attempts SET slots_json = ? WHERE id = ?").run(JSON.stringify({ ...p, slots: p.slots.map((s) => ({ ...s, tries: 0 })) }), id);
     ago(id, 3);
     gen.fail = () => BUSY_ERROR;
     expect(resumeAttempt(id)).toBe(true);
@@ -531,6 +534,21 @@ describe("resumeAttempt", () => {
     expect(a.short_reason).toBe("busy");
     expect(progress(id).pending).toBe(3);
     expect(inExam(id)).toHaveLength(3);
+  });
+
+  it("a short exam whose resume fails on the slots' third try: they are dropped and the exam is complete with what it has", async () => {
+    const { id } = await shortExam();
+    ago(id, 3);
+    gen.fail = () => BUSY_ERROR;
+    expect(resumeAttempt(id)).toBe(true);
+    const a = await settled(id);
+    expect(gen.calls).toHaveLength(1); // no follow-up: that would be a fourth try
+    expect(a.short_reason).toBeNull();
+    expect(progress(id)).toMatchObject({ pending: 0, short: null, planned: 3 });
+    expect(attemptView(id)!.dropped).toBe(3);
+    expect(inExam(id)).toHaveLength(3);
+    ago(id, 60);
+    expect(resumeAttempt(id)).toBe(false);
   });
 
   it("after a key problem: not while the key is unchanged, at once when it changed, or after 30 minutes", async () => {
