@@ -11,7 +11,7 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string; system: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content, system: opts.system });
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     throw new Error("unexpected " + opts.purpose);
   }),
 }));
@@ -24,6 +24,7 @@ import { db, type Topic } from "@/lib/db";
 import { getLesson, lessonText, LESSON_VERSION } from "@/lib/study";
 import { RAMBLE_RUN, trimRamble } from "@/lib/lessonCoverage";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 /** The tail of the explanation in the student's screenshot. */
 const RAMBLE = [
@@ -197,7 +198,9 @@ describe("new lessons", () => {
     lessonWriter = (n) => (n === 1 ? lessonOf(w, (i) => (i === 0 ? RAMBLE : `${GOOD} fact a1`)) : lessonOf(w, (i) => `${GOOD} fact a${i}`));
     const lesson = await getLesson(w.topic());
     expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
-    expect(calls[1].content).toContain(`- [P${w.pages[0]}] L1.pdf slide 1`);
+    expect(calls[1].content).toContain(`[P${w.pages[0]}] L1.pdf slide 1`);
+    expect(calls[1].content).toMatch(/this slide got no entry\. Write it, explaining F1\./);
+    expect(calls[1].content).not.toContain(`[P${w.pages[1]}]`); // only the slide that needs it
     expect(lesson.slides.map((s) => s.page_id)).toEqual(w.pages);
   });
 });

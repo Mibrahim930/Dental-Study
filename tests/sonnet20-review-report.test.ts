@@ -1,5 +1,5 @@
-// Sonnet QA pass on Release 4: the lecture review and the Report button. Tests named "BUG: …" fail on purpose: each one
-// pins a defect (see the comment above it for the input and the wrong output).
+// Sonnet QA pass on Release 4: the lecture review and the Report button. Several tests here pinned a defect when written
+// (the comment above each gives the input and the wrong output it used to give); all are fixed and now guard against regressions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs";
 import path from "path";
@@ -55,7 +55,6 @@ vi.mock("next/headers", async () => {
   return { cookies: async () => ({ get: (name: string) => (name === SESSION_COOKIE && jar.cookie ? { value: jar.cookie } : undefined) }) };
 });
 
-import { sessionToken } from "@/lib/auth";
 import { db, FILES_DIR, type Topic } from "@/lib/db";
 import { answerQuizMe, hideQuizMeQuestion, lectureMisses, lectureReviewStatus, openLectureReview, QuizMeError, type QuizMeQuestion } from "@/lib/quizMe";
 import { clearTopicQuizAnswers, hideQuizQuestionEverywhere, recordQuizAnswer } from "@/lib/quizProgress";
@@ -70,24 +69,14 @@ import { POST as quizReportPOST } from "@/app/api/sessions/[id]/quiz/report/rout
 import { POST as attemptReportPOST } from "@/app/api/attempts/[id]/report/route";
 import { POST as flagPOST } from "@/app/api/questions/[id]/flag/route";
 import { GET as exportGET } from "@/app/api/admin/reported-questions/route";
-import { makeUser } from "./helpers";
+import { apiReadyUser, ctx, postJson as post, postJson, sessionCookie, slideNotes, world as makeWorld } from "./helpers";
 
-const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
-const post = (body: unknown) => new Request("http://x/api", { method: "POST", body: JSON.stringify(body) });
-const rawPost = (text: string) => new Request("http://x/api", { method: "POST", body: text });
+const rawPost = (text: string) => postJson(text);
 
-const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact ${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+const notes = (i: number) => slideNotes({ title: `slide ${i}`, key_facts: [`fact ${i}`] });
 
-function apiReadyUser(admin = false): number {
-  const id = makeUser();
-  db.prepare("UPDATE users SET api_key_enc = 'enc', must_change_password = 0, is_admin = ? WHERE id = ?").run(admin ? 1 : 0, id);
-  return id;
-}
 function signIn(userId: number | null) {
-  if (userId == null) return void (jar.cookie = undefined);
-  const { session_epoch } = db.prepare("SELECT session_epoch FROM users WHERE id = ?").get(userId) as { session_epoch: number };
-  jar.cookie = sessionToken(userId, session_epoch);
+  jar.cookie = sessionCookie(userId);
 }
 
 const quizQs = (prefix: string, n: number): QuizQuestion[] =>
@@ -104,27 +93,26 @@ const quizQs = (prefix: string, n: number): QuizQuestion[] =>
 
 /** One exam, two lectures: lecture 1 has sections t1 (a0-a2) and t2 (b0-b2); lecture 2 has t3 (c0-c1). Plus a study session. */
 function world(userId = apiReadyUser()) {
-  const examId = Number(db.prepare("INSERT INTO exams (user_id, name, topic_status) VALUES (?, 'Endo', 'ready')").run(userId).lastInsertRowid);
-  const mkDoc = (name: string) => Number(db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, 'done', 2)").run(examId, name).lastInsertRowid);
-  const doc1 = mkDoc("Lecture 1 - Pulp.pdf");
-  const doc2 = mkDoc("Lecture 2 - Perio.pdf");
-  let n = 0;
-  const page = (doc: number) => {
-    n++;
-    return Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, '', 'done', ?)").run(doc, n, notes(n)).lastInsertRowid);
-  };
-  const topic = (doc: number, pos: number, title: string, qs: QuizQuestion[]) =>
-    Number(
-      db
-        .prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, document_id, checks_json, checks_version) VALUES (?, ?, ?, 's', ?, ?, ?, ?)")
-        .run(examId, pos, title, JSON.stringify([page(doc), page(doc)]), doc, JSON.stringify(qs), QUIZ_VERSION).lastInsertRowid,
-    );
-  const t1 = topic(doc1, 0, "Pulp anatomy", quizQs("a", 3));
-  const t2 = topic(doc1, 1, "Pulp disease", quizQs("b", 3));
-  const t3 = topic(doc2, 2, "Perio basics", quizQs("c", 2));
-  const sessionId = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(examId).lastInsertRowid);
-  const topicRow = (id: number) => db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic;
-  return { userId, examId, doc1, doc2, t1, t2, t3, sessionId, topicRow };
+  const w = makeWorld({
+    userId,
+    exam: "Endo",
+    ready: true,
+    lectures: ["Lecture 1 - Pulp.pdf", "Lecture 2 - Perio.pdf"],
+    pageCount: 2,
+    slidesEach: 2,
+    text: "",
+    notes,
+    quizVersion: QUIZ_VERSION,
+    session: true,
+    sections: [
+      { title: "Pulp anatomy", summary: "s", lecture: 0, quiz: quizQs("a", 3) },
+      { title: "Pulp disease", summary: "s", lecture: 0, quiz: quizQs("b", 3) },
+      { title: "Perio basics", summary: "s", lecture: 1, quiz: quizQs("c", 2) },
+    ],
+  });
+  const [doc1, doc2] = w.docIds;
+  const [t1, t2, t3] = w.topicIds;
+  return { userId, examId: w.examId, doc1, doc2, t1, t2, t3, sessionId: w.sessionId, topicRow: w.topicRow };
 }
 type World = ReturnType<typeof world>;
 
@@ -227,7 +215,7 @@ describe("lectureMisses: odd data", () => {
   // parse() in quizMe.ts (JSON.parse(row.answers_json); stored[i]) throws SyntaxError on "{bad" and TypeError on "null".
   // lectureMisses loops over EVERY highlight quiz of the lecture, so one such row makes the lecture's status route
   // (GET /api/quizme/lecture) and its review button a 500 for good, hiding the misses that are fine.
-  it("fixed: one corrupt answers_json row (invalid JSON / the JSON null) breaks the whole lecture's misses instead of being skipped", () => {
+  it("one corrupt answers_json row (invalid JSON / the JSON null) is skipped and the lecture's other misses still show", () => {
     const w = world();
     recordQuizAnswer(w.userId, w.t1, 0, 1, false);
     const id = quizMeOn(w.userId, w.examId, w.t2, [1]);
@@ -308,7 +296,7 @@ describe("lectureMisses: odd data", () => {
   // lectureMisses: `add` checks lecture_review_done by ref only, then dedupes by text. With a question missed in the section
   // quiz (ref quiz:T:0) and the same text missed in a quiz me (ref quizme:ID:0), a right answer in the review retires only
   // the section-quiz ref; the quiz-me copy of the very same question is the next "first" with that text and comes back.
-  it("fixed: a question she got right in the review comes back in the next one when the same text was also missed in a quiz me", () => {
+  it("a question she got right in the review stays retired when the same text was also missed in a quiz me", () => {
     const w = world();
     const id = quizMeOn(w.userId, w.examId, w.t1, [1]);
     const qs = quizMeQs(id);
@@ -323,7 +311,7 @@ describe("lectureMisses: odd data", () => {
 
   // Same cause, with Report: reporting the review question hides it in the section quiz only (hideAtSource), the quiz-me copy
   // with the same text is still a wrong answer and is listed again, so a reported question returns as a miss.
-  it("fixed: a reported lecture-review question returns as a miss when the same text was also missed in a quiz me", () => {
+  it("a reported lecture-review question does not return as a miss when the same text was also missed in a quiz me", () => {
     const w = world();
     const id = quizMeOn(w.userId, w.examId, w.t1, [1]);
     const qs = quizMeQs(id);
@@ -471,7 +459,7 @@ describe("openLectureReview", () => {
   // been replaced ("Write new questions" clears quiz_answers and swaps checks_json) points at a different question.
   // Input: miss quiz:T:0, open the review, regenerate T's quiz, report the review question.
   // Wrong output: the NEW quiz's question 0 (which she never saw in a review) is hidden everywhere (all copies).
-  it("fixed: reporting a review question after its section's quiz was rewritten hides an unrelated question at that index", () => {
+  it("reporting a review question after its section's quiz was rewritten hides no unrelated question", () => {
     const w = world();
     recordQuizAnswer(w.userId, w.t1, 0, 1, false);
     const v = openLectureReview(w.userId, w.examId, w.doc1);
@@ -483,7 +471,7 @@ describe("openLectureReview", () => {
 
   // Reporting a section-quiz question marks it hidden in the quiz (and copies), but an already-open lecture review made
   // from that miss is a stored copy: it keeps showing, and lets her answer, the question she reported.
-  it("fixed: a question reported in the section quiz still shows (and can be answered) in an already-open lecture review", async () => {
+  it("a question reported in the section quiz leaves an already-open lecture review too", async () => {
     const w = world();
     recordQuizAnswer(w.userId, w.t1, 0, 1, false);
     recordQuizAnswer(w.userId, w.t1, 1, 1, false);
@@ -514,7 +502,7 @@ describe("hideQuizQuestionEverywhere", () => {
   // copyExam sets source_exam_id = the shared exam's own id, so a copy of a copy points at the middle copy, not the root.
   // hideQuizQuestionEverywhere uses root = source_exam_id ?? id, so a report in the original reaches the middle copy but not
   // the copy of the copy, and a report in the copy of the copy reaches only the middle copy: the original keeps the question.
-  it("fixed: a report in the original misses the copy of a copy", () => {
+  it("a report in the original reaches the copy of a copy", () => {
     const owner = apiReadyUser();
     const w = world(owner);
     const b = copyOf(owner, w.examId, apiReadyUser());
@@ -524,7 +512,7 @@ describe("hideQuizQuestionEverywhere", () => {
     expect([hiddenOf(w.t1)[1], hiddenOf(topicAt(b, 0).id)[1], hiddenOf(topicAt(c, 0).id)[1]]).toEqual([true, true, true]);
   });
 
-  it("fixed: a report in a copy of a copy misses the original", () => {
+  it("a report in a copy of a copy reaches the original", () => {
     const owner = apiReadyUser();
     const w = world(owner);
     const b = copyOf(owner, w.examId, apiReadyUser());
@@ -537,7 +525,7 @@ describe("hideQuizQuestionEverywhere", () => {
   // copyExam strips hidden/report_note from the quiz it copies ("the classmate starts clean" was written when a report only
   // hid the question in the reporter's own copy). Reports now hide the question in every copy, so a copy made AFTER a report
   // brings the reported question back. (Practice questions are different: copyExam skips flagged ones.)
-  it("fixed: a classmate who adds the exam after a question was reported gets that question back, visible", () => {
+  it("a classmate who adds the exam after a question was reported gets it still hidden", () => {
     const owner = apiReadyUser();
     const w = world(owner);
     hideQuizQuestionEverywhere(w.t1, "a1", "nonsense");
@@ -590,7 +578,7 @@ describe("hideQuizQuestionEverywhere", () => {
   // POST /quiz/report finds the question by id and, hidden or not, saves a record: a double submit (two taps, two tabs) or a
   // resend writes a second reported_questions row and file for the same question. The other three report routes refuse the
   // second report (404 / 400).
-  it("fixed: reporting the same section-quiz question twice records it twice", async () => {
+  it("reporting the same section-quiz question twice records it once", async () => {
     const w = world();
     signIn(w.userId);
     expect((await quizReportPOST(post({ topicId: w.t2, questionId: "b1", reason: "x" }), ctx(w.sessionId))).status).toBe(200);
@@ -925,7 +913,7 @@ describe("reportedStems and the section-quiz writer", () => {
   // reportedStems takes the newest 12 ROWS and de-duplicates afterwards, so repeats of one stem eat the cap. Input: the same
   // question reported 13 times (a double submit on the section-quiz route records twice; a question flagged in several exams),
   // then two other reported questions older than that. Wrong output: ["Repeated?"]; the two older stems are not passed to the writer.
-  it("fixed: repeated reports of one stem use up the cap of 12 and hide older distinct reported stems", () => {
+  it("repeated reports of one stem do not use up the cap of 12; older distinct reported stems still reach the writer", () => {
     const w = world();
     report(w, w.t1, "Older one?");
     report(w, w.t1, "Older two?");
@@ -977,7 +965,7 @@ describe("reportedStems and the section-quiz writer", () => {
   // generateSectionQuiz only passes reportedStems to the writer as advice; keep()/the repair filter dedupe among the new
   // drafts only. Input: a reported stem "Q2 fresh?", the writer (as models do) writes it again. Wrong output: the new quiz
   // contains the reported question verbatim, and since a rewrite clears answers it is back in front of every student.
-  it("fixed: a writer that returns a reported question's text again gets it into the new quiz", async () => {
+  it("a writer that returns a reported question's text again does not get it into the new quiz", async () => {
     const w = world();
     const t = bigTopic(w, 3);
     report(w, t.id, "The reported question?");
@@ -988,7 +976,7 @@ describe("reportedStems and the section-quiz writer", () => {
 
   // The repair call (for slots whose draft was dropped) is told only the questions kept so far ([...kept.values()]), not the
   // reported stems, so it is the one writer call that may write a reported question again.
-  it("fixed: the repair call is not told the reported stems", async () => {
+  it("the repair call is told the reported stems", async () => {
     const w = world();
     const t = bigTopic(w, 3);
     report(w, t.id, "Reported before the rewrite?");
@@ -1003,7 +991,7 @@ describe("reportedStems and the section-quiz writer", () => {
   // reportedStems(topic.id) matches reported_questions.topic_id exactly. A report is saved with the REPORTER's topic id, and a
   // class copy's section has its own id, so the stems reported by classmates (or the owner) never reach a copy's writer, though
   // generateSectionQuiz's comment and the module's doc say "own copy or any class copy".
-  it("fixed: stems reported in a class copy's section are not given to the writer of another copy of that section", async () => {
+  it("stems reported in a class copy's section are given to the writer of another copy of that section", async () => {
     const owner = apiReadyUser();
     const w = world(owner);
     const mate = apiReadyUser();

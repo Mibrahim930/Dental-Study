@@ -13,20 +13,6 @@ export const REPORT_REASON_MAX = 500;
 export const REPORT_SOURCES = ["quiz", "practice", "review", "quizme", "lecture_review"] as const;
 export type ReportSource = (typeof REPORT_SOURCES)[number];
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS reported_questions (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  exam_id INTEGER REFERENCES exams(id) ON DELETE SET NULL,
-  topic_id INTEGER,                                -- the section the question tests (not a foreign key: maps get rebuilt)
-  source TEXT NOT NULL,                            -- quiz | practice | review | quizme | lecture_review
-  ref TEXT NOT NULL,                               -- where it came from: "quiz:<topic>:<question id>", "question:<id>", "quizme:<id>:<index>"
-  question_json TEXT NOT NULL,                     -- the question as the student saw it (see ReportedQuestion)
-  reason TEXT,                                     -- the optional one-liner from the report dialog
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS reported_questions_topic ON reported_questions(topic_id);`);
-
 /** The question as it was shown, plus where it came from, so a report reads on its own. */
 export type ReportedQuestion = {
   question: string;

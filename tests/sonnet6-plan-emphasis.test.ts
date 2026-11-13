@@ -53,7 +53,7 @@ describe("checkedAnswer", () => {
     const idx = checkedAnswer(O, 9, "Normal pulp");
     expect(isValidChoice(O, idx)).toBe(false);
   });
-  it("BUG(minor): options that differ only by punctuation/symbols are not falsely dropped", () => {
+  it("options that differ only by punctuation/symbols are not falsely dropped", () => {
     // "+" vs "-" normalise to the same empty string; the right answer "-" (index 1) is compared with the first "empty" option.
     expect(checkedAnswer(["+", "-", "0"], 1, "-")).toBe(1);
   });
@@ -168,7 +168,7 @@ describe("planner: not enough time", () => {
     expect(renderToStaticMarkup(createElement(PlanWarnings, { warnings: [] }))).toBe("");
   });
 
-  it("BUG(copy): with no starred topics at all, the note must not say the plan covers the professor's starred topics / most important material", () => {
+  it("with no starred topics at all, the note does not say the plan covers the professor's starred topics / most important material", () => {
     const html = renderToStaticMarkup(createElement(PlanWarnings, { warnings: [{ examId: 1, examName: "X", minutesShort: 100, topicsLeft: 2, starredLeft: 0, perDay: 12 }] }));
     // The component cannot know whether any topic is starred; starredLeft === 0 is true for exams with NO starred topics.
     expect(html).not.toContain("most important material is in");

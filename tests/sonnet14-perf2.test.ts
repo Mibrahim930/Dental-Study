@@ -239,8 +239,14 @@ describe("database upgrade from older commits: users.session_epoch", () => {
 // No DOM test setup exists, so this scans the client sources. Confirmed in a browser (fetch rejecting like a dropped connection):
 // the toast / inline message reads "Failed to fetch" instead of the friendly "Check your connection" text.
 describe("dropped connection wording", () => {
-  const files = ["src/app/attempts/[id]/AttemptRunner.tsx", "src/components/StudySession.tsx", "src/components/TaskList.tsx"];
-  it("BUG: catch blocks must not show a thrown TypeError's own message (a rejected fetch says 'Failed to fetch' / 'Load failed')", () => {
+  const files = [
+    "src/app/attempts/[id]/AttemptRunner.tsx",
+    "src/app/attempts/[id]/useAttempt.ts",
+    "src/app/attempts/[id]/Results.tsx",
+    "src/components/StudySession.tsx",
+    "src/components/TaskList.tsx",
+  ];
+  it("catch blocks do not show a thrown TypeError's own message (a rejected fetch says 'Failed to fetch' / 'Load failed')", () => {
     const offenders: string[] = [];
     for (const f of files) {
       fs.readFileSync(path.join(process.cwd(), f), "utf8")

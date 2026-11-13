@@ -1,5 +1,6 @@
 // Bug reports and ideas sent from the little button on every page. Stored on the site (text + JPEG screenshots under
-// FILES_DIR/reports/<id>/) and listed on the owner's Admin page; nothing is emailed.
+// FILES_DIR/reports/<id>/) and listed on the owner's Admin page; nothing is emailed. Tables: reports, report_images
+// (lib/db.ts).
 import fs from "fs";
 import path from "path";
 import { db, FILES_DIR } from "./db";
@@ -9,26 +10,6 @@ export const REPORT_MAX_IMAGES = 5;
 export const REPORT_MAX_IMAGE_MB = 8;
 export const REPORT_KINDS = ["problem", "idea"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
-
-// The feature's own tables, created on first use (idempotent), so the module is self-contained.
-db.exec(`
-CREATE TABLE IF NOT EXISTS reports (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL DEFAULT 'problem',            -- problem | idea
-  message TEXT NOT NULL,
-  page TEXT,                                       -- path of the page she was on
-  meta_json TEXT,                                  -- viewport, theme, user agent
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  seen_at TEXT
-);
-CREATE TABLE IF NOT EXISTS report_images (
-  id INTEGER PRIMARY KEY,
-  report_id INTEGER NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
-  n INTEGER NOT NULL,                              -- 1-based position in the report
-  path TEXT NOT NULL,                              -- relative to FILES_DIR
-  UNIQUE(report_id, n)
-);`);
 
 export type ReportMeta = { viewport?: string; theme?: string; userAgent?: string };
 

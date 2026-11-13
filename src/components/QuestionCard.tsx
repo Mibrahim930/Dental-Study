@@ -41,11 +41,57 @@ const BOX_LABELS: Record<string, string> = {
   findings: "Findings",
 };
 
+/**
+ * What the card needs to draw a question. Practice exams and the daily review pass a whole QuestionData; the section
+ * quiz and the quiz panel (`bare`) pass just the question, with `correct_index` set only once it's answered.
+ */
+export type CardQuestion = Pick<QuestionData, "stem" | "options" | "chosen_index"> & Partial<Omit<QuestionData, "stem" | "options" | "chosen_index">>;
+
 const CONFIDENCE_TEXT = { guess: "You guessed", unsure: "You were unsure", sure: "You were confident" } as const;
+
+/**
+ * The explanation under an answered question, the same everywhere: "✓ Correct", or "✗ Why B" when she missed it.
+ * `compact` is the smaller block used inside the section quiz and the quiz panel; `aside` sits beside the heading and
+ * `children` under the text.
+ */
+export function Explanation({
+  chosen,
+  correctIndex,
+  explanation,
+  compact = false,
+  aside,
+  children,
+}: {
+  chosen: number | null;
+  correctIndex: number;
+  explanation: string;
+  compact?: boolean;
+  aside?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const Box = compact ? "div" : "section";
+  return (
+    <Box className={`bg-hero text-hero-foreground ${compact ? "rounded-[22px] p-5" : "rounded-[28px] p-5 sm:p-6"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-hero-accent">
+        {chosen === correctIndex ? "✓ Correct" : chosen == null ? "Not answered" : `✗ Why ${String.fromCharCode(65 + correctIndex)}`}
+        {aside}
+      </div>
+      <div className="mt-1.5 text-base leading-relaxed break-words [&_p]:my-1.5 [&_strong]:font-extrabold">
+        <ReactMarkdown>{explanation}</ReactMarkdown>
+      </div>
+      {children}
+    </Box>
+  );
+}
 
 /**
  * One question, laid out as separate blocks: the case (lilac), the patient box, the clinical image,
  * the question with its options, then the explanation (teal) once revealed.
+ *
+ * The card draws; the caller runs the answering (practice: pick, then say how sure; daily review: reveal on tap; section
+ * quiz and quiz panel: pick, then "Check answer") and passes in where it stands: `q.chosen_index` (her answer),
+ * `pending` (picked, not yet checked), `q.correct_index` (set once revealed) and `onChoose` (left out once she can't pick).
+ * `bare` is for a question inside the section quiz or the quiz panel, which draw their own frame, header and Report.
  */
 export function QuestionCard({
   q,
@@ -58,8 +104,10 @@ export function QuestionCard({
   marksKey = null,
   onReport,
   reportContext,
+  bare = false,
+  locked = false,
 }: {
-  q: QuestionData;
+  q: CardQuestion;
   onChoose?: (i: number) => void;
   pending?: number | null;
   header?: React.ReactNode;
@@ -77,11 +125,15 @@ export function QuestionCard({
   onReport?: (reason: string) => Promise<void>;
   /** Where a reported question leaves, for the Report dialog's wording ("this practice exam and its score", "today's review"). */
   reportContext?: string;
+  /** No card around the stem and options and no Report button (the caller has its own), and the smaller explanation. */
+  bare?: boolean;
+  /** Picking is paused for a moment (an answer is being saved, or the questions are being rewritten). */
+  locked?: boolean;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
   const [showSource, setShowSource] = useState(false);
-  const [flagged, setFlagged] = useState(q.flagged);
+  const [flagged, setFlagged] = useState(q.flagged ?? false);
   const report =
     onReport ??
     (async (reason: string) => {
@@ -106,6 +158,56 @@ export function QuestionCard({
 
   const stateOf = (i: number): OptionState =>
     revealed ? (i === q.correct_index ? "correct" : i === selected ? "wrong" : "dim") : i === selected ? "selected" : "default";
+
+  const image = q.image && (
+    <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
+      <SlideImage
+        pageId={q.image.page_id}
+        aspect={q.image.aspect}
+        crop={revealed ? null : (q.image.crop as CropBox | null)}
+        alt={bare ? "Picture for this question" : "Clinical image for this question"}
+      />
+    </figure>
+  );
+  const options = (
+    <div role="radiogroup" aria-label="Answer choices" className={`flex flex-col ${bare ? "gap-2" : "gap-2.5"}`}>
+      {q.options.map((o, i) => (
+        <OptionRow
+          key={i}
+          index={i}
+          text={o}
+          state={stateOf(i)}
+          checked={i === selected}
+          onSelect={onChoose && !locked ? () => choose(i) : undefined}
+          crossed={marks.crossed.includes(i)}
+          // The option she has picked can't also be crossed out.
+          onToggleCross={onChoose && i === selected ? undefined : () => toggleCross(i)}
+          note={revealed ? q.option_notes?.[i] : undefined}
+          {...hl(`opt${i}`)}
+          chips={
+            <>
+              {revealed && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
+              {revealed && i === selected && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Your answer</span>}
+            </>
+          }
+        />
+      ))}
+    </div>
+  );
+
+  if (bare) {
+    return (
+      <>
+        {image}
+        <p className="px-1 text-[18px] leading-snug font-bold break-words">
+          <Highlightable text={q.stem} {...hlProps(hl("stem"))} />
+        </p>
+        {options}
+        {belowOptions}
+        {revealed && q.explanation && <Explanation compact chosen={selected} correctIndex={q.correct_index!} explanation={q.explanation} />}
+      </>
+    );
+  }
 
   if (flagged && !q.flagged) {
     return (
@@ -142,16 +244,7 @@ export function QuestionCard({
         </section>
       )}
 
-      {q.image && (
-        <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
-          <SlideImage
-            pageId={q.image.page_id}
-            aspect={q.image.aspect}
-            crop={revealed ? null : (q.image.crop as CropBox | null)}
-            alt="Clinical image for this question"
-          />
-        </figure>
-      )}
+      {image}
 
       <section className="card flex flex-col gap-2.5">
         {header}
@@ -160,29 +253,7 @@ export function QuestionCard({
         <p className="mx-1 mb-1.5 text-[18px] leading-snug font-bold sm:text-[20px]">
           <Highlightable text={q.stem} {...hlProps(hl("stem"))} />
         </p>
-        <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2.5">
-          {q.options.map((o, i) => (
-            <OptionRow
-              key={i}
-              index={i}
-              text={o}
-              state={stateOf(i)}
-              checked={i === selected}
-              onSelect={onChoose ? () => choose(i) : undefined}
-              crossed={marks.crossed.includes(i)}
-              // The option she has picked can't also be crossed out.
-              onToggleCross={onChoose && i === selected ? undefined : () => toggleCross(i)}
-              note={revealed ? q.option_notes?.[i] : undefined}
-              {...hl(`opt${i}`)}
-              chips={
-                <>
-                  {revealed && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
-                  {revealed && i === selected && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Your answer</span>}
-                </>
-              }
-            />
-          ))}
-        </div>
+        {options}
         {belowOptions}
         <div className="-mb-1 flex justify-end">
           <ReportQuestion onReport={report} context={reportContext} />
@@ -190,14 +261,12 @@ export function QuestionCard({
       </section>
 
       {revealed && (
-        <section className="rounded-[28px] bg-hero p-5 text-hero-foreground sm:p-6">
-          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-hero-accent">
-            {selected === q.correct_index ? "✓ Correct" : selected == null ? "Not answered" : `✗ Why ${String.fromCharCode(65 + q.correct_index!)}`}
-            {q.confidence && <span className="font-semibold text-hero-muted">· {CONFIDENCE_TEXT[q.confidence]}</span>}
-          </div>
-          <div className="mt-1.5 text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
-            <ReactMarkdown>{q.explanation ?? ""}</ReactMarkdown>
-          </div>
+        <Explanation
+          chosen={selected}
+          correctIndex={q.correct_index!}
+          explanation={q.explanation ?? ""}
+          aside={q.confidence && <span className="font-semibold text-hero-muted">· {CONFIDENCE_TEXT[q.confidence]}</span>}
+        >
           {practice && selected != null && selected !== q.correct_index && (
             <p className="mt-2 text-[15px] text-hero-muted">This comes back in your next practice exam with the choices shuffled.</p>
           )}
@@ -217,7 +286,7 @@ export function QuestionCard({
               <SlideImage pageId={q.source.page_id} aspect={q.source.aspect ?? undefined} alt="Source slide" />
             </div>
           )}
-        </section>
+        </Explanation>
       )}
     </>
   );

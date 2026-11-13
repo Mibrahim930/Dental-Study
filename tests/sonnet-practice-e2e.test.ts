@@ -50,28 +50,14 @@ import { db } from "@/lib/db";
 import { answerQuestion, startAttempt, finishAttempt, dueCards, reviewCard } from "@/lib/practice";
 import { attemptView } from "@/lib/attemptView";
 import { retryQuestions } from "@/lib/practicePlan";
-import { makeUser } from "./helpers";
+import { makeUser, world as makeWorld } from "./helpers";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
 /** An exam whose topics each have real slide pages (so prompts contain [P<id>] slides). */
 function world(topics = 2, slidesEach = 3) {
-  const userId = makeUser();
-  const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
-  const docId = Number(db.prepare("INSERT INTO documents (exam_id, filename) VALUES (?, 'lec.pdf')").run(examId).lastInsertRowid);
-  let pn = 0;
-  const topicIds: number[] = [];
-  const pageIds: number[][] = [];
-  for (let t = 0; t < topics; t++) {
-    const pages = Array.from({ length: slidesEach }, () =>
-      Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, text) VALUES (?, ?, '', 'slide text')").run(docId, ++pn).lastInsertRowid),
-    );
-    pageIds.push(pages);
-    topicIds.push(
-      Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, ?, ?, '', ?)").run(examId, t, `Topic ${t + 1}`, JSON.stringify(pages)).lastInsertRowid),
-    );
-  }
-  return { userId, examId, docId, topicIds, pageIds };
+  const w = makeWorld({ userId: makeUser(), sections: topics, slidesEach, lectureStatus: "pending", pageStatus: "pending", linkLectures: false, session: false });
+  return { userId: w.userId, examId: w.examId, docId: w.docIds[0], topicIds: w.topicIds, pageIds: w.pageIds };
 }
 
 function q(examId: number, topicId: number, stem: string, extra: { caseId?: number; sourcePage?: number } = {}): number {

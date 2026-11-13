@@ -1,5 +1,5 @@
 // Sonnet QA 17 — Release 3 Job F attack tests: the report button's API ("Tell the site owner") and "Quiz me on this".
-// Tests named "BUG: ..." fail on purpose until the bug is fixed.
+// Some tests here pinned real defects when written; those are fixed and the tests now guard against regressions.
 import fs from "fs";
 import path from "path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -403,7 +403,7 @@ describe("reports: what a student can send", () => {
     }
   });
 
-  it("BUG: a page value like //evil.example/x (protocol-relative) is stored, and the admin page renders it as a clickable link", async () => {
+  it("a page value like //evil.example/x (protocol-relative) is not stored as a link to another site", async () => {
     signIn(apiReadyUser());
     for (const page of ["//evil.example/phish", "/\\evil.example/phish", "/\t/evil.example"]) {
       const res = await reportPOST(form({ message: "link", page }));
@@ -435,7 +435,7 @@ describe("reports: what a student can send", () => {
     expect(db.prepare("SELECT COUNT(*) n FROM report_images WHERE report_id = ?").get(id)).toEqual({ n: 0 });
   });
 
-  it("BUG: removing a user from the Admin page leaves their report screenshots on disk (FILES_DIR/reports/<id>/)", async () => {
+  it("removing a user from the Admin page deletes their report screenshots on disk (FILES_DIR/reports/<id>/)", async () => {
     const admin = apiReadyUser(true);
     const u = apiReadyUser();
     const id = createReport({ userId: u, kind: "problem", message: "private screenshot", page: null, meta: {}, images: [new Uint8Array([0xff, 0xd8, 0xff, 1])] });

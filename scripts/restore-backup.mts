@@ -1,7 +1,8 @@
 // Restore the site from the backup bucket into DATA_DIR (an empty volume).
 //   npx tsx scripts/restore-backup.mts [YYYY-MM-DD] [--force]
 // Needs BACKUP_S3_* variables (on Railway: run inside the service, e.g. `railway ssh`).
-// Steps: download the database snapshot (latest, or the given day) → download lecture PDFs → re-render slide images.
+// Steps: download the database snapshot (latest, or the given day) → download lecture PDFs → re-render slide images
+// → download report screenshots and reported-question files (the backup's files/ objects).
 import fs from "fs";
 import path from "path";
 import zlib from "zlib";
@@ -47,6 +48,23 @@ async function main() {
     console.log(`  doc ${id}: restored`);
   }
   db.close();
+
+  // Report screenshots (files/reports/<id>/<n>.jpg) and reported questions (files/reported-questions/<id>.json): the
+  // key after "files/" is the file's path under the files folder.
+  let restored = 0;
+  for (const key of await listObjects("files/")) {
+    const target = path.resolve(filesDir, key.slice("files/".length));
+    if (key.endsWith("/") || !target.startsWith(filesDir + path.sep)) continue;
+    try {
+      const bytes = await downloadObject(key);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes);
+      restored++;
+    } catch {
+      console.warn(`  ${key}: couldn't be downloaded; skipped`);
+    }
+  }
+  console.log(`  ${restored} report file${restored === 1 ? "" : "s"} restored`);
   console.log("Done. Restart the app.");
 }
 

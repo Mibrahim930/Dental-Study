@@ -52,27 +52,15 @@ vi.mock("@/lib/credentials", async (orig) => ({
 
 import { db } from "@/lib/db";
 import { answerQuestion, startAttempt, finishAttempt } from "@/lib/practice";
-import { makeUser } from "./helpers";
+import { makeUser, world as makeWorld } from "./helpers";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
 /** An exam with `docs` lectures; topics are spread round-robin over the lectures, each with real slides. */
 function world(topics: number, docs = 1) {
-  const userId = makeUser();
-  const examId = Number(db.prepare("INSERT INTO exams (user_id, name) VALUES (?, 'E')").run(userId).lastInsertRowid);
-  const docIds = Array.from({ length: docs }, (_, d) => Number(db.prepare("INSERT INTO documents (exam_id, filename) VALUES (?, ?)").run(examId, `lec${d}.pdf`).lastInsertRowid));
-  let pn = 0;
-  const topicIds: number[] = [];
-  const docOf: number[] = [];
-  for (let t = 0; t < topics; t++) {
-    const doc = docIds[t % docs];
-    const pages = Array.from({ length: 2 }, () =>
-      Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, text) VALUES (?, ?, '', 'slide text')").run(doc, ++pn).lastInsertRowid),
-    );
-    topicIds.push(Number(db.prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids) VALUES (?, ?, ?, '', ?)").run(examId, t, `Topic ${t + 1}`, JSON.stringify(pages)).lastInsertRowid));
-    docOf.push(doc);
-  }
-  return { userId, examId, docIds, topicIds, docOf };
+  const lectures = Array.from({ length: docs }, (_, d) => `lec${d}.pdf`);
+  const w = makeWorld({ userId: makeUser(), sections: topics, slidesEach: 2, lectures, lectureStatus: "pending", pageStatus: "pending", linkLectures: false, session: false });
+  return { userId: w.userId, examId: w.examId, docIds: w.docIds, topicIds: w.topicIds, docOf: w.topicIds.map((_, t) => w.docIds[t % docs]) };
 }
 
 async function ready(attemptId: number) {

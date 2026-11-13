@@ -29,7 +29,7 @@ vi.mock("@/lib/ai", async (orig) => ({
       return { questions: writer(slots, tryNo) };
     }
     if (opts.purpose === "section quiz check") return { verdicts: judge((opts.content.match(/^\d+\. /gm) ?? []).length) };
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     throw new Error("unexpected " + opts.purpose);
   }),
 }));
@@ -56,6 +56,7 @@ import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { POST as retakePOST } from "@/app/api/sessions/[id]/quiz/retake/route";
 import { GET as reviewGET } from "@/app/api/review/route";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 // ---------------------------------------------------------------------------------------------------------------
 // helpers
@@ -846,25 +847,25 @@ describe("E: lessons", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("the repair call fires only below 80% and only when facts exist", async () => {
-    // 10 facts: unique single words so coverage is easy to steer
+  it("the repair call fires only when a fact's number is not claimed, asks for just those, and only when facts exist", async () => {
     const facts = Array.from({ length: 10 }, (_, i) => `zebra${i}word`);
+    const entry = (w: { pages: number[] }, text: string, ids: number[]) => goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: text, facts: ids }] });
     const w = world(1, () => facts);
-    lessonWriter = () => goodLesson(w, facts.slice(0, 8).join(" ")); // exactly 80%
+    // the words don't matter any more: every number claimed is no repair, even with a text the old word check would fail
+    lessonWriter = () => entry(w, "a short text", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await getLesson(w.topic());
     expect(lessonCalls).toBe(1);
     expect(calls.filter((c) => c.purpose === "lesson repair")).toHaveLength(0);
 
     const w2 = world(1, () => facts);
     lessonCalls = 0;
-    lessonWriter = (n) => goodLesson(w2, facts.slice(0, n === 1 ? 7 : 10).join(" ")); // 70% → repair → 100%
+    lessonWriter = (n) => (n === 1 ? entry(w2, "first part", [1, 2, 3, 4, 5, 6, 7]) : entry(w2, "zebra7word zebra8word zebra9word", [8, 9, 10]));
     const l = await getLesson(w2.topic());
     expect(lessonCalls).toBe(2);
-    expect(lessonText(l)).toContain("zebra9word");
+    expect(l.slides[0].explanation).toBe("first part\n\nzebra7word zebra8word zebra9word");
     const rep = calls.find((c) => c.purpose === "lesson repair")!;
-    expect(rep.content).toMatch(/- zebra7word/);
-    expect(rep.content).toMatch(/- zebra9word/);
-    expect(rep.content.slice(rep.content.indexOf("Your previous lesson"))).not.toMatch(/- zebra0word/);
+    expect(rep.content).toContain("explain F8, F9, F10, which the entry leaves out");
+    expect(rep.content).not.toMatch(/explain F1\b/);
     expect(rep.tier).toBeUndefined(); // standard tier
 
     // no facts at all: never a repair
@@ -875,22 +876,19 @@ describe("E: lessons", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("a repair that lowers coverage is discarded; equal coverage is accepted; a throwing repair keeps the first lesson", async () => {
+  it("a repair that gives nothing usable leaves the entry as it was; a throwing repair keeps the first lesson", async () => {
     const facts = Array.from({ length: 10 }, (_, i) => `quokka${i}word`);
     const w = world(1, () => facts);
-    lessonWriter = (n) => goodLesson(w, n === 1 ? "FIRST " + facts.slice(0, 5).join(" ") : "SECOND " + facts.slice(0, 3).join(" "));
-    expect(lessonText(await getLesson(w.topic()))).toMatch(/^FIRST/);
-
-    const w2 = world(1, () => facts);
-    lessonWriter = (n) => goodLesson(w2, (n === 1 ? "FIRST " : "SECOND ") + facts.slice(0, 5).join(" "));
-    expect(lessonText(await getLesson(w2.topic()))).toMatch(/^SECOND/);
+    lessonWriter = (n) => goodLesson(w, "", { slides: [{ page_id: w.pages[0], explanation: n === 1 ? "FIRST" : "  \n Done.\n\nOk.\n\nBye.", facts: n === 1 ? [1, 2] : [3, 4] }] });
+    expect(lessonText(await getLesson(w.topic()))).toBe("FIRST");
+    expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
 
     const w3 = world(1, () => facts);
     lessonCalls = 0;
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     lessonWriter = (n) => {
       if (n === 2) throw new Error("repair down");
-      return goodLesson(w3, "FIRST " + facts.slice(0, 2).join(" "));
+      return goodLesson(w3, "", { slides: [{ page_id: w3.pages[0], explanation: "FIRST", facts: [1] }] });
     };
     const l = await getLesson(w3.topic());
     err.mockRestore();
@@ -918,7 +916,8 @@ describe("E: lessons", () => {
     expect(l.slides.map((s) => s.page_id)).toEqual(w.pages);
     expect(l.slides[0].explanation).toBe("f0x text 9\n\nagain f0x");
     expect(JSON.parse(w.topic().lesson_json!).slides).toHaveLength(9);
-    expect(lessonCalls).toBe(1); // nothing missing, no repair
+    expect(lessonCalls).toBe(2); // two parts (5 + 4); nothing missing, no repair
+    expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson"]);
   });
 
   it("a slide with facts that got no entry triggers the one repair call, which names the slide; a slide without facts may be skipped", async () => {
@@ -930,8 +929,9 @@ describe("E: lessons", () => {
     const l = await getLesson(w.topic());
     expect(lessonCalls).toBe(2);
     const rep = calls.find((c) => c.purpose === "lesson repair")!;
-    const asked = rep.content.slice(rep.content.indexOf("Your previous lesson"));
-    expect(asked).toContain(`- [P${w.pages[2]}] L1.pdf slide 3`);
+    const asked = rep.content.slice(rep.content.indexOf("Some entries of this lesson need work"));
+    expect(asked).toContain(`[P${w.pages[2]}] L1.pdf slide 3`);
+    expect(asked).not.toContain(`[P${w.pages[0]}]`); // the complete slide isn't asked again
     expect(asked).not.toContain(`[P${w.pages[1]}]`); // the fact-less slide isn't demanded
     expect(l.slides.map((s) => s.page_id)).toEqual([w.pages[0], w.pages[2]]);
   });
@@ -954,12 +954,15 @@ describe("E: lessons", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("BUG(low): a fact repeated on two slides is listed twice in the repair prompt and counted twice in the coverage", async () => {
+  it("a fact repeated on two slides keeps one number and is asked for once, under the first slide that lists it", async () => {
     const facts = ["unique fact one", "shared sentinel fact", "unique fact two", "unique fact three", "unique fact four"];
     const w = world(2, (i) => (i === 0 ? facts : ["shared sentinel fact"]));
-    lessonWriter = (n) => goodLesson(w, n === 1 ? "nothing" : facts.join(" "));
+    lessonWriter = (n) => goodLesson(w, "", { slides: w.pages.map((page_id) => ({ page_id, explanation: n === 1 ? "a short text" : facts.join(" "), facts: n === 1 ? [] : undefined })) });
     await getLesson(w.topic());
+    expect(calls[0].content.match(/- F2: shared sentinel fact/g)).toHaveLength(2); // listed on both slides, one number
     const rep = calls.find((c) => c.purpose === "lesson repair")!;
-    expect(rep.content.slice(rep.content.indexOf("Your previous lesson")).match(/- shared sentinel fact/g)).toHaveLength(1);
+    const asked = rep.content.slice(rep.content.indexOf("Some entries of this lesson need work"));
+    expect(asked.match(/- F2: shared sentinel fact/g)).toHaveLength(1);
+    expect(asked).not.toContain(`[P${w.pages[1]}]`);
   });
 });

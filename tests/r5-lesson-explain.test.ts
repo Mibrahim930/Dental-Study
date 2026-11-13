@@ -11,7 +11,7 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string; system: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content, system: opts.system });
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     throw new Error("unexpected " + opts.purpose);
   }),
 }));
@@ -24,6 +24,7 @@ import { db, type Topic } from "@/lib/db";
 import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION } from "@/lib/study";
 import { coveredFacts, QUOTE_MIN_WORDS, quotedFacts } from "@/lib/lessonCoverage";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 // Each slide's facts carry their own code words (k0a…), so one slide's copied sentence can't pass as another slide's.
 const FACT_A = (i: number) => `Cystatin C-based estimates for GFR k${i}a are believed to be less influenced by muscle mass or diet k${i}b`;
@@ -68,7 +69,7 @@ const stored = (w: World, lesson: object) => db.prepare("UPDATE topics SET lesso
 const repair = () => calls.find((c) => c.purpose === "lesson repair");
 const repairAsk = () => {
   const c = repair()!.content;
-  return c.slice(c.indexOf("Your previous lesson"));
+  return c.slice(c.indexOf("Some entries of this lesson need work"));
 };
 
 beforeEach(() => {
@@ -119,7 +120,7 @@ describe("quotedFacts: which facts a text repeats word for word", () => {
 });
 
 describe("the lesson writer is asked to explain, not copy", () => {
-  it("the system prompt says so, with a bad-versus-good example, and the slide list asks for the facts in its own words", async () => {
+  it("the system prompt says so, with a bad-versus-good example, and the slide list numbers the facts to explain", async () => {
     const w = world();
     lessonWriter = () => lessonOf(w, explain);
     await getLesson(w.topic());
@@ -128,7 +129,9 @@ describe("the lesson writer is asked to explain, not copy", () => {
     expect(calls[0].system).toMatch(/Bad, a copy: "Cystatin C-based estimates/);
     expect(calls[0].system).toMatch(/Good, an explanation: "Creatinine comes from muscle/);
     expect(calls[0].system).toMatch(/the words around them are yours/);
-    expect(calls[0].content).toMatch(/must be explained, in your own words, in that slide's entry/);
+    expect(calls[0].system).toMatch(/Explain every numbered fact of a slide in that slide's entry/);
+    expect(calls[0].content).toContain(`- F1: ${FACT_A(0)}`);
+    expect(calls[0].content).toContain(`- F6: ${FACT_B(2)}`);
   });
 
   it("a lesson that explains every fact gets no repair call and is stored as the current version", async () => {
@@ -140,17 +143,17 @@ describe("the lesson writer is asked to explain, not copy", () => {
     expect(lessonIsCurrent(w.topic())).toBe(true);
   });
 
-  it("a lesson that pastes the slides gets one repair call naming the copied lines; the explained rewrite is kept", async () => {
+  it("a lesson that pastes the slides gets one repair call for the copied slides, showing what was written; the explained rewrite is kept", async () => {
     const w = world();
     lessonWriter = (n) => (n === 1 ? lessonOf(w, copy) : lessonOf(w, explain));
     const lesson = await getLesson(w.topic());
     expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
     const ask = repairAsk();
-    expect(ask).toMatch(/^Your previous lesson repeated the slides instead of explaining them\. Write the whole lesson again, keeping every fact, but say each one in your own words:/);
-    expect(ask).toMatch(/copied from the slides word for word/);
+    expect(ask.match(/repeats the slide's sentences instead of explaining them\. Write it again in your own words/g)).toHaveLength(3);
     for (let i = 0; i < 3; i++) {
-      expect(ask).toContain(`- ${FACT_A(i)}`);
-      expect(ask).toContain(`- ${FACT_B(i)}`);
+      expect(ask).toContain(`[P${w.pages[i]}]`);
+      expect(ask).toContain(`- F${2 * i + 1}: ${FACT_A(i)}`);
+      expect(ask).toContain(copy(i)); // the entry as written
     }
     expect(lessonText(lesson)).toContain("a muscular or frail patient 0");
     expect(quotedFacts(lessonText(lesson), [FACT_A(0), FACT_B(1)]).ratio).toBe(0);
@@ -173,15 +176,17 @@ describe("the lesson writer is asked to explain, not copy", () => {
         ? { ...lessonOf(w, copy), slides: w.pages.slice(0, 3).map((page_id, i) => ({ page_id, explanation: i < 2 ? copy(i) : explain(i) })) }
         : lessonOf(w, explain);
     await getLesson(w.topic());
+    expect(calls.map((c) => c.purpose)).toEqual(["lesson", "lesson repair"]);
     const ask = repairAsk();
-    expect(ask).toMatch(/^Your previous lesson left things out and repeated the slides instead of explaining them\./);
-    expect(ask).toContain(`- [P${w.pages[3]}] L1.pdf slide 4`);
-    expect(ask).toContain("- Lithium toxicity causes nephrogenic diabetes insipidus and polyuria"); // missing
-    expect(ask).toContain(`- ${FACT_A(0)}`); // copied
-    expect(ask).toMatch(/explain each one under its slide/);
+    expect(ask).toContain(`[P${w.pages[3]}] L1.pdf slide 4`);
+    expect(ask).toContain("- F7: Lithium toxicity causes nephrogenic diabetes insipidus and polyuria"); // left out
+    expect(ask).toMatch(/this slide got no entry\. Write it, explaining F7\./);
+    expect(ask).toContain(`- F1: ${FACT_A(0)}`); // copied
+    expect(ask.match(/repeats the slide's sentences/g)).toHaveLength(2); // slides 0 and 1
+    expect(ask).not.toContain(`[P${w.pages[2]}]`); // the explained slide is not asked again
   });
 
-  it("a repair that copies even more than before is thrown away; the first lesson stands", async () => {
+  it("a repair touches only the copied slides: the explained ones stand", async () => {
     const w = world(4);
     // first: slides 0-1 copied, 2-3 explained (50% copied → repair); repair: everything copied
     lessonWriter = (n) => (n === 1 ? lessonOf(w, (i) => (i < 2 ? copy(i) : explain(i))) : lessonOf(w, copy));
@@ -205,12 +210,13 @@ describe("the lesson writer is asked to explain, not copy", () => {
     expect(lessonText(lesson)).not.toContain(FACT_A(0) + ".");
   });
 
-  it("a repair that loses a slide is thrown away even if it explains", async () => {
+  it("a repair that leaves a slide out keeps that slide's first entry; the slides it did explain are replaced", async () => {
     const w = world(3);
     lessonWriter = (n) => (n === 1 ? lessonOf(w, copy) : { ...lessonOf(w, explain), slides: w.pages.slice(0, 2).map((page_id, i) => ({ page_id, explanation: explain(i) })) });
     const lesson = await getLesson(w.topic());
     expect(lesson.slides).toHaveLength(3);
-    expect(lessonText(lesson)).toContain(FACT_A(0));
+    expect(lesson.slides[2].explanation).toBe(copy(2));
+    expect(lesson.slides[0].explanation).toBe(explain(0));
   });
 });
 

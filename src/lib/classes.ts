@@ -96,8 +96,8 @@ function copyExam(sourceId: number, userId: number): number {
     }[];
     const insertDoc = db.prepare("INSERT INTO documents (exam_id, filename, page_count, status, backed_up) VALUES (?, ?, ?, 'done', 1)");
     const insertPage = db.prepare(
-      `INSERT INTO pages (document_id, page_number, text, image_path, aspect, status, title, notes_json, emphasized, has_case)
-       VALUES (?, ?, ?, ?, ?, 'done', ?, ?, ?, ?)`,
+      `INSERT INTO pages (document_id, page_number, text, image_path, aspect, status, title, notes_json, emphasized, has_case, is_filler)
+       VALUES (?, ?, ?, ?, ?, 'done', ?, ?, ?, ?, ?)`,
     );
     const insertFts = db.prepare("INSERT INTO pages_fts (page_id, title, content) SELECT ?, title, content FROM pages_fts WHERE page_id = ?");
     const gloss = db.prepare("INSERT OR IGNORE INTO glossary (user_id, abbr, meaning) VALUES (?, ?, ?)");
@@ -105,7 +105,7 @@ function copyExam(sourceId: number, userId: number): number {
       const docId = Number(insertDoc.run(examId, d.filename, d.page_count).lastInsertRowid);
       docMap.set(d.id, docId);
       for (const p of db.prepare("SELECT * FROM pages WHERE document_id = ?").all(d.id) as PageRow[]) {
-        const pageId = Number(insertPage.run(docId, p.page_number, p.text, p.image_path, p.aspect, p.title, p.notes_json, p.emphasized, p.has_case).lastInsertRowid);
+        const pageId = Number(insertPage.run(docId, p.page_number, p.text, p.image_path, p.aspect, p.title, p.notes_json, p.emphasized, p.has_case, p.is_filler ?? null).lastInsertRowid);
         pageMap.set(p.id, pageId);
         insertFts.run(pageId, p.id);
         for (const a of parseNotes(p)?.abbreviations ?? []) gloss.run(userId, a.abbr.trim(), a.meaning.trim());

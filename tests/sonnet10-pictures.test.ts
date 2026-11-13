@@ -1,4 +1,4 @@
-// QA round 10: picture questions. Failing tests are named "BUG: ...".
+// QA round 10: picture questions.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/ai", async (orig) => ({

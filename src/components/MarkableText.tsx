@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, type ReactNode } from "react";
 import { addRange, coveringRange, removeRangeAt, type Range } from "@/lib/marks";
 import { useMarks } from "./useMarks";
+import { FloatingPill, useSelectionPill } from "./useSelectionPill";
+import { clampX, markPillTop } from "./selection";
 
 /** The two kinds of mark on lesson text, each a field of the saved marks ("text" = highlight, "under" = underline). */
 type Kind = "text" | "under";
@@ -133,8 +134,6 @@ function selectionOffsets(el: HTMLElement, nodes: { node: Text; start: number }[
 export function MarkableText({ marksKey, children, className = "" }: { marksKey: string; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [marks, setMarks] = useMarks(marksKey);
-  const [pill, setPill] = useState<Pill | null>(null);
-  const onPill = useRef(false);
   const tapped = useRef(false); // the pill came from a tap on a mark (no selection)
   const live = useRef(marks);
   useEffect(() => {
@@ -164,26 +163,31 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
   }, [marks, children]);
 
   // The pill: on a selection inside this block, or a tap on a mark.
+  const { pill, setPill, hold, done } = useSelectionPill<Pill>({
+    delay: 120,
+    pillAttr: "data-mark-pill",
+    read: (r) => {
+      const el = ref.current;
+      // Nothing selected: a pill from a selection goes, one from a tap on a mark stays.
+      if (!r) return (p) => (p && p.range[1] - p.range[0] > 0 && !tapped.current ? null : p);
+      if (!el) return null;
+      const off = selectionOffsets(el, textNodes(el), r);
+      if (!off || !registry("text")) return null; // a selection elsewhere clears any pill; no highlight API, no pill
+      const rect = r.getBoundingClientRect();
+      tapped.current = false;
+      return { x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom, range: off, covered: coveredBy(live.current, off) };
+    },
+    press: () => {
+      if (!tapped.current) return (p) => p;
+      tapped.current = false;
+      return null;
+    },
+  });
+
+  // A tap on a mark (no selection) offers to remove it.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    let t: ReturnType<typeof setTimeout> | undefined;
-    const update = () => {
-      if (onPill.current) return;
-      const sel = window.getSelection();
-      const r = sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
-      if (!r) return setPill((p) => (p && p.range[1] - p.range[0] > 0 && !tapped.current ? null : p));
-      const nodes = textNodes(el);
-      const off = selectionOffsets(el, nodes, r);
-      if (!off || !registry("text")) return setPill(null); // a selection elsewhere clears any pill; no highlight API, no pill
-      const rect = r.getBoundingClientRect();
-      tapped.current = false;
-      setPill({ x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom, range: off, covered: coveredBy(live.current, off) });
-    };
-    const onSel = () => {
-      clearTimeout(t);
-      t = setTimeout(update, 120);
-    };
     const onClick = (e: MouseEvent) => {
       if (window.getSelection()?.toString()) return;
       const point = (document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint?.(e.clientX, e.clientY);
@@ -208,53 +212,20 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
         return;
       }
     };
-    const hide = () => setPill(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && hide();
-    const onDown = (e: PointerEvent) => {
-      if (e.target instanceof Element && e.target.closest("[data-mark-pill]")) return;
-      onPill.current = false;
-      if (tapped.current) {
-        tapped.current = false;
-        setPill(null);
-      }
-    };
-    document.addEventListener("selectionchange", onSel);
-    document.addEventListener("pointerdown", onDown);
     el.addEventListener("click", onClick);
-    window.addEventListener("scroll", hide, true);
-    window.addEventListener("resize", hide);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("selectionchange", onSel);
-      document.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("click", onClick);
-      window.removeEventListener("scroll", hide, true);
-      window.removeEventListener("resize", hide);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, []);
+    return () => el.removeEventListener("click", onClick);
+  }, [setPill]);
 
   function apply(kind: Kind) {
     if (!pill) return;
     const existing = pill.covered[kind];
     setMarks((m) => ({ ...m, hl: { ...m.hl, [kind]: existing ? removeRangeAt(m.hl[kind] ?? [], existing[0]) : addRange(m.hl[kind] ?? [], pill.range) } }));
-    window.getSelection()?.removeAllRanges();
-    setPill(null);
-    onPill.current = false;
     tapped.current = false;
+    done();
   }
 
   // Above the selection, or below it when there's no room at the top; always on screen.
-  const above = pill ? pill.top > 64 : true;
-  const pillTop = pill ? Math.min(Math.max(above ? pill.top - 48 : pill.bottom + 8, 8), window.innerHeight - 56) : 0;
-  const hold = {
-    onPointerDown: (e: React.PointerEvent) => {
-      onPill.current = true;
-      e.preventDefault(); // keep the selection
-    },
-    onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
-  };
+  const pillTop = pill ? Math.min(Math.max(markPillTop(pill.top, pill.bottom), 8), window.innerHeight - 56) : 0;
   const btn = "flex h-11 items-center gap-1.5 px-3.5 text-[14px] font-extrabold";
 
   return (
@@ -262,26 +233,24 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
       <div ref={ref} className={`select-text ${className}`} data-markable>
         {children}
       </div>
-      {pill &&
-        createPortal(
-          <div
-            data-mark-pill
-            role="toolbar"
-            aria-label="Mark this text"
-            className="fixed z-[60] flex -translate-x-1/2 overflow-hidden rounded-full bg-foreground text-background shadow-[0_8px_24px_rgba(0,0,0,.25)] divide-x divide-background/20"
-            style={{ left: Math.min(Math.max(pill.x, 110), window.innerWidth - 110), top: pillTop }}
-          >
-            <button type="button" {...hold} onClick={() => apply("text")} className={btn}>
-              <span aria-hidden className="h-3 w-3 rounded-[3px] bg-butter" />
-              {pill.covered.text ? "Remove highlight" : "Highlight"}
-            </button>
-            <button type="button" {...hold} onClick={() => apply("under")} className={btn}>
-              <span aria-hidden className="h-3 w-3 border-b-2 border-coral" />
-              {pill.covered.under ? "Remove underline" : "Underline"}
-            </button>
-          </div>,
-          document.body,
-        )}
+      {pill && (
+        <FloatingPill
+          data-mark-pill
+          role="toolbar"
+          aria-label="Mark this text"
+          className="fixed z-[60] flex -translate-x-1/2 overflow-hidden rounded-full bg-foreground text-background shadow-[0_8px_24px_rgba(0,0,0,.25)] divide-x divide-background/20"
+          style={{ left: clampX(pill.x, 110, window.innerWidth), top: pillTop }}
+        >
+          <button type="button" {...hold} onClick={() => apply("text")} className={btn}>
+            <span aria-hidden className="h-3 w-3 rounded-[3px] bg-butter" />
+            {pill.covered.text ? "Remove highlight" : "Highlight"}
+          </button>
+          <button type="button" {...hold} onClick={() => apply("under")} className={btn}>
+            <span aria-hidden className="h-3 w-3 border-b-2 border-coral" />
+            {pill.covered.under ? "Remove underline" : "Underline"}
+          </button>
+        </FloatingPill>
+      )}
     </>
   );
 }

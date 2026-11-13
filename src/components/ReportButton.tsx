@@ -1,9 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Icon, ICONS } from "./ui";
 import { toast } from "./Toaster";
 import { jsonOf, signedOut } from "./clientFetch";
+import { Dialog } from "./Dialog";
 
 /** Keep in step with lib/reports.ts. */
 const MAX_IMAGES = 5;
@@ -26,14 +27,6 @@ export function ReportButton() {
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    field.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
 
   function addFiles(list: FileList | null) {
     if (!list) return;
@@ -113,89 +106,88 @@ export function ReportButton() {
           </svg>
         </button>
       )}
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/30 sm:bg-transparent" onClick={() => setOpen(false)} aria-hidden />
-          <form
-            onSubmit={send}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="report-title"
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col gap-3 overflow-y-auto rounded-t-[28px] bg-card p-5 shadow-[0_-12px_36px_rgba(22,22,22,.18)] sm:inset-x-auto sm:left-6 sm:bottom-6 sm:w-[380px] sm:rounded-[24px] sm:shadow-[0_16px_48px_rgba(22,22,22,.22)]"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 id="report-title" className="text-[18px] font-extrabold tracking-tight">
-                  Tell the site owner
-                </h2>
-                <p className="text-[13px] text-muted-foreground">A problem you hit, or something you&apos;d like. Screenshots help.</p>
-              </div>
-              <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
-                <Icon d={ICONS.close} size={18} />
-              </button>
+      {/* A sheet from the bottom on a phone; on wider screens a card in the bottom-left corner, by the button. */}
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        label="Tell the site owner"
+        variant="sheet"
+        initialFocus={field}
+        className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto overscroll-contain rounded-t-[28px] bg-card p-5 pb-[calc(20px+env(safe-area-inset-bottom))] shadow-[0_-12px_36px_rgba(22,22,22,.18)] sm:inset-x-auto sm:left-6 sm:bottom-6 sm:w-[380px] sm:rounded-[24px] sm:pb-5 sm:shadow-[0_16px_48px_rgba(22,22,22,.22)]"
+      >
+        <form onSubmit={send} className="flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 id="report-title" className="text-[18px] font-extrabold tracking-tight">
+                Tell the site owner
+              </h2>
+              <p className="text-[13px] text-muted-foreground">A problem you hit, or something you&apos;d like. Screenshots help.</p>
             </div>
-            <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="What is this?">
-              {(
-                [
-                  ["problem", "Something's wrong"],
-                  ["idea", "An idea"],
-                ] as [Kind, string][]
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={kind === value}
-                  onClick={() => setKind(value)}
-                  className={`h-11 rounded-2xl text-[14px] font-bold transition-colors ${kind === value ? "bg-hero text-hero-foreground" : "bg-muted text-foreground hover:bg-muted-strong"}`}
-                >
-                  {label}
-                </button>
+            <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted" aria-label="Close">
+              <Icon d={ICONS.close} size={18} />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="What is this?">
+            {(
+              [
+                ["problem", "Something's wrong"],
+                ["idea", "An idea"],
+              ] as [Kind, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={kind === value}
+                onClick={() => setKind(value)}
+                className={`h-11 rounded-2xl text-[14px] font-bold transition-colors ${kind === value ? "bg-hero text-hero-foreground" : "bg-muted text-foreground hover:bg-muted-strong"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <textarea
+            ref={field}
+            className="input min-h-28 resize-y py-3 leading-snug"
+            placeholder={kind === "problem" ? "What were you doing, and what happened?" : "What would make studying easier?"}
+            value={message}
+            maxLength={MAX_CHARS}
+            onChange={(e) => setMessage(e.target.value)}
+            required
+          />
+          {files.length > 0 && (
+            <ul className="flex flex-wrap gap-2" aria-label="Screenshots to send">
+              {files.map((f, i) => (
+                <li key={`${f.name}-${i}`} className="flex items-center gap-1.5 rounded-xl bg-muted px-2.5 py-1.5 text-[13px] font-semibold">
+                  <span className="max-w-[140px] truncate">{f.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFiles(files.filter((_, k) => k !== i))}
+                    aria-label={`Remove ${f.name}`}
+                    className="-mr-1.5 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                  >
+                    <Icon d={ICONS.close} size={14} />
+                  </button>
+                </li>
               ))}
-            </div>
-            <textarea
-              ref={field}
-              className="input min-h-28 resize-y py-3 leading-snug"
-              placeholder={kind === "problem" ? "What were you doing, and what happened?" : "What would make studying easier?"}
-              value={message}
-              maxLength={MAX_CHARS}
-              onChange={(e) => setMessage(e.target.value)}
-              required
-            />
-            {files.length > 0 && (
-              <ul className="flex flex-wrap gap-2" aria-label="Screenshots to send">
-                {files.map((f, i) => (
-                  <li key={`${f.name}-${i}`} className="flex items-center gap-1.5 rounded-xl bg-muted px-2.5 py-1.5 text-[13px] font-semibold">
-                    <span className="max-w-[140px] truncate">{f.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => setFiles(files.filter((_, k) => k !== i))}
-                      aria-label={`Remove ${f.name}`}
-                      className="-mr-1.5 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                    >
-                      <Icon d={ICONS.close} size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {error && (
-              <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
-                {error}
-              </p>
-            )}
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="btn-secondary min-h-11" disabled={sending || files.length >= MAX_IMAGES} onClick={() => input.current?.click()}>
-                {files.length ? `Add another (${files.length}/${MAX_IMAGES})` : "Add screenshots"}
-              </button>
-              <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => addFiles(e.target.files)} />
-              <button type="submit" className="btn-primary ml-auto min-h-11" disabled={sending || !message.trim()}>
-                {sending ? "Sending…" : "Send"}
-              </button>
-            </div>
-          </form>
-        </>
-      )}
+            </ul>
+          )}
+          {error && (
+            <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
+              {error}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary min-h-11" disabled={sending || files.length >= MAX_IMAGES} onClick={() => input.current?.click()}>
+              {files.length ? `Add another (${files.length}/${MAX_IMAGES})` : "Add screenshots"}
+            </button>
+            <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => addFiles(e.target.files)} />
+            <button type="submit" className="btn-primary ml-auto min-h-11" disabled={sending || !message.trim()}>
+              {sending ? "Sending…" : "Send"}
+            </button>
+          </div>
+        </form>
+      </Dialog>
     </>
   );
 }

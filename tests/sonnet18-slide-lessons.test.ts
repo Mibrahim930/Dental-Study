@@ -11,7 +11,7 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     if (opts.purpose === "section quiz") return { questions: [] };
     if (opts.purpose === "section quiz check") return { verdicts: [] };
     throw new Error("unexpected " + opts.purpose);
@@ -33,6 +33,7 @@ import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes"
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
 const notesJson = (i: number, facts: string[], emphasized = false) =>
@@ -70,7 +71,7 @@ const stored = (w: World, lesson: object) => db.prepare("UPDATE topics SET lesso
 const getRoute = (w: World, qs = "position=0") => lessonGET(new Request(`http://x/l?${qs}`), ctx(w.sessionId));
 const repairPrompt = () => {
   const c = calls.find((x) => x.purpose === "lesson repair")!.content;
-  return c.slice(c.indexOf("Your previous lesson"));
+  return c.slice(c.indexOf("Some entries of this lesson need work"));
 };
 
 beforeEach(() => {
@@ -287,21 +288,24 @@ describe("repair trigger", () => {
     lessonWriter = (n) => (n === 1 ? good(w, "", { slides: [{ page_id: w.pages[1], explanation: "delta1word" }, { page_id: w.pages[3], explanation: "delta3word" }] }) : good(w, "delta0word delta1word delta2word delta3word"));
     await getLesson(w.topic());
     const p = repairPrompt();
-    expect(p).toContain(`- [P${w.pages[0]}] Perio.pdf slide 1`);
-    expect(p).toContain(`- [P${w.pages[2]}] Perio.pdf slide 3`);
+    expect(p).toContain(`[P${w.pages[0]}] Perio.pdf slide 1`);
+    expect(p).toContain(`[P${w.pages[2]}] Perio.pdf slide 3`);
     expect(p).not.toContain(`[P${w.pages[1]}]`);
     expect(p).not.toContain(`[P${w.pages[3]}]`);
-    expect(p.match(/- delta0word/g)).toHaveLength(1);
-    expect(p.match(/- delta2word/g)).toHaveLength(1);
-    expect(p).not.toMatch(/- delta1word/);
+    expect(p.match(/- F1: delta0word/g)).toHaveLength(1);
+    expect(p.match(/- F3: delta2word/g)).toHaveLength(1);
+    expect(p).not.toMatch(/delta1word/);
   });
 
-  it("when only coverage is low (all slides present) the prompt has no left-out-slides section", async () => {
+  it("an entry that leaves facts out: the repair asks to add just those (no 'no entry' section), and the addition is appended", async () => {
     const w = world(1, () => Array.from({ length: 5 }, (_, i) => `eps${i}word`));
-    lessonWriter = (n) => (n === 1 ? good(w, "unrelated") : good(w, "eps0word eps1word eps2word eps3word eps4word"));
-    await getLesson(w.topic());
+    lessonWriter = (n) =>
+      n === 1 ? good(w, "", { slides: [{ page_id: w.pages[0], explanation: "FIRST", facts: [1] }] }) : good(w, "", { slides: [{ page_id: w.pages[0], explanation: "ADDED" }] });
+    const l = await getLesson(w.topic());
     expect(repairPrompt()).not.toContain("got no entry");
-    expect(repairPrompt()).toContain("- eps0word");
+    expect(repairPrompt()).toContain("explain F2, F3, F4, F5, which the entry leaves out");
+    expect(repairPrompt()).toContain('"""\nFIRST\n"""');
+    expect(l.slides[0].explanation).toBe("FIRST\n\nADDED");
   });
 
   it("repair with equal coverage but MORE slides left out is rejected", async () => {
@@ -315,22 +319,24 @@ describe("repair trigger", () => {
     expect(l.slides.map((s) => s.explanation)).toEqual(["a", "b"]);
   });
 
-  it("repair with equal coverage and equal left-out is accepted", async () => {
+  it("a repair's entries for slides it was not asked about are ignored", async () => {
     const w = world(2, (i) => [`eta${i}word`]);
     lessonWriter = (n) => good(w, "", { intro: "eta0word eta1word", slides: [{ page_id: w.pages[0], explanation: n === 1 ? "FIRST" : "SECOND" }] });
     const l = await getLesson(w.topic());
-    expect(l.slides[0].explanation).toBe("SECOND");
+    expect(repairPrompt()).not.toContain(`[P${w.pages[0]}]`);
+    expect(l.slides.map((s) => s.explanation)).toEqual(["FIRST"]);
   });
 
-  it("repair with lower coverage but fewer slides left out is rejected (coverage wins)", async () => {
+  it("the repair adds a left-out slide and leaves the complete one as it was", async () => {
     const w = world(2, (i) => [`theta${i}word`, `theta${i}extra`]);
     lessonWriter = (n) =>
       n === 1
-        ? good(w, "", { slides: [{ page_id: w.pages[0], explanation: "theta0word theta0extra theta1word theta1extra" }] }) // 100%, slide 1 left out
-        : good(w, "theta0word"); // both slides, 25%
+        ? good(w, "", { slides: [{ page_id: w.pages[0], explanation: "theta0word theta0extra theta1word theta1extra" }] }) // slide 1 left out
+        : good(w, "theta0word");
     const l = await getLesson(w.topic());
-    expect(l.slides).toHaveLength(1);
-    expect(lessonText(l)).toContain("theta1extra");
+    expect(l.slides).toHaveLength(2);
+    expect(l.slides[0].explanation).toContain("theta1extra");
+    expect(l.slides[1].explanation).toBe("theta0word");
   });
 
   it("repair with higher coverage and fewer left out is accepted; repair with higher coverage but more left out is rejected", async () => {
@@ -396,8 +402,8 @@ describe("repair trigger: question slides and fillers", () => {
     lessonWriter = (n) => good(w, "", { slides: n === 1 ? [{ page_id: w.pages[0], explanation: "omicron0word" }] : w.pages.map((page_id) => ({ page_id, explanation: "omicron0word" })) });
     const l = await getLesson(w.topic());
     expect(lessonCalls).toBe(2);
-    expect(repairPrompt()).toContain("These slides have facts or a question but got no entry");
-    expect(repairPrompt()).toContain(`- [P${w.pages[1]}] L1.pdf slide 2`);
+    expect(repairPrompt()).toContain("this slide got no entry. Write it, and answer its case from the slides.");
+    expect(repairPrompt()).toContain(`[P${w.pages[1]}] L1.pdf slide 2`);
     expect(l.slides).toHaveLength(2);
   });
 
@@ -672,13 +678,16 @@ describe("concurrency", () => {
     expect(lessonCalls).toBe(1);
   });
 
-  it("after a failed generation a retry generates again", async () => {
+  it("after a failed generation a retry generates again (a failing part is tried twice before the lesson fails)", async () => {
     const w = world(1, () => []);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     lessonWriter = (n) => {
-      if (n === 1) throw new Error("down");
+      if (n <= 2) throw new Error("down");
       return good(w, "e");
     };
     await expect(getLesson(w.topic())).rejects.toThrow();
+    expect(lessonCalls).toBe(2);
     expect((await getLesson(w.topic())).slides).toHaveLength(1);
+    warn.mockRestore();
   });
 });

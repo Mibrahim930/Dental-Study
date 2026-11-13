@@ -190,7 +190,7 @@ describe("Job A: exam isolation", () => {
     for (const c of calls) expect(c.content).not.toContain("B-ONLY STEM");
   });
 
-  it("BUG?: a stray foreign question filed in this exam's topic is not even offered to the AI as 'already asked'", async () => {
+  it("a stray foreign question filed in this exam's topic never ends up in the exam", async () => {
     const user = makeUser();
     const a = world([[0]], user);
     const b = world([[0]], user);
@@ -273,7 +273,7 @@ describe("Job A: dropForeignQuestions", () => {
     expect((db.prepare("SELECT time_limit_sec t FROM attempts WHERE id = ?").get(att) as { t: number | null }).t).toBeNull();
   });
 
-  it("fixed: shortening a running timed exam never leaves negative time (time already spent is allowed for)", () => {
+  it("shortening a running timed exam never leaves negative time (time already spent is allowed for)", () => {
     const user = makeUser();
     const a = world([[0]], user);
     const b = world([[0]], user);

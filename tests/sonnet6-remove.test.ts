@@ -212,7 +212,7 @@ describe("removeDocument", () => {
     expect(count("SELECT COUNT(*) n FROM documents WHERE id = ?", w2.A.id)).toBe(0);
   });
 
-  it("BUG: pages_fts rows of the removed slides are deleted (otherwise they attach to a reused page id)", async () => {
+  it("pages_fts rows of the removed slides are deleted (otherwise they attach to a reused page id)", async () => {
     const w = world();
     const ids = w.A.pages;
     await removeDocument(w.A.id);
@@ -220,7 +220,7 @@ describe("removeDocument", () => {
     expect(left).toBe(0);
   });
 
-  it("BUG: slide images shared with a classmate's copy must survive removal of the original lecture", async () => {
+  it("slide images shared with a classmate's copy survive removal of the original lecture", async () => {
     const owner = makeUser();
     const mate = makeUser();
     const examId = Number(db.prepare("INSERT INTO exams (user_id, name, topic_status) VALUES (?, 'E', 'ready')").run(owner).lastInsertRowid);

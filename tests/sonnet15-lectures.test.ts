@@ -1,5 +1,5 @@
 // Sonnet QA 15 — attack tests for Release 3 Job A (topic maps by lecture, commit 363f248).
-// Tests named "BUG: ..." expose a real defect and are left failing on purpose.
+// Some tests here pinned real defects when written; those are fixed and the tests now guard against regressions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type AiTopic = { title: string; summary: string; page_ids: number[]; emphasized: boolean; concepts: string[] };
@@ -45,48 +45,15 @@ import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes"
 import { groupByLecture, sectionPlaces } from "@/lib/lectures";
 import { lectureProgressMany } from "@/lib/readiness";
 import { addDays, plannerSettings, todayIn } from "@/lib/planner";
-import { makeUser } from "./helpers";
+import { makeLecture, makeUser, slideNotes } from "./helpers";
 
-const notes = (title: string, filler = false) =>
-  JSON.stringify({
-    title,
-    summary: `about ${title}`,
-    image_description: null,
-    key_facts: ["fact"],
-    annotations: [],
-    emphasized: false,
-    emphasis_note: null,
-    case_prompt: null,
-    case_answer: null,
-    case_image_box: null,
-    abbreviations: [],
-    concepts: ["c"],
-    is_filler: filler,
-  });
+const notes = (title: string, filler = false) => slideNotes({ title, summary: `about ${title}`, concepts: ["c"], is_filler: filler });
 
 /**
  * A lecture of `n` slides. `filler`: 1-based title/agenda slides. `pending`: 1-based slides not read yet.
  * Document status defaults to "done".
  */
-function lecture(examId: number, name: string, n: number, o: { filler?: number[]; status?: string; pending?: number[] } = {}) {
-  const doc = Number(
-    db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, ?, ?)").run(examId, name, o.status ?? "done", n).lastInsertRowid,
-  );
-  const pages = Array.from({ length: n }, (_, i) =>
-    Number(
-      db
-        .prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, ?, ?, ?)")
-        .run(
-          doc,
-          i + 1,
-          `doc-${doc}/p${i + 1}.jpg`,
-          o.pending?.includes(i + 1) ? "pending" : "done",
-          o.pending?.includes(i + 1) ? null : notes(`${name} s${i + 1}`, !!o.filler?.includes(i + 1)),
-        ).lastInsertRowid,
-    ),
-  );
-  return { doc, pages };
-}
+const lecture = makeLecture;
 const t = (title: string, page_ids: number[]): AiTopic => ({ title, summary: "s", page_ids, emphasized: false, concepts: [title + " concept"] });
 const topics = (examId: number) => db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
 const pagesOf = (x: Topic) => JSON.parse(x.page_ids) as number[];
@@ -311,7 +278,7 @@ describe("B. concurrency and mixed states", () => {
     checkMap(w.examId);
   });
 
-  it("BUG: a lecture that is only half read is mapped from its first slides, then the rest are dumped into the last section with no AI call", async () => {
+  it("a lecture that is only half read is left out of the map until it is read, then mapped whole", async () => {
     // Happens at the first start after deploy: resumeUnfinished() resumes a direct read while rebuildLectureMaps() maps the exam.
     const w = exam();
     const l1 = lecture(w.examId, "L1.pdf", 6, { status: "processing", pending: [4, 5, 6] });
@@ -328,7 +295,7 @@ describe("B. concurrency and mixed states", () => {
     expect(prompts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("BUG: an automatic request that arrives while a full run is going is swallowed; the lecture that just finished stays unmapped", async () => {
+  it("an automatic request that arrives while a full run is going is not lost; the lecture that just finished gets mapped", async () => {
     const w = exam();
     lecture(w.examId, "L1.pdf", 4);
     delayFor = () => 40;
@@ -389,7 +356,7 @@ describe("B. concurrency and mixed states", () => {
     checkMap(w.examId);
   });
 
-  it("BUG: after one lecture's map fails, the remaining lectures are still sent to the AI (paid for, then thrown away)", async () => {
+  it("after one lecture's map fails, no further lectures are sent to the AI", async () => {
     const w = exam();
     for (let i = 1; i <= 8; i++) lecture(w.examId, `L${i}.pdf`, 3);
     delayFor = () => 15;
@@ -751,7 +718,7 @@ describe("E. startup upgrade", () => {
     expect(db.prepare("SELECT COUNT(*) n FROM plan_tasks WHERE title = 'sentinel'").get()).toEqual({ n: 1 });
   });
 
-  it("BUG: a manual Rebuild that finishes while the upgrade is working on an earlier exam gets re-mapped again when the upgrade reaches it", async () => {
+  it("a manual Rebuild that finishes while the upgrade is working on an earlier exam is not re-mapped when the upgrade reaches it", async () => {
     const first = oldExam();
     const second = oldExam();
     let done = false;
@@ -814,7 +781,7 @@ describe("F. class sharing", () => {
     expect(pagesOf(topics(copyId)[0])).toHaveLength(3);
   });
 
-  it("BUG: copying an exam where one lecture failed to read (status 'error', but mapped from its good slides) makes empty sections with no lecture", async () => {
+  it("copying an exam where one lecture failed to read (status 'error', mapped from its good slides) makes no empty sections", async () => {
     const w = exam();
     lecture(w.examId, "L1.pdf", 4);
     lecture(w.examId, "L2.pdf", 4, { status: "error", pending: [4] });

@@ -40,7 +40,6 @@ vi.mock("next/headers", async () => {
   return { cookies: async () => ({ get: (name: string) => (name === SESSION_COOKIE && jar.cookie ? { value: jar.cookie } : undefined) }) };
 });
 
-import { sessionToken } from "@/lib/auth";
 import { db, FILES_DIR, type Topic } from "@/lib/db";
 import { answerQuizMe, getQuizMe, lectureMisses, lectureReviewStatus, openLectureReview, QuizMeError, REVIEW_MAX_ROUNDS, type QuizMeQuestion } from "@/lib/quizMe";
 import { recordQuizAnswer } from "@/lib/quizProgress";
@@ -55,23 +54,13 @@ import { POST as quizReportPOST } from "@/app/api/sessions/[id]/quiz/report/rout
 import { POST as attemptReportPOST } from "@/app/api/attempts/[id]/report/route";
 import { POST as flagPOST } from "@/app/api/questions/[id]/flag/route";
 import { GET as exportGET } from "@/app/api/admin/reported-questions/route";
-import { makeUser } from "./helpers";
+import { apiReadyUser, ctx, postJson as post, sessionCookie, slideNotes, world as makeWorld } from "./helpers";
 
-const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
-const post = (body: unknown) => new Request("http://x/api", { method: "POST", body: JSON.stringify(body) });
 
-const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact ${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+const notes = (i: number) => slideNotes({ title: `slide ${i}`, key_facts: [`fact ${i}`] });
 
-function apiReadyUser(admin = false): number {
-  const id = makeUser();
-  db.prepare("UPDATE users SET api_key_enc = 'enc', must_change_password = 0, is_admin = ? WHERE id = ?").run(admin ? 1 : 0, id);
-  return id;
-}
 function signIn(userId: number | null) {
-  if (userId == null) return void (jar.cookie = undefined);
-  const { session_epoch } = db.prepare("SELECT session_epoch FROM users WHERE id = ?").get(userId) as { session_epoch: number };
-  jar.cookie = sessionToken(userId, session_epoch);
+  jar.cookie = sessionCookie(userId);
 }
 
 /** A stored section quiz of `n` questions with stable ids. */
@@ -92,27 +81,26 @@ const quizQs = (prefix: string, n: number): QuizQuestion[] =>
  * section with a 2-question quiz. The study session makes the quiz routes reachable.
  */
 function world(userId = apiReadyUser()) {
-  const examId = Number(db.prepare("INSERT INTO exams (user_id, name, topic_status) VALUES (?, 'Endo', 'ready')").run(userId).lastInsertRowid);
-  const mkDoc = (name: string) => Number(db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, 'done', 2)").run(examId, name).lastInsertRowid);
-  const doc1 = mkDoc("Lecture 1 - Pulp.pdf");
-  const doc2 = mkDoc("Lecture 2 - Perio.pdf");
-  let n = 0;
-  const page = (doc: number) => {
-    n++;
-    return Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, '', 'done', ?)").run(doc, n, notes(n)).lastInsertRowid);
-  };
-  const topic = (doc: number, pos: number, title: string, qs: QuizQuestion[]) =>
-    Number(
-      db
-        .prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, document_id, checks_json, checks_version) VALUES (?, ?, ?, 's', ?, ?, ?, ?)")
-        .run(examId, pos, title, JSON.stringify([page(doc), page(doc)]), doc, JSON.stringify(qs), QUIZ_VERSION).lastInsertRowid,
-    );
-  const t1 = topic(doc1, 0, "Pulp anatomy", quizQs("a", 3));
-  const t2 = topic(doc1, 1, "Pulp disease", quizQs("b", 3));
-  const t3 = topic(doc2, 2, "Perio basics", quizQs("c", 2));
-  const sessionId = Number(db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(examId).lastInsertRowid);
-  const topicRow = (id: number) => db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic;
-  return { userId, examId, doc1, doc2, t1, t2, t3, sessionId, topicRow };
+  const w = makeWorld({
+    userId,
+    exam: "Endo",
+    ready: true,
+    lectures: ["Lecture 1 - Pulp.pdf", "Lecture 2 - Perio.pdf"],
+    pageCount: 2,
+    slidesEach: 2,
+    text: "",
+    notes,
+    quizVersion: QUIZ_VERSION,
+    session: true,
+    sections: [
+      { title: "Pulp anatomy", summary: "s", lecture: 0, quiz: quizQs("a", 3) },
+      { title: "Pulp disease", summary: "s", lecture: 0, quiz: quizQs("b", 3) },
+      { title: "Perio basics", summary: "s", lecture: 1, quiz: quizQs("c", 2) },
+    ],
+  });
+  const [doc1, doc2] = w.docIds;
+  const [t1, t2, t3] = w.topicIds;
+  return { userId, examId: w.examId, doc1, doc2, t1, t2, t3, sessionId: w.sessionId, topicRow: w.topicRow };
 }
 
 /** A "quiz me" quiz on a section, with the given answers already given (null = unanswered). */

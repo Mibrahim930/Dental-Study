@@ -116,7 +116,7 @@ describe("marks API", () => {
     expect((await (await get("quiz:00000007")).json()).marks).toBeNull();
   });
 
-  it("BUG (very low): a stored row with corrupt JSON does not crash GET with a 500", async () => {
+  it("a stored row with corrupt JSON does not crash GET with a 500", async () => {
     const u = makeUser();
     currentUserId = u;
     db.prepare("INSERT INTO question_marks (user_id, key, json) VALUES (?, 'quiz:00000009', 'not json')").run(u);

@@ -1,5 +1,5 @@
-// QA attack tests for the calendar "first release" (dc8ae49..bc9fba1). Tests named "FIXED (was BUG…)" failed when written and
-// pass after the QA-fix commit. Tests named "NOTE:" document behaviour worth knowing.
+// QA attack tests for the calendar "first release" (dc8ae49..bc9fba1). Several tests here pinned defects when written; the
+// QA-fix commit fixed them and they now guard against regressions. Tests named "NOTE:" document behaviour worth knowing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as mupdf from "mupdf";
 
@@ -141,12 +141,12 @@ describe("parseIcs edge cases", () => {
     }
   });
 
-  it("FIXED (was BUG): an event whose END:VEVENT is missing is silently dropped when another BEGIN:VEVENT follows (comment says missing ENDs are tolerated)", () => {
+  it("an event whose END:VEVENT is missing is kept when another BEGIN:VEVENT follows", () => {
     const text = `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261104\r\nSUMMARY:First Exam\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261105\r\nSUMMARY:Second Exam\r\nEND:VEVENT\r\nEND:VCALENDAR`;
     expect(parseIcs(text, TZ).events.map((e) => e.name)).toEqual(["First Exam", "Second Exam"]);
   });
 
-  it("FIXED (was BUG, low): a truncated download (last event has no END:VEVENT/END:VCALENDAR) loses its last event instead of keeping it", () => {
+  it("a truncated download (last event has no END:VEVENT/END:VCALENDAR) keeps its last event", () => {
     const text = `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261104\r\nSUMMARY:Cut Off Exam\r\n`;
     expect(parseIcs(text, TZ).events.map((e) => e.name)).toEqual(["Cut Off Exam"]);
   });
@@ -191,7 +191,7 @@ describe("parseIcs edge cases", () => {
     expect(truncated).toBe(true);
   });
 
-  it("FIXED (was BUG): many stray END: lines after many BEGIN: lines take quadratic time (stack.lastIndexOf per END) — one 15 MB upload can hang the server", () => {
+  it("many stray END: lines after many BEGIN: lines are parsed in well under a second (no quadratic scan that could hang the server)", () => {
     // 60k BEGIN:X then 60k END:Y (about 0.8 MB). Each END scans the whole stack: 3.6e9 comparisons.
     const text = "BEGIN:VCALENDAR\n" + "BEGIN:X\n".repeat(60000) + "END:Y\n".repeat(60000) + "END:VCALENDAR\n";
     const t0 = Date.now();
@@ -332,7 +332,7 @@ describe("AI schedule import (mocked generate)", () => {
     expect(e.note).toContain("2026-11-4");
   });
 
-  it("FIXED (was BUG, low): 200 exams from the AI are silently cut to 60 with no message for the student", async () => {
+  it("200 exams from the AI are cut to 60 and the student is told so", async () => {
     reply = { exams: Array.from({ length: 200 }, (_, i) => ({ name: `Exam ${i}`, date: addDays(today(), 10 + i), course: null, kind: "quiz", confidence: "high", note: null })), year_assumed: null };
     const body = await (await send("lots")).json();
     expect(body.exams.length).toBeLessThanOrEqual(60);
@@ -393,7 +393,7 @@ describe("AI schedule import (mocked generate)", () => {
     expect(tiny.status).toBeLessThan(500);
   });
 
-  it("FIXED (was BUG, low): no key → plain message; key/billing errors pass through; but ANY error text containing 'key' (e.g. an internal one) is shown raw", async () => {
+  it("no key → plain message; key/billing errors pass through; an internal error that mentions 'key' is not shown raw", async () => {
     hasKey = false;
     expect((await (await send("Endo Nov 4")).json()).error).toMatch(/Add your AI key/);
     hasKey = true;
@@ -542,13 +542,13 @@ describe("busy repeats", () => {
     expect((await addBusy({ start: t, label: "ok", weekdays: [1], until: addDays(t, 731) })).status).toBe(200);
   });
 
-  it("FIXED (was BUG, low): non-day values in weekdays are coerced with Number(): null, '', true, [] all become Monday/Tuesday instead of being rejected", async () => {
+  it("non-day values in weekdays (null, '', true, []) are refused, not turned into Monday/Tuesday", async () => {
     const t = today();
     const res = await addBusy({ start: t, label: "x", weekdays: [null], until: addDays(t, 30) });
     expect(res.status).toBe(400); // actual: 200 and a repeat on Mondays
   });
 
-  it("FIXED (was BUG, low): weekdays: [] with a start date silently becomes a one-day busy range (not an error)", async () => {
+  it("weekdays: [] with a start date is refused or makes a real repeat, never a silent one-day busy range", async () => {
     const res = await addBusy({ start: addDays(today(), 3), label: "x", weekdays: [], until: addDays(today(), 30) });
     // Expected: refuse (the form sent 'repeat' with no days) or create a repeat; actual: a single one-off busy day is created.
     const row = db.prepare("SELECT * FROM busy_days WHERE user_id = ?").get(currentUserId) as { weekdays: number | null; end_date: string } | undefined;
@@ -824,7 +824,7 @@ describe("missed tasks and re-plan", () => {
     expect(replanFromToday(currentUserId).topicsBack).toBe(1);
   });
 
-  it("FIXED (was BUG, low): the 'Upload lectures' nag and daily reviews count as 'missed tasks' (an exam with no lectures yet produces 'You missed 1 task yesterday')", () => {
+  it("the 'Upload lectures' nag and daily reviews do not count as missed tasks", () => {
     // Simulate yesterday: plan built then the day rolled over without ticking anything.
     const t = today();
     makeExam(currentUserId, addDays(t, 20), [], "NoLectures");

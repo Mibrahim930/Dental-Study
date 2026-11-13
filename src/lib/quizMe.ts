@@ -1,7 +1,7 @@
 // "Quiz me on this": the student highlights a passage while studying (lesson, key points, explanations)
 // and gets 3, 5 or 10 questions about exactly that, written from the slides that match it. Stored, so an unfinished
-// quiz can be resumed; answers count toward concept mastery like the section quiz. Self-contained: creates its own
-// table on first use.
+// quiz can be resumed; answers count toward concept mastery like the section quiz. Its tables (quizme,
+// lecture_review_done) are in lib/db.ts.
 import { z } from "zod";
 import { db, type PageRow, type Topic } from "./db";
 import { generate } from "./ai";
@@ -21,42 +21,6 @@ export const QUIZME_MIN_CHARS = 20;
 export const QUIZME_MAX_CHARS = 2000;
 /** Slides found by searching the exam for the highlighted words (on top of the current section's slides). */
 export const QUIZME_SEARCH_HITS = 6;
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS quizme (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
-  topic_id INTEGER,                                -- the section she was studying, when known (not a foreign key: maps get rebuilt)
-  text TEXT NOT NULL,                              -- what she highlighted
-  size INTEGER NOT NULL,                           -- 3, 5 or 10 asked for (questions_json may hold fewer)
-  questions_json TEXT NOT NULL,
-  answers_json TEXT NOT NULL,                      -- chosen option index per question, null until answered
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  finished_at TEXT
-);
-CREATE INDEX IF NOT EXISTS quizme_open ON quizme(user_id, exam_id, finished_at);
--- Lecture reviews: a question she got right in one doesn't come back in the next (unless she misses it again later).
-CREATE TABLE IF NOT EXISTS lecture_review_done (
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  ref TEXT NOT NULL,                               -- "quiz:<topic>:<index>" or "quizme:<id>:<index>"
-  done_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (user_id, ref)
-);`);
-addColumn("lecture_review_done", "stem", "TEXT"); // normalised question text: the same question from another quiz is done too
-// Columns added after the table first shipped. Two processes can open the same database at once (next build's
-// workers, or two app instances), so a column another one just added is not an error.
-function addColumn(table: string, column: string, definition: string) {
-  const have = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
-  if (have.includes(column)) return;
-  try {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  } catch (err) {
-    if (!/duplicate column/i.test(String(err))) throw err;
-  }
-}
-addColumn("quizme", "kind", "TEXT NOT NULL DEFAULT 'highlight'"); // highlight | lecture
-addColumn("quizme", "document_id", "INTEGER"); // the lecture, for a lecture review
 
 export type QuizMeKind = "highlight" | "lecture";
 

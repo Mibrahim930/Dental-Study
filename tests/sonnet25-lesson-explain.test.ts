@@ -12,7 +12,7 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content });
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     if (opts.purpose === "section quiz") return { questions: [] };
     if (opts.purpose === "section quiz check") return { verdicts: [] };
     throw new Error("unexpected " + opts.purpose);
@@ -34,6 +34,7 @@ import { coveredFacts, QUOTE_MIN_WORDS, quotedFacts } from "@/lib/lessonCoverage
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
 const lessonCallsMade = () => calls.filter((c) => c.purpose.startsWith("lesson")).map((c) => c.purpose);

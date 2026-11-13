@@ -13,7 +13,7 @@ vi.mock("@/lib/ai", async (orig) => ({
   ...(await orig<typeof import("@/lib/ai")>()),
   generate: vi.fn(async (opts: { purpose: string; content: string; system: string }) => {
     calls.push({ purpose: opts.purpose, content: opts.content, system: opts.system });
-    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return lessonWriter(++lessonCalls, opts.content);
+    if (opts.purpose === "lesson" || opts.purpose === "lesson repair") return claimAll(opts.content, lessonWriter(++lessonCalls, opts.content));
     if (opts.purpose === "section quiz") return { questions: [] };
     if (opts.purpose === "section quiz check") return { verdicts: [] };
     throw new Error("unexpected " + opts.purpose);
@@ -34,6 +34,7 @@ import { cleanLesson, getLesson, lastLessonScan, lessonText, LESSON_VERSION, sca
 import { coveredFacts, quotedFacts, RAMBLE_RUN, trimRamble } from "@/lib/lessonCoverage";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { makeUser } from "./helpers";
+import { claimAll } from "./lessonClaims";
 
 const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 const error = vi.spyOn(console, "error").mockImplementation(() => {});

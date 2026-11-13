@@ -1,6 +1,6 @@
 // Sonnet QA pass on the review ROUNDS (a lecture review re-asks what she missed, up to REVIEW_MAX_ROUNDS) and on marks for
-// quiz-me questions. Tests named "BUG: …" failed on purpose when written, each pinning a defect (see the comment above
-// it for the input and the wrong output); "fixed:" marks the ones the fix made pass.
+// quiz-me questions. Several tests here pinned a defect when written (the comment above each gives the input and the
+// wrong output it used to give); all are fixed and now guard against regressions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type GenOpts = { purpose: string; content: string; system: string };
@@ -20,8 +20,7 @@ vi.mock("next/headers", async () => {
   return { cookies: async () => ({ get: (name: string) => (name === SESSION_COOKIE && jar.cookie ? { value: jar.cookie } : undefined) }) };
 });
 
-import { sessionToken } from "@/lib/auth";
-import { db, type Topic } from "@/lib/db";
+import { db } from "@/lib/db";
 import { answerQuizMe, getQuizMe, hideQuizMeQuestion, lectureMisses, lectureReviewStatus, openLectureReview, openQuizMe, REVIEW_MAX_ROUNDS, type QuizMeQuestion } from "@/lib/quizMe";
 import { recordQuizAnswer } from "@/lib/quizProgress";
 import { QUIZ_VERSION, type QuizQuestion } from "@/lib/study";
@@ -31,23 +30,13 @@ import { GET as marksGET, PUT as marksPUT } from "@/app/api/marks/route";
 import { GET as quizmeGET } from "@/app/api/quizme/[id]/route";
 import { POST as quizmeAnswerPOST } from "@/app/api/quizme/[id]/answer/route";
 import { MARKS_KEY } from "@/lib/marks";
-import { makeUser } from "./helpers";
+import { apiReadyUser, ctx, postJson as post, sessionCookie, slideNotes, world as makeWorld } from "./helpers";
 
-const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
-const post = (body: unknown) => new Request("http://x/api", { method: "POST", body: JSON.stringify(body) });
 
-const notes = (i: number) =>
-  JSON.stringify({ title: `slide ${i}`, summary: "s", image_description: null, key_facts: [`fact ${i}`], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: [], is_filler: false });
+const notes = (i: number) => slideNotes({ title: `slide ${i}`, key_facts: [`fact ${i}`] });
 
-function apiReadyUser(): number {
-  const id = makeUser();
-  db.prepare("UPDATE users SET api_key_enc = 'enc', must_change_password = 0, is_admin = 0 WHERE id = ?").run(id);
-  return id;
-}
 function signIn(userId: number | null) {
-  if (userId == null) return void (jar.cookie = undefined);
-  const { session_epoch } = db.prepare("SELECT session_epoch FROM users WHERE id = ?").get(userId) as { session_epoch: number };
-  jar.cookie = sessionToken(userId, session_epoch);
+  jar.cookie = sessionCookie(userId);
 }
 
 const quizQs = (prefix: string, n: number): QuizQuestion[] =>
@@ -64,29 +53,26 @@ const quizQs = (prefix: string, n: number): QuizQuestion[] =>
 
 /** One exam with two lectures (see r4-review-report): lecture 1 = sections t1 (a0-a2) and t2 (b0-b2); lecture 2 = t3. */
 function world(userId = apiReadyUser()) {
-  const examId = Number(db.prepare("INSERT INTO exams (user_id, name, topic_status) VALUES (?, 'Endo', 'ready')").run(userId).lastInsertRowid);
-  const mkDoc = (name: string) => Number(db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, 'done', 2)").run(examId, name).lastInsertRowid);
-  const doc1 = mkDoc("Lecture 1 - Pulp.pdf");
-  const doc2 = mkDoc("Lecture 2 - Perio.pdf");
-  let n = 0;
-  const pageIds: number[] = [];
-  const page = (doc: number) => {
-    n++;
-    const id = Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, '', 'done', ?)").run(doc, n, notes(n)).lastInsertRowid);
-    pageIds.push(id);
-    return id;
-  };
-  const topic = (doc: number, pos: number, title: string, qs: QuizQuestion[]) =>
-    Number(
-      db
-        .prepare("INSERT INTO topics (exam_id, position, title, summary, page_ids, document_id, checks_json, checks_version) VALUES (?, ?, ?, 's', ?, ?, ?, ?)")
-        .run(examId, pos, title, JSON.stringify([page(doc), page(doc)]), doc, JSON.stringify(qs), QUIZ_VERSION).lastInsertRowid,
-    );
-  const t1 = topic(doc1, 0, "Pulp anatomy", quizQs("a", 3));
-  const t2 = topic(doc1, 1, "Pulp disease", quizQs("b", 3));
-  const t3 = topic(doc2, 2, "Perio basics", quizQs("c", 2));
-  const topicRow = (id: number) => db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic;
-  return { userId, examId, doc1, doc2, t1, t2, t3, pageIds, topicRow };
+  const w = makeWorld({
+    userId,
+    exam: "Endo",
+    ready: true,
+    lectures: ["Lecture 1 - Pulp.pdf", "Lecture 2 - Perio.pdf"],
+    pageCount: 2,
+    slidesEach: 2,
+    text: "",
+    notes,
+    quizVersion: QUIZ_VERSION,
+    session: false,
+    sections: [
+      { title: "Pulp anatomy", summary: "s", lecture: 0, quiz: quizQs("a", 3) },
+      { title: "Pulp disease", summary: "s", lecture: 0, quiz: quizQs("b", 3) },
+      { title: "Perio basics", summary: "s", lecture: 1, quiz: quizQs("c", 2) },
+    ],
+  });
+  const [doc1, doc2] = w.docIds;
+  const [t1, t2, t3] = w.topicIds;
+  return { userId, examId: w.examId, doc1, doc2, t1, t2, t3, pageIds: w.pageIds.flat(), topicRow: w.topicRow };
 }
 
 /** A "quiz me" (highlight) quiz of `n` questions, all answered (wrong by default) or all open. */
@@ -383,7 +369,7 @@ describe("the view of a review with rounds", () => {
     expect(getQuizMe(w.userId, id)).toMatchObject({ left: 2, finished: false });
   });
 
-  it("(documented) hand-edited data: round 1 left open while round 2 is answered wrong and then round 1 completes: only the LATEST round's misses come back", () => {
+  it("hand-edited data: round 1 left open while round 2 is answered wrong and then round 1 completes: only the LATEST round's misses come back", () => {
     const w = world();
     const id = lectureRow(w, [{ round: 1 }, { round: 1 }, { round: 2, question: "hand question 0?" }], [null, null, null]);
     ans(w.userId, id, 2, wrongIdx(id, 2));
@@ -513,7 +499,7 @@ describe("reporting with rounds", () => {
   // Input: quiz me [h0, h1] both answered wrong; review [h0, h1]; both wrong → round 2 = [h0', h1'] (indexes 2, 3);
   // report index 0. Wrong output: index 2 (copy of the reported h0) stays visible: hidden=false, left=2, still asked in
   // round 2 (src/lib/quizMe.ts hideQuizMeQuestion: `questions[index] = { ...q, hidden: true }`, no copies of it hidden).
-  it("fixed: reporting a round-1 question from a quiz-me miss after its round-2 copy exists leaves the copy open (the reported question is asked again)", async () => {
+  it("reporting a round-1 question from a quiz-me miss after its round-2 copy exists hides the copy too", async () => {
     const w = world();
     highlightQuiz(w.userId, w.examId, w.t1, 2, 1, "src");
     const v = openLectureReview(w.userId, w.examId, w.doc1);
@@ -529,7 +515,7 @@ describe("reporting with rounds", () => {
 
   // Same defect when the copy is the only thing left. Input: quiz me [h0] wrong; review [h0]; wrong → round 2 = [h0'];
   // report index 0. Wrong output: left=1, finished=false: the reported question is the one thing still to answer.
-  it("fixed: reporting the only round-1 question (a quiz-me miss) leaves its round-2 copy as the one question still to answer", async () => {
+  it("reporting the only round-1 question (a quiz-me miss) hides its round-2 copy and finishes the review", async () => {
     const w = world();
     highlightQuiz(w.userId, w.examId, w.t1, 1, 1, "src");
     const v = openLectureReview(w.userId, w.examId, w.doc1);
@@ -542,7 +528,7 @@ describe("reporting with rounds", () => {
   // hideQuizMeQuestion only stamped finished_at; it never opened the next round, so the outcome depended on the ORDER of
   // the same two actions (fixed: both paths go through settle()). Input: review [q0, q1]. (a) report q1, then answer q0 wrong: round 2 = [q0'], not finished.
   // (b) answer q0 wrong, then report q1: finished=true, no round 2 (q0 is never re-asked this session).
-  it("fixed: answering one wrong then reporting the other question ends the review without a second round, but the reverse order opens one", () => {
+  it("answering one wrong and reporting the other opens the same second round in either order", () => {
     const a = world();
     const va = reviewOf(a, 2);
     hideQuizMeQuestion(a.userId, va.id, 1);
@@ -555,7 +541,7 @@ describe("reporting with rounds", () => {
     expect(getQuizMe(b.userId, vb.id)).toMatchObject({ round: 2, left: 1, finished: false });
   });
 
-  it("(documented) hiding the last unanswered question of round 2 when round-1 answers exist stamps finished_at (something was answered); hiding with nothing answered does not", () => {
+  it("hiding the last unanswered question of round 2 when round-1 answers exist stamps finished_at (something was answered); hiding with nothing answered does not", () => {
     const w = world();
     const v = reviewOf(w, 2);
     ans(w.userId, v.id, 0, wrongIdx(v.id, 0));
@@ -652,7 +638,7 @@ describe("marks on quiz-me questions", () => {
     expect((await put("quizme:5:2", "nope")).status).toBe(400);
   });
 
-  it("(documented) a key for a quiz that does not exist, or is another student's, is accepted: marks are stored per student and never read back across students", async () => {
+  it("a marks key for another student's quiz, or for no quiz at all, is accepted (not checked) but stored under the signed-in student only; nothing crosses between students", async () => {
     const w = world();
     const v = reviewOf(w, 1);
     const stranger = apiReadyUser();

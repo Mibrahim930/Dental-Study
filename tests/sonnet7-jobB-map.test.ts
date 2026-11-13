@@ -20,17 +20,10 @@ vi.mock("@/lib/credentials", async (orig) => ({
 import { db, type Topic } from "@/lib/db";
 import { buildTopicMap } from "@/lib/topics";
 import { removeDocument } from "@/lib/processing";
-import { makeUser } from "./helpers";
+import { makeLecture, makeUser, slideNotes } from "./helpers";
 
-const notes = (title: string, filler = false) =>
-  JSON.stringify({ title, summary: "s", image_description: null, key_facts: ["f"], annotations: [], emphasized: false, emphasis_note: null, case_prompt: null, case_answer: null, case_image_box: null, abbreviations: [], concepts: ["c"], is_filler: filler });
-function lecture(examId: number, name: string, n: number, filler: number[] = []) {
-  const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, 'done', ?)").run(examId, name, n).lastInsertRowid);
-  const pages = Array.from({ length: n }, (_, i) =>
-    Number(db.prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, '', 'done', ?)").run(doc, i + 1, notes(`${name} s${i + 1}`, filler.includes(i + 1))).lastInsertRowid),
-  );
-  return { doc, pages };
-}
+const notes = (title: string, filler = false) => slideNotes({ title, key_facts: ["f"], concepts: ["c"], is_filler: filler });
+const lecture = (examId: number, name: string, n: number, filler: number[] = []) => makeLecture(examId, name, n, { notes: (i) => notes(`${name} s${i}`, filler.includes(i)) });
 const t = (title: string, page_ids: number[], extra: Partial<AiTopic> = {}): AiTopic => ({ title, summary: "s", page_ids, emphasized: false, concepts: [title + " c"], ...extra });
 const topics = (examId: number) => db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
 const pagesOf = (x: Topic) => JSON.parse(x.page_ids) as number[];

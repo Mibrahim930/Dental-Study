@@ -2,20 +2,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
 import { toast } from "./Toaster";
 import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
-import { Icon, ICONS, MasteryChip, Strip, type OptionState } from "./ui";
-import { OptionRow } from "./OptionRow";
-import { Highlightable } from "./Highlightable";
-import { useMarks } from "./useMarks";
+import { Icon, ICONS, MasteryChip, Strip } from "./ui";
+import { QuestionCard } from "./QuestionCard";
 import { QuizMe } from "./QuizMe";
 import { ReportQuestion } from "./ReportQuestion";
 import { LectureReviewCard } from "./LectureReviewCard";
 import { MarkableText } from "./MarkableText";
-import type { Range } from "@/lib/marks";
+import { Dialog } from "./Dialog";
 
 /**
  * A section of the topic map, with where it sits: its lecture (`lectureId` null for an old-style topic mapped across
@@ -236,23 +233,26 @@ export function StudySession(props: {
         <Strip total={topics.length} filled={position + 1} className="px-1 lg:hidden" />
       )}
 
-      {endSummary !== undefined && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3.5 sm:items-center">
-          <div className="card flex w-full max-w-md flex-col gap-3">
-            <h2 className="section-title">Session saved</h2>
-            {endSummary && <p className="text-[15px] leading-relaxed">{endSummary}</p>}
-            <p className="text-[15px] text-muted-foreground">
-              Want to lock it in? Take a short practice exam on the {visited.size} section{visited.size === 1 ? "" : "s"} you covered.
-            </p>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <button className="btn-primary btn-lg flex-1" disabled={starting} onClick={practiceCovered}>
-                {starting ? "Starting…" : "Practice these topics"}
-              </button>
-              <Link className="btn-secondary btn-lg" href={`/exams/${examId}`}>Not now</Link>
-            </div>
-          </div>
+      {/* The session is over: this stays up until she picks one (no Escape or tap outside). */}
+      <Dialog
+        open={endSummary !== undefined}
+        onClose={() => {}}
+        dismissable={false}
+        label="Session saved"
+        className="card fixed inset-x-3.5 bottom-3.5 z-[70] mx-auto flex max-w-md flex-col gap-3 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
+      >
+        <h2 className="section-title">Session saved</h2>
+        {endSummary && <p className="text-[15px] leading-relaxed">{endSummary}</p>}
+        <p className="text-[15px] text-muted-foreground">
+          Want to lock it in? Take a short practice exam on the {visited.size} section{visited.size === 1 ? "" : "s"} you covered.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button className="btn-primary btn-lg flex-1" disabled={starting} onClick={practiceCovered}>
+            {starting ? "Starting…" : "Practice these topics"}
+          </button>
+          <Link className="btn-secondary btn-lg" href={`/exams/${examId}`}>Not now</Link>
         </div>
-      )}
+      </Dialog>
 
       <div className="grid grid-cols-1 gap-2.5 sm:gap-4 lg:grid-cols-[240px_minmax(0,860px)] lg:justify-center">
         <nav className="hidden lg:block" aria-label="Sections">
@@ -409,33 +409,9 @@ async function markShown(sessionId: number, position: number) {
  */
 function SlideZoom({ pageId, aspect, number, onClose }: { pageId: number; aspect?: number; number?: number; onClose: () => void }) {
   const close = useRef<HTMLButtonElement>(null);
-  const live = useRef(onClose);
-  useEffect(() => {
-    live.current = onClose;
-  });
-  useEffect(() => {
-    const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const html = document.documentElement;
-    const before = { html: html.style.overflow, body: document.body.style.overflow };
-    html.style.overflow = "hidden";
-    document.body.style.overflow = "hidden";
-    close.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      live.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      html.style.overflow = before.html;
-      document.body.style.overflow = before.body;
-      back?.focus({ preventScroll: true });
-    };
-  }, []);
   const label = number != null ? `Slide ${number}, full size` : "Slide, full size";
-  return createPortal(
-    <div role="dialog" aria-modal="true" aria-label={label} className="fixed inset-0 z-50 bg-black/90">
+  return (
+    <Dialog open onClose={onClose} label={label} variant="fullscreen" initialFocus={close}>
       <div
         className="h-full w-full overflow-auto overscroll-contain [touch-action:pan-x_pan-y_pinch-zoom]"
         onClick={(e) => e.target === e.currentTarget && onClose()}
@@ -455,8 +431,7 @@ function SlideZoom({ pageId, aspect, number, onClose }: { pageId: number; aspect
       >
         <Icon d={ICONS.close} size={20} />
       </button>
-    </div>,
-    document.body,
+    </Dialog>
   );
 }
 
@@ -826,8 +801,6 @@ function SectionQuiz({
   const { q, at } = shown[index];
   const chosen = answers[at];
   const answered = chosen != null;
-  const stateOf = (i: number): OptionState =>
-    answered ? (i === q.correct_index ? "correct" : i === chosen ? "wrong" : "dim") : i === picked ? "selected" : "default";
   // Report: the question leaves this quiz (and its score) at once; the server hides it in every copy of the exam.
   const report = async (reason: string) => {
     const res = await fetch(`/api/sessions/${sessionId}/quiz/report`, {
@@ -863,16 +836,25 @@ function SectionQuiz({
           {total === 1 ? "One question" : `${total} questions`} covering every fact on this section&apos;s {quiz.slides} {quiz.slides === 1 ? "slide" : "slides"}.
         </p>
       )}
-      <QuizBody key={q.id ?? at} q={q} stateOf={stateOf} answered={answered || rewriting} chosen={chosen} picked={picked} onPick={setPicked} />
-      {saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
-      {answered && (
-        <div className="rounded-[22px] bg-hero p-5 text-hero-foreground">
-          <div className="mb-1 text-[13px] font-extrabold text-hero-accent">{chosen === q.correct_index ? "Correct" : `Why ${String.fromCharCode(65 + q.correct_index)}`}</div>
-          <div className="text-base leading-relaxed [&_p]:my-1.5 [&_strong]:font-extrabold">
-            <ReactMarkdown>{q.explanation}</ReactMarkdown>
-          </div>
-        </div>
-      )}
+      {/* Highlights and cross-outs are saved per question id; the answer shows once she has checked it. */}
+      <QuestionCard
+        bare
+        key={q.id ?? at}
+        q={{
+          stem: q.question,
+          options: q.options,
+          image: q.image ?? null,
+          option_notes: q.option_notes,
+          explanation: q.explanation,
+          chosen_index: chosen ?? null,
+          correct_index: answered ? q.correct_index : undefined,
+        }}
+        pending={picked}
+        onChoose={answered ? undefined : setPicked}
+        locked={rewriting}
+        marksKey={q.id ? `quiz:${q.id}` : null}
+        belowOptions={saveError && <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">{saveError}</p>}
+      />
       {answered ? (
         <button className="btn-primary btn-lg" onClick={() => goTo(index + 1)}>
           {index + 1 < total ? "Next question →" : "See my score"}
@@ -884,71 +866,6 @@ function SectionQuiz({
       )}
       {regenerateBlock}
     </section>
-  );
-}
-
-/** A quiz question's text and options, with the student's highlights and cross-outs (saved per question id). */
-function QuizBody({
-  q,
-  stateOf,
-  answered,
-  chosen,
-  picked,
-  onPick,
-}: {
-  q: QuizQ;
-  stateOf: (i: number) => OptionState;
-  answered: boolean;
-  chosen: number | undefined;
-  picked: number | null;
-  onPick: (i: number) => void;
-}) {
-  const [marks, setMarks] = useMarks(q.id ? `quiz:${q.id}` : null);
-  const setHl = (field: string) => (r: Range[]) => setMarks((m) => ({ ...m, hl: { ...m.hl, [field]: r } }));
-  const toggleCross = (i: number) =>
-    setMarks((m) => ({ ...m, crossed: m.crossed.includes(i) ? m.crossed.filter((x) => x !== i) : [...m.crossed, i].sort() }));
-  return (
-    <>
-      {q.image && (
-        <figure className="overflow-hidden rounded-[22px] bg-slide p-1.5">
-          <SlideImage pageId={q.image.page_id} aspect={q.image.aspect} crop={answered ? null : q.image.crop} alt="Picture for this question" />
-        </figure>
-      )}
-      <p className="px-1 text-[18px] leading-snug font-bold">
-        <Highlightable text={q.question} ranges={marks.hl.stem ?? []} onChange={setHl("stem")} />
-      </p>
-      <div role="radiogroup" aria-label="Answer choices" className="flex flex-col gap-2">
-        {q.options.map((o, i) => (
-          <OptionRow
-            key={i}
-            index={i}
-            text={o}
-            state={stateOf(i)}
-            checked={answered ? i === chosen : i === picked}
-            onSelect={
-              answered
-                ? undefined
-                : () => {
-                    if (marks.crossed.includes(i)) toggleCross(i);
-                    onPick(i);
-                  }
-            }
-            crossed={marks.crossed.includes(i)}
-            // The option she has picked can't also be crossed out.
-            onToggleCross={!answered && i === picked ? undefined : () => toggleCross(i)}
-            note={answered ? q.option_notes?.[i] : undefined}
-            ranges={marks.hl[`opt${i}`] ?? []}
-            onRanges={setHl(`opt${i}`)}
-            chips={
-              <>
-                {answered && i === q.correct_index && <span className="chip cb-mint shrink-0">✓ Correct</span>}
-                {answered && i === chosen && i !== q.correct_index && <span className="chip cb-coral shrink-0">✗ Yours</span>}
-              </>
-            }
-          />
-        ))}
-      </div>
-    </>
   );
 }
 
@@ -972,15 +889,7 @@ function RegenerateQuiz({
   onCancel: () => void;
   onRun: () => void;
 }) {
-  if (state === "idle") {
-    return (
-      <div className="flex justify-end">
-        <button className="btn-ghost px-1 text-[13px]" onClick={onAsk}>
-          Write new questions for this section
-        </button>
-      </div>
-    );
-  }
+  const keep = useRef<HTMLButtonElement>(null);
   if (state === "working") {
     return (
       <div className="rounded-[20px] bg-muted px-4 py-3 text-[14px] font-semibold text-muted-foreground" aria-busy>
@@ -989,20 +898,31 @@ function RegenerateQuiz({
     );
   }
   return (
-    <div role="alertdialog" aria-label="Write new questions?" className="tile cb-butter flex flex-col gap-2.5 rounded-[22px]">
-      <p className="text-[15px] font-bold">Replace this section&apos;s questions with 20 new ones?</p>
-      <p className="text-[13px] font-medium opacity-80">
-        Takes 1–2 minutes and uses a little AI credit. Your answers to the current questions stay in your history but won&apos;t show here any more.
-      </p>
-      {state === "error" && <p className="text-[13px] font-bold">{error}</p>}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-primary btn-sm" onClick={onRun}>
-          {state === "error" ? "Try again" : "Yes, write new questions"}
-        </button>
-        <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={onCancel}>
-          Keep these
+    <>
+      <div className="flex justify-end">
+        <button className="btn-ghost px-1 text-[13px]" onClick={onAsk}>
+          Write new questions for this section
         </button>
       </div>
-    </div>
+      <Dialog open={state === "confirm" || state === "error"} onClose={onCancel} label="Write new questions?" role="alertdialog" initialFocus={keep}>
+        <p className="text-[15px] font-bold">Replace this section&apos;s questions with 20 new ones?</p>
+        <p className="text-[13px] font-medium text-muted-foreground">
+          Takes 1–2 minutes and uses a little AI credit. Your answers to the current questions stay in your history but won&apos;t show here any more.
+        </p>
+        {state === "error" && (
+          <p role="alert" className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button ref={keep} type="button" className="btn-secondary btn-lg" onClick={onCancel}>
+            Keep these
+          </button>
+          <button type="button" className="btn-primary btn-lg" onClick={onRun}>
+            {state === "error" ? "Try again" : "Yes, write new questions"}
+          </button>
+        </div>
+      </Dialog>
+    </>
   );
 }

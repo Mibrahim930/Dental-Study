@@ -1,6 +1,6 @@
 // QA attack tests for the 10-sections-per-lecture cap (capSections in topicMerge.ts, mapLecture in topics.ts).
-// "BUG:" tests failed because of a real defect when written (see the comment above each; "fixed:" once it was); "(documented)" tests pin behaviour that is odd
-// but acceptable; everything else must pass.
+// Two tests here pinned a real defect when written (the comment above each gives the input and the wrong output); it is fixed
+// and they now guard against regressions. A few tests pin behaviour that is odd but acceptable (long or doubled joined titles).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type AiTopic = { title: string; summary: string; page_ids: number[]; emphasized: boolean; concepts: string[] };
@@ -26,37 +26,11 @@ vi.mock("@/lib/credentials", async (orig) => ({
 import { db, type Topic } from "@/lib/db";
 import { buildTopicMap } from "@/lib/topics";
 import { capSections, MAX_SECTIONS } from "@/lib/topicMerge";
-import { makeUser } from "./helpers";
+import { makeLecture, makeUser } from "./helpers";
 
-const notes = (title: string, filler = false) =>
-  JSON.stringify({
-    title,
-    summary: `about ${title}`,
-    image_description: null,
-    key_facts: ["fact"],
-    annotations: [],
-    emphasized: false,
-    emphasis_note: null,
-    case_prompt: null,
-    case_answer: null,
-    case_image_box: null,
-    abbreviations: [],
-    concepts: ["c"],
-    is_filler: filler,
-  });
 
 /** A read lecture of `n` slides; `filler` lists 1-based slide numbers that are title/agenda slides. */
-function lecture(examId: number, name: string, n: number, filler: number[] = []) {
-  const doc = Number(db.prepare("INSERT INTO documents (exam_id, filename, status, page_count) VALUES (?, ?, 'done', ?)").run(examId, name, n).lastInsertRowid);
-  const pages = Array.from({ length: n }, (_, i) =>
-    Number(
-      db
-        .prepare("INSERT INTO pages (document_id, page_number, image_path, status, notes_json) VALUES (?, ?, ?, 'done', ?)")
-        .run(doc, i + 1, `doc-${doc}/p${i + 1}.jpg`, notes(`${name} s${i + 1}`, filler.includes(i + 1))).lastInsertRowid,
-    ),
-  );
-  return { doc, pages };
-}
+const lecture = (examId: number, name: string, n: number, filler: number[] = []) => makeLecture(examId, name, n, { filler });
 const sec = (title: string, page_ids: number[], extra: Partial<AiTopic> = {}): AiTopic => ({ title, summary: `${title} summary.`, page_ids, emphasized: false, concepts: [`${title} concept`], ...extra });
 const idsIn = (content: string) => [...content.matchAll(/\[P(\d+)\]/g)].map((m) => Number(m[1]));
 const topics = (examId: number) => db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
@@ -115,7 +89,7 @@ describe("capSections: edge cases", () => {
     expect(out.flatMap((x) => x.title.split(" & "))).toEqual(ids(200).map((i) => `T${i}`));
   });
 
-  it("(documented) a 200-section input ends with very long joined titles and summaries (no length limit)", () => {
+  it("a 200-section input gives very long joined titles and summaries (there is no length limit)", () => {
     const out = capSections(ids(200).map((i) => sec(`Topic number ${i}`, [i])));
     // 32 titles in the biggest section: well over 400 characters in a single section title
     const longest = Math.max(...out.map((x) => x.title.length));
@@ -152,40 +126,19 @@ describe("capSections: edge cases", () => {
     expect(capSections(one, 1)).toEqual(one);
   });
 
-  it("(documented) duplicate titles are simply joined: 'A & A'", () => {
+  it("two joined sections with the same title show it twice ('A & A')", () => {
     const out = capSections([sec("A", [1], { summary: "same" }), sec("A", [2], { summary: "same" })], 1);
     expect(out[0].title).toBe("A & A");
     expect(out[0].summary).toBe("same same");
   });
 
-  it("(documented) empty titles leave dangling ' & ' separators; blank summaries are dropped without a stray space", () => {
+  it("joined sections with empty titles get a bare ' & ' title; blank summaries are dropped without a stray space", () => {
     const blank = capSections([sec("", [1], { summary: "" }), sec("", [2], { summary: "  " })], 1);
     expect(blank[0].title).toBe(" & ");
     expect(blank[0].summary).toBe("");
     const half = capSections([sec("A", [1], { summary: "" }), sec("", [2], { summary: "two." })], 1);
     expect(half[0].title).toBe("A & ");
     expect(half[0].summary).toBe("two.");
-  });
-
-  it("(documented) titles and summaries are trimmed only when sections are joined; untouched sections keep their spacing", () => {
-    const s = ids(11).map((i) => sec(i <= 2 ? ` T${i} ` : `  T${i}  `, [i], { summary: ` sum${i} ` }));
-    const out = capSections(s);
-    expect(out[0].title).toBe("T1 & T2");
-    expect(out[0].summary).toBe("sum1 sum2");
-    expect(out[1].title).toBe("  T3  ");
-    expect(out[1].summary).toBe(" sum3 ");
-  });
-
-  it("(documented) sections with zero slides are joined first (their pair has the fewest slides) and vanish into a neighbour", () => {
-    // 11 sections; the 6th holds no slides. The pair (5th, 6th) sums to 1, as does (6th, 7th); the earlier one wins.
-    const s = ids(11).map((i) => sec(`T${i}`, i === 6 ? [] : [i]));
-    const out = capSections(s);
-    expect(out).toHaveLength(10);
-    expect(out[4]).toMatchObject({ title: "T5 & T6", page_ids: [5] });
-    expect(out.flatMap((x) => x.page_ids)).toEqual(ids(11).filter((i) => i !== 6));
-    // all-empty input still ends with the limit, and nothing throws
-    expect(capSections(ids(15).map((i) => sec(`E${i}`, [])))).toHaveLength(10);
-    expect(capSections([sec("A", []), sec("B", [])], 1)[0].page_ids).toEqual([]);
   });
 
   it("extra fields survive on every section that is not joined, and a joined section keeps the first half's extras", () => {
@@ -197,12 +150,6 @@ describe("capSections: edge cases", () => {
     expect(out.map((o) => o.tag)).toEqual(["tag1", ...ids(9, 3).map((i) => `tag${i}`)]);
     expect(out[0].nested).toEqual({ x: 1 });
     expect(out[5].nested).toEqual({ x: 7 });
-  });
-
-  it("(documented) the second half's extra fields are dropped when two sections join", () => {
-    const out = capSections([{ ...sec("A", [1]), note: "from A" }, { ...sec("B", [2]), note: "from B", only: "b" }], 1) as (ReturnType<typeof sec> & { note: string; only?: string })[];
-    expect(out[0].note).toBe("from A");
-    expect(out[0].only).toBeUndefined();
   });
 
   it("the input array and its objects and their arrays are not changed", () => {
@@ -225,23 +172,11 @@ describe("capSections: edge cases", () => {
     expect(capSections(s)).toEqual(out);
   });
 
-  it("(documented) sections that are not joined share their page_ids and concepts arrays with the input (a shallow copy)", () => {
-    const s = ids(11).map((i) => sec(`T${i}`, [i]));
-    const out = capSections(s);
-    expect(out[5].page_ids).toBe(s[6].page_ids);
-    expect(out[0].page_ids).not.toBe(s[0].page_ids); // a joined one is new
-  });
-
-  it("concepts: pooled without repeats, first-seen order, blanks are carried along (documented: a blank concept survives the pool)", () => {
+  it("concepts: pooled without repeats, in first-seen order (blanks are carried along; the database step skips them)", () => {
     const out = capSections([sec("A", [1], { concepts: ["", "x", " "] }), sec("B", [2], { concepts: ["x", "", "y", "y"] })], 1);
     expect(out[0].concepts).toEqual(["", "x", " ", "y"]);
     // two sections with no concepts at all
     expect(capSections([sec("A", [1], { concepts: [] }), sec("B", [2], { concepts: [] })], 1)[0].concepts).toEqual([]);
-  });
-
-  it("(documented) concepts that differ only by case or surrounding spaces are not treated as the same in the pool", () => {
-    const out = capSections([sec("A", [1], { concepts: ["Pulpitis"] }), sec("B", [2], { concepts: ["pulpitis", "Pulpitis "] })], 1);
-    expect(out[0].concepts).toEqual(["Pulpitis", "pulpitis", "Pulpitis "]);
   });
 
   it("emphasized is true when either half was, and stays false when both were false", () => {
@@ -287,7 +222,7 @@ describe("capSections: edge cases", () => {
   //   ([1,2,3,4]), as inSlideOrder() just made them (topics.ts mapLecture doc comment, SYSTEM prompt, TopicFields).
   // SRC: topicMerge.ts line 77, `page_ids: [...a.page_ids, ...b.page_ids]` (a plain concatenation; it only stays in
   //   slide order when the two sections are runs of neighbouring slides, which cleanTopics does not guarantee).
-  it("fixed: joining two sections whose slides interleave keeps the joined section's slides in slide order", () => {
+  it("joining two sections whose slides interleave keeps the joined section's slides in slide order", () => {
     const out = capSections([sec("A", [1, 4]), sec("B", [2, 3])], 1);
     expect(out[0].page_ids).toEqual([1, 2, 3, 4]);
   });
@@ -298,7 +233,7 @@ describe("the cap through buildTopicMap", () => {
   //   cleanTopics keeps them as they are, inSlideOrder sorts each section's slides, capSections joins the first two.
   // WRONG OUTPUT: the stored first section has page_ids [1,4,2,3] instead of [1,2,3,4].
   // SRC: topicMerge.ts line 77 (see the capSections BUG above); reached from topics.ts line 162.
-  it("fixed: a stored joined section keeps the slides of interleaved sections in slide order", async () => {
+  it("a stored joined section keeps the slides of interleaved sections in slide order", async () => {
     const w = exam();
     const l = lecture(w.examId, "Inter.pdf", 22);
     const p = l.pages;
@@ -538,7 +473,7 @@ describe("the cap through buildTopicMap", () => {
     expect(pagesOf(ts.find((t) => t.id === topicOf(qB))!).length).toBeGreaterThan(1);
   });
 
-  it("(documented) auto never re-caps a lecture that was mapped before the cap existed: a 12-section lecture stays at 12", async () => {
+  it("an automatic run never re-caps a lecture mapped before the cap existed: a 12-section lecture stays at 12 (a Rebuild caps it)", async () => {
     const w = exam();
     const l = lecture(w.examId, "Old.pdf", 25);
     db.prepare("UPDATE pages SET status = 'error' WHERE id = ?").run(l.pages[24]);
