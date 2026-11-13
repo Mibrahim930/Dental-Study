@@ -126,7 +126,7 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   both). `quizMe.ts` and `reports.ts` still repeat their own CREATE TABLE IF NOT EXISTS, which is harmless. Foreign keys
   are on, deletes cascade, `busy_timeout` is 5 s.
 - AI: `src/lib/ai.ts` — `generate()` (structured output, Zod; `cache: true` marks the system prompt and first content
-  block for Anthropic prompt caching), batch reading of slides, `mapLimit`. `generate({ tier: "quality" })` picks the
+  block for Anthropic prompt caching; no caller uses it yet at `a06d26e`), batch reading of slides, `mapLimit`. `generate({ tier: "quality" })` picks the
   higher-priced model (Opus 5.5 on Anthropic keys) for the question writers; everything else is "standard" (Sonnet 5.5).
   Every call is logged to `ai_usage` with the real model and an estimated cost (Settings → Spending; Admin per user).
   `src/lib/inflight.ts` (`track`, `settle`) records background AI work so a deploy waits for it instead of throwing
@@ -138,8 +138,7 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   own empty database: `vitest.config.ts` gives the run a throwaway folder, `tests/setup-file.ts` points `DATA_DIR` at a
   fresh subfolder before every file, and `tests/global-setup.ts` deletes the folder when the run ends (a database
   shared between files once made results depend on the order files ran in). AI is always mocked. Patterns:
-  `tests/helpers.ts` (`makeUser`, `apiReadyUser`, `makeExam`, `slideNotes`, `makeLecture`, `world`, `ctx`,
-  `postJson`, `getReq`, `sessionCookie`), `vi.hoisted` cookie jar for routes (`tests/perf2-sessions.test.ts`), mocked
+  `tests/helpers.ts` (`makeUser`, `makeExam`; wave 2 adds shared fixtures, see below), `vi.hoisted` cookie jar for routes (`tests/perf2-sessions.test.ts`), mocked
   `generate` answering the `Q<n>:` slots it is asked for (`tests/jobB-quiz.test.ts`). `vi.mock` calls can't be shared
   from a helper (Vitest hoists them per file), so each file keeps its own. A test named `BUG: …` is a known defect left
   failing on purpose; once it is fixed the test is renamed to say what it checks.
@@ -171,8 +170,9 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
 - `src/lib/topics.ts` + `topicMerge.ts` + `lectures.ts` — the topic map **by lecture** (one AI call per lecture, sections in
   slide order, `topics.document_id`, at most `MAX_SECTIONS` = 10 per lecture: the prompt says so and `capSections`
   joins the smallest neighbouring pairs if the AI over-splits anyway), "auto" after an upload maps only new lectures,
-  "full" (Rebuild) keeps matching topic ids, `rebuildLectureMaps` one-time start-up upgrade (retried up to 3 starts),
-  `refileQuestions`. Lectures mapped before the cap keep their sections until Rebuild is pressed on that exam.
+  "full" (the "Re-split every lecture" button, called Rebuild before wave 1) keeps matching topic ids,
+  `rebuildLectureMaps` one-time start-up upgrade (retried up to 3 starts), `refileQuestions`. Lectures mapped before
+  the cap keep their sections until that exam is re-split.
 - `src/lib/study.ts` — lessons (`LESSON_VERSION` 4 stored inside `lesson_json`: `{ intro, slides: [{ page_id,
   explanation }], key_points, connections }`, written and shown slide by slide in plain words, explaining rather than
   repeating the slides: `quotedFacts` in `lessonCoverage.ts` counts facts copied word for word, over 30% of them (or
@@ -247,8 +247,9 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   planner, calendar (exams, busy, import read/ics), classes, shared, documents (remove, retry), pages (slide image),
   questions (flag), reports, quizme (open, lecture, answer, report), ics/[token] (calendar feed, token-based), login.
   Creating an exam is a server action (`src/app/actions.ts`). Every route but login, account signin/signup/signout and
-  the token feed answers 401 without a session, and 404 for another student's row; `tests/w2-coverage.test.ts` checks
-  that for every route file it finds, and fails when a new route is not in its tables.
+  the token feed answers 401 without a session, and 404 for another student's row. Sign-in is limited
+  (`lib/rateLimit.ts`): 10 failed tries from one address in 15 minutes on the passcode, sign-in or sign-up give a plain
+  "wait" message (429); sessions expire after 180 days; a password change signs out every other device.
 - **The shown route and when the quiz is written.** Opening a lesson only fetches that lesson. When the lesson is on
   screen the page calls `POST /api/sessions/[id]/shown`: only then does her place move, the section count as studied,
   and its quiz start being written in the background (if it has none, or an out-of-date one nobody answered). The next
@@ -256,10 +257,10 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
 
 ---
 
-## 6. What is live, in order (all on `main`; latest d5eb67e, deployed 2026-10-27)
+## 6. What is live, in order (items 1–20 are on `main`, latest `f228781`, deployed 2026-10-28; item 21 is audit wave 1, on the side branch, not yet published)
 
 1. **2026-10-04, first week (4abfc8a…c95d633).** Exam workspaces; PDF upload and slide reading (batch API, prompt caching);
-   topic map; study sessions with lessons and tutor chat; practice exams; spaced daily review; user accounts with their own
+   topic map; study sessions with lessons and tutor chat (the chat was removed in item 14); practice exams; spaced daily review; user accounts with their own
    Claude/ChatGPT key and a spending tracker; admin page with password reset, account removal and nightly backups + restore
    script; yearly calendar + planner; board-style case sets; classes with invite codes; first tests; themed design with
    dark mode, phone tab bar, dashboard home.
@@ -280,7 +281,7 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
    way a quiz changes; writers and checker follow the style of her real exams; pictures on questions (any pictured slide
    can be attached; picture talk without a picture is dropped; start-up repair).
 6. **2026-10-20 evening (164e7b6…840b758).** Perf top five: loading skeletons on every page, quiz written alongside the
-   lesson, practice concurrency 8/6, memoized tutor chat streaming per frame, batched exam-page queries (196 → 20),
+   lesson, practice concurrency 8/6, memoized tutor chat streaming per frame (since removed), batched exam-page queries (196 → 20),
    AutoRefresh pauses in background tabs.
 7. **2026-10-21 (dc8ae49…79fc9d5), calendar first release.** Manual tick marks a topic studied; archived exams leave the
    calendar and feed; countdowns in her time zone; RFC-5545 feed escaping; "Exams without a date"; "+ Add exams" table;
@@ -322,6 +323,81 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
     every stored lesson once on next open; the lesson route sends every slide's number, lecture and aspect (`slideInfo`)
     and serves only slides still in the section. Its Sonnet QA (`tests/sonnet18-slide-lessons`, 54 tests) fixed class
     copies carrying a lesson slide whose page wasn't copied, and a punctuation-only fact forcing a repair call.
+14. **2026-10-27 (e7421ef, 8004f8e), tutor removed and quizzes sized to the material**, at the owner's request. The tutor
+    chat is gone everywhere (desktop column, phone button and sheet, chat route, `tutorSystem`/`tutorStream`, the history
+    load); `chat_messages` stays only for old session summaries. The study page is two columns on desktop with the lesson
+    capped at 860 px. The practice-exam mode "Tutor" is labelled "Learn" (stored value unchanged). Section quizzes became
+    one question per distinct fact with no floor (the floor of 5 padded small sections with repeats); `QUIZ_VERSION` 4.
+    QA (`sonnet19-quiz-size`, 28 tests): a recap slide no longer pushes a real fact out; a quiz of up to 4 questions is
+    one writer call.
+15. **2026-10-28 (bbe42d9, 466fd50), quiz condensing.** Section quizzes are capped at 25 questions without losing
+    material: a denser section is condensed (several related facts per question, "all EXCEPT", comparisons, vignettes),
+    not cut. `QUIZ_VERSION` 5: a version-3 or -4 quiz whose section has at most 25 facts is kept, so only the uncapped big
+    ones were rewritten once. QA (`sonnet21-condense`, 49 tests) made the slot allocation even (120 facts on one slide →
+    25 questions of 4–5).
+16. **2026-10-28 (e1d31a0, a7c96bb), lecture review and Report button.** At the end of a lecture (and under it on the exam
+    page) a card counts the questions she got wrong there and opens them as one quiz, with no AI call; a question then
+    answered right is retired. A **Report** button on every question (section quiz, practice exam, daily review, quiz me,
+    lecture review) with "Are you sure?" and an optional reason: the question leaves the quiz or exam and its score, is
+    hidden in every copy of the exam, the writers avoid it, and the record goes to the Admin page. Cover-page lines are
+    not facts (`NO_COVER_RULE`). QA (`sonnet20-review-report`, 54 tests) fixed 13 defects.
+17. **2026-10-28 (7e33555, 7c9229e), review rounds.** Review questions can be highlighted and crossed out; Back/Next
+    move between answered questions; misses come back in repeat rounds (reshuffled options) up to 5 rounds. QA
+    (`sonnet23-review-rounds`): reporting hides every copy and settles the round the same way whatever the order.
+18. **2026-10-28 (d9cd906, d18776d), lesson highlights.** Select words in a lesson and a pill offers Highlight and
+    Underline (and "Quiz me on this"); marks are saved to her account and painted with the CSS highlight API. The
+    "Professor stressed" wording became **"★ You emphasized this"** everywhere (the stars come from her own notes). QA
+    (`sonnet22-lesson-marks`, 13 tests).
+19. **2026-10-28 (387c6b6, addc8ca), section cap.** At most 10 sections per lecture: the prompt says so and `capSections`
+    joins the neighbouring pair with the fewest slides when the AI over-splits, keeping slides in slide order. Lectures
+    mapped earlier keep their sections until they are re-split. QA (`sonnet24-section-cap`).
+20. **2026-10-28 (f4d6cab, aeea273, 4d663c1, a139372, f228781), lessons explain instead of copying, and filler.** The
+    writer is told to explain each fact in its own words; the copy check (`quotedFacts`) sends a lesson that repeats over
+    30% of its facts word for word for one repair; `LESSON_VERSION` 4 rewrites a stored lesson once only if it mostly
+    copies. Filler a writer drifts into at the end of a slide is trimmed (`trimRamble`, by sign-off words, never by
+    length) on every new lesson, at every start for stored ones, and from "Check all lessons now" on the Admin page. QA
+    (`sonnet25-lesson-explain`, `sonnet26-lesson-ramble`).
+21. **2026-11-13, audit wave 1 (58b536f…a06d26e, side branch `claude/cool-ritchie-ekroty`, not yet published).** The
+    full audit is `docs/AUDIT.md`; wave 1 did S1–S14, M1–M5, M8–M12, R1–R11, L2–L6, D1–D3, T1, T2, T6, T8 and the U5/U7
+    fixes. What a student or the owner notices:
+    - **Money.** Opening a lesson no longer pays for the next lesson and this section's quiz up front; the quiz is
+      written when the lesson is on screen (the shown route, §5); skipped sections cost nothing. An answered quiz is
+      never rewritten behind her back. A lesson or quiz whose writing failed is not retried on its own for 10 minutes
+      (failure cool-down). Practice exams are written in calls of at most 12 questions, and a double tap on Start opens
+      the same exam. "End session" makes no AI call.
+    - **Sections.** The exam page's two buttons: "Add them" adds sections for new or missing slides without
+      re-splitting anything; "Re-split every lecture" asks first. A restart resumes section building.
+    - **Nothing stuck.** Practice exams cut off by a restart, slide batches whose key was removed, and "Reading slides"
+      bars that never finished now end with a plain message. Deploys wait (up to 25 s) for AI work already paid for.
+    - **Screens.** Error, not-found and global error pages; no raw error text anywhere; forms recover from a dropped
+      connection; phone fixes (slide zoom, calendar opens in month view, 44 px tap targets, floating buttons no longer
+      cover the last lines).
+    - **Safety.** Sign-in limits (10 failed tries per address per 15 minutes), session expiry (180 days), the passcode
+      compared in constant time, every route's body checked, upload limits (JPEG/PNG only for pictures, very tall pages
+      refused), the production config check (§2), security headers, a cross-site check on the lesson and quiz routes,
+      `next` 16.4.6 and `zod` 4.6.7 (no known vulnerabilities).
+    - **Code and tooling.** One shared question validator (`lib/mcq.ts`), picture rules for case sets, the schema and
+      its indexes in one place, dead code removed (the last tutor-chat code included), `npm run typecheck`, the CI
+      workflow (§4), `.gitignore` lists `design/` and `.preview-app/`, `.env.example` lists every variable, Railway's
+      health check waits 300 s.
+    - **Tests.** Every test file has its own database; the one long-failing test was a test bug and is fixed. 79 files,
+      1714 tests, all passing (`tests/w1-*.test.ts` are the wave's own).
+
+### Being changed in audit wave 2 (not final when this was written)
+
+The lead finishes this section when wave 2 is reviewed. Work in progress on the same side branch:
+- **Lesson generation in chunks**: a long section's lesson written in parts instead of one big call (details to be
+  filled in by the lead).
+- **One shared Dialog and one QuestionCard** (audit U1, U2): the seven hand-made overlays and the three question cards
+  (section quiz, Quiz me, practice) become one component each.
+- **File splits** (audit U4): `StudySession.tsx`, `QuizMe.tsx`, `AttemptRunner.tsx` and the exam page split along their
+  seams (the exam page's sections are moving into `src/components/exam/` and `src/lib/examPage.ts`).
+- **Tests**: `tests/helpers.ts` gained shared fixtures (`apiReadyUser`, `sessionCookie`, `slideNotes`, `makeLecture`,
+  `world`, `ctx`, `postJson`, `getReq`) and twelve files use them; tests titled "BUG…" that pass were renamed to say
+  what they check; trivia tests in `sonnet24-section-cap` were removed; `tests/w2-coverage.test.ts` checks every route
+  file it finds (401 signed out, 404 for a stranger's row, unchanged data) and fails when a new route is not in its
+  tables, plus route tests for the routes no test imported before. Test counts change; run the suite for the current
+  numbers.
 
 ---
 
@@ -334,7 +410,10 @@ Each release's Sonnet QA found real bugs the build had missed; the test files ar
 fetch" text), `sonnet15` (lecture maps: half-read lecture mapped early, swallowed auto request, re-map of a rebuilt exam,
 wasted AI calls, empty copied sections), `sonnet16` (quizzes/progress/lessons: class copies lost option notes, planner
 duplicates, stemming, Continue card limit), `sonnet17` (reports/Quiz me: off-site link on the Admin page, screenshots
-surviving account deletion, 400 KB image decoding to 900 MB). Run them all; keep writing new ones per change.
+surviving account deletion, 400 KB image decoding to 900 MB), `sonnet18` (slide-by-slide lessons), `sonnet19` (quiz
+size), `sonnet20` (lecture review and Report: 13 defects), `sonnet21` (quiz condensing), `sonnet22` (lesson marks),
+`sonnet23` (review rounds), `sonnet24` (section cap), `sonnet25` (lessons explain), `sonnet26` (filler), and the audit's
+`w1-*`. Run them all; keep writing new ones per change.
 
 ---
 
@@ -342,11 +421,16 @@ surviving account deletion, 400 KB image decoding to 900 MB). Run them all; keep
 
 - Rebuild **all** existing exams into lecture-based maps (lessons/quizzes rewritten; section-quiz progress of old
   sections lost; practice history and mastery kept). Done at the first start after Release 3.
-- Opus 5.5 for the **question writers only** (section quiz, practice, case sets, Quiz me); checker, lessons, tutor,
-  slide reading stay on Sonnet; ChatGPT users unchanged.
-- Rewrite all stored quizzes once (done, `QUIZ_VERSION` 3) and lessons once (`LESSON_VERSION` 2, on first open).
+- Opus 5.5 for the **question writers only** (section quiz, practice, case sets, Quiz me); checker, lessons and slide
+  reading stay on Sonnet; ChatGPT users unchanged.
+- The tutor chat is removed (2026-10-27, owner's request); don't bring it back without asking.
+- Rewrite all stored quizzes once (done, `QUIZ_VERSION` 3) and lessons once (`LESSON_VERSION` 2, on first open). Later
+  versions (quiz 4 and 5, lesson 3 and 4) rewrite only what was written the old way. The audit work bumps neither
+  version: nothing the students already have is rewritten.
 - Bug reports go to the **Admin page only** (no email).
-- Quiz size follows the facts, floor 5, ceiling 25. "Quiz me" works anywhere studying with a 3/5/10 choice.
+- Quiz size follows the facts: one question per distinct fact, no floor, at most 25, a denser section condensed rather
+  than cut. "Quiz me" works anywhere studying with a 3/5/10 choice.
+- The "★ You emphasized this" wording stays (owner's decision).
   Lessons: every slide, plain language. An open practice exam shows "Continue" but new ones are still allowed.
 - Extra study hours on a day do **not** pull work forward (a "Get ahead" button only if Lolo asks).
 - `QUIZ_VERSION` was deliberately *not* bumped for the exam-style change on 2026-10-20 (existing quizzes stayed).
@@ -365,17 +449,17 @@ lessons, Quiz me, the report button, the calendar. Real-AI quality of the exam-s
 the lesson coverage check has not been checked with a real key by us.
 
 **Known gaps, by size:**
-- Not built from Release 3's plan: "Ask the tutor about this" on the Quiz-me score screen (TutorChat lives inside
-  StudySession; a window event would do it); Quiz me on the daily-review page (review is cross-exam; cards carry no exam id).
+- The rest of `docs/AUDIT.md` that waves 1 and 2 do not cover, and its "Not done, by choice" list.
+- Not built from Release 3's plan: Quiz me on the daily-review page (review is cross-exam; cards carry no exam id).
 - Expired timed exams are only finished when opened (the client Timer does it); abandoned attempts stay "ready" until
-  opened; no per-user rate limit on reports or sign-in; the Admin Reports list caps at 100 with no paging.
+  opened; no rate limit on reports; the Admin Reports list caps at 100 with no paging. The marks route accepts a
+  `quizme:<id>` key for a quiz that is not hers (stored under her own account only, so nothing leaks).
 - Case-set practice exams aren't backfilled when a set fails (exam is ready but short). A judge-flagged picture question
   gets its whole slide without a second answer-leak check. iPhone HEIC photos can't be decoded (students are told to
   screenshot). The per-option note is squeezed next to the "Your answer"/"Correct" chips at 375 px (cosmetic). Home's
-  "x of y lectures" counts only lectures with sections. A kept topic whose slides changed in a Rebuild loses its lesson
+  "x of y lectures" counts only lectures with sections. A kept topic whose slides changed in a re-split loses its lesson
   and quiz (pre-existing rule). Settings bills a custom `CLAUDE_QUALITY_MODEL` at Sonnet prices if it isn't in `PRICES`.
-- Older plan items: `friendlyAiError` on the chat/end/practice error paths; inline report form for practice questions
-  (still `window.prompt`); admin un-flag; Geist Mono `preload: false`.
+- Older plan items: admin un-flag; Geist Mono `preload: false`.
 
 **Next candidates (owner's call):** the calendar second release (parked with details in `docs/TODO.md`: move/skip a
 single task; better phone feed with alerts 3 days and 1 day before; class-shared exam dates; weekly summary; email
@@ -406,7 +490,8 @@ reminders only if the owner says yes); perf batch 3
 ## 11. First-session checklist
 
 1. `git fetch`; compare `main` with `origin/main` and list unmerged `claude/*` branches.
-2. `npx vitest run` (expect 1061 passed + 1 expected fail), `npx tsc --noEmit -p .`, `npx eslint src tests`.
+2. `npx vitest run` (all passing; 79 files and 1714 tests at `a06d26e`, more after wave 2), `npm run typecheck`,
+   `npx eslint src tests`; and the latest CI run on GitHub.
 3. Check the last Railway deploy status with the `gh api … deployments` commands in §2.
 4. Read this file's §3 rules, then the code map (§5) for the area you'll touch, then the Next 16 docs for anything in
    routes/pages.

@@ -1,5 +1,7 @@
-// Does a lesson mention every fact the slides list? A cheap word-overlap check (no AI) that decides whether the lesson
-// writer gets one repair call for the facts it skipped.
+// Cheap text checks on lessons (no AI). The writer now says which numbered facts each entry explains, so these no
+// longer decide what is repaired on their own: coveredFacts (word overlap) is only logged; quotedFacts (word-for-word
+// copies) decides whether a stored version-3 lesson is kept and whether a freshly written part is re-asked to explain;
+// trimRamble cuts the filler a drifting writer signs off with, from every entry.
 
 const STOP = new Set(
   "the a an and or of to in on for with from by at as is are was were be been being this that these those it its into than then which who whom whose what when where while can may might must should would could will shall not no nor but if so such also only more most less least very each per via about between among through during before after over under again further once here there all any both few other some own same too".split(
