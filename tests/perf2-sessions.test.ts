@@ -3,7 +3,7 @@
 import crypto from "crypto";
 import type { NextResponse } from "next/server";
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_COOKIE, hashPassword, sessionParts, sessionToken, sessionUserId } from "@/lib/auth";
+import { SESSION_COOKIE, sessionParts, sessionToken, sessionUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { revokeSessions, userForSession } from "@/lib/user";
 import { makeUser } from "./helpers";
@@ -28,8 +28,13 @@ function signedIn(userId: number) {
 /** A user who can call API routes: has a key and no pending password change. */
 function apiReadyUser(password = "old-password", admin = false) {
   const id = makeUser();
-  db.prepare("UPDATE users SET password_hash = ?, api_key_enc = 'enc', must_change_password = 0, is_admin = ? WHERE id = ?").run(hashPassword(password), admin ? 1 : 0, id);
+  db.prepare("UPDATE users SET password_hash = ?, api_key_enc = 'enc', must_change_password = 0, is_admin = ? WHERE id = ?").run(legacyHash(password), admin ? 1 : 0, id);
   return id;
+}
+/** A password hash in the stored format, made synchronously for fixtures (hashPassword itself is async). */
+function legacyHash(password: string): string {
+  const salt = crypto.randomBytes(16);
+  return `scrypt$${salt.toString("base64")}$${crypto.scryptSync(password, salt, 64).toString("base64")}`;
 }
 
 /** A cookie exactly as the previous version wrote it: `id.timestamp.signature`, signed over `session:id.timestamp`. */

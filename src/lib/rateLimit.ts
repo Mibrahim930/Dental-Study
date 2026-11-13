@@ -10,9 +10,15 @@ const MAX_ENTRIES = 10_000;
 type Entry = { failures: number; resetAt: number };
 const entries = new Map<string, Entry>();
 
-/** The visitor's address: the first entry of x-forwarded-for (set by Railway's edge), or one shared bucket without it. */
+/**
+ * The visitor's address as the hosting edge saw it: x-real-ip when the edge sets it, else the LAST entry of
+ * x-forwarded-for (the one the edge appended; earlier entries are whatever the visitor sent and can be made up),
+ * else one shared bucket.
+ */
 export function clientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  return request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || "unknown";
 }
 
 function prune(now: number) {

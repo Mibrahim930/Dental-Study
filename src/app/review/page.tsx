@@ -213,7 +213,7 @@ export default function ReviewPage() {
         </span>
       </div>
       <Strip total={cards.length} filled={index} className="px-1" />
-      <QuestionCard
+      <QuestionCard reportContext="today's review"
         key={c.card_id}
         q={q}
         onChoose={chosen == null ? setChosen : undefined}

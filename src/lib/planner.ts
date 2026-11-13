@@ -105,7 +105,8 @@ export function rebuildPlan(userId: number): PlanWarning[] {
   db.prepare("DELETE FROM plan_tasks WHERE user_id = ? AND status = 'todo' AND date >= ?").run(userId, today);
 
   const exams = db
-    .prepare("SELECT * FROM exams WHERE user_id = ? AND status = 'active' AND exam_date > ? ORDER BY exam_date")
+    // (Only real dates: an exam row with a junk date from before dates were checked must not break the plan.)
+    .prepare("SELECT * FROM exams WHERE user_id = ? AND status = 'active' AND exam_date > ? AND exam_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' ORDER BY exam_date")
     .all(userId, today) as Exam[];
   const finish = (warnings: PlanWarning[]) => {
     db.prepare("UPDATE planner_settings SET warnings = ?, rebuilt_on = ? WHERE user_id = ?").run(JSON.stringify(warnings), today, userId);

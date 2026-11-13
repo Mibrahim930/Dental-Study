@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { db, FILES_DIR } from "@/lib/db";
 import { apiAdmin, notFound, unauthorized } from "@/lib/user";
 import { sharedImageDirs } from "@/lib/classes";
+import { deleteReportedFilesForUser } from "@/lib/reportedQuestions";
 
 // Permanently removes an account and everything it owns (exams, lectures, progress, files).
 export async function POST(_request: Request, ctx: RouteContext<"/api/admin/users/[id]/delete">) {
@@ -17,6 +18,8 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/admin/user
   const keep = sharedImageDirs(docs.map((d) => d.id), id);
   // Screenshots they sent with bug reports go too (the rows cascade; the files don't).
   const reports = db.prepare("SELECT id FROM reports WHERE user_id = ?").all(id) as { id: number }[];
+  // Their reported-question files too (found through rows that go with the account, so before it is deleted).
+  deleteReportedFilesForUser(id);
   db.transaction(() => {
     db.prepare(`DELETE FROM pages_fts WHERE page_id IN (SELECT p.id FROM pages p JOIN documents d ON d.id = p.document_id JOIN exams e ON e.id = d.exam_id WHERE e.user_id = ?)`).run(id);
     db.prepare("DELETE FROM users WHERE id = ?").run(id); // cascades to exams, concepts, glossary, usage

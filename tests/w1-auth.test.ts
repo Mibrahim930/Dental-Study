@@ -27,7 +27,7 @@ vi.mock("next/headers", () => ({
 vi.mock("@/lib/ai", async (orig) => ({ ...(await orig<typeof import("@/lib/ai")>()), verifyKey: vi.fn(async () => "not checked in tests") }));
 
 const post = (url: string, body: string, ip = "203.0.113.1") =>
-  new Request(`http://x${url}`, { method: "POST", body, headers: { "content-type": "application/json", "x-forwarded-for": `${ip}, 10.0.0.1` } });
+  new Request(`http://x${url}`, { method: "POST", body, headers: { "content-type": "application/json", "x-forwarded-for": `10.9.9.9, ${ip}` } });
 const json = (v: unknown) => JSON.stringify(v);
 
 /** A password hash exactly as the old synchronous hashPassword wrote it. */
@@ -75,8 +75,9 @@ describe("S1 limiter", () => {
     expect(rateLimitSize()).toBe(1);
   });
 
-  it("reads the first x-forwarded-for entry, with one shared bucket when it's missing", () => {
+  it("reads x-real-ip, else the last x-forwarded-for entry (the one the edge added), with one shared bucket when both are missing", () => {
     expect(clientIp(post("/", "{}", "198.51.100.7"))).toBe("198.51.100.7");
+    expect(clientIp(new Request("http://x/", { headers: { "x-forwarded-for": "1.1.1.1, 2.2.2.2", "x-real-ip": "3.3.3.3" } }))).toBe("3.3.3.3");
     expect(clientIp(new Request("http://x/"))).toBe("unknown");
   });
 

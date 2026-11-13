@@ -301,7 +301,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
         ))}
       </div>
 
-      <QuestionCard
+      <QuestionCard reportContext="this practice exam and its score"
         key={q.id}
         q={q}
         practice
@@ -610,7 +610,7 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
               </button>
               {open === q.id && (
                 <div className="flex flex-col gap-2.5 px-1 pt-1 pb-3">
-                  <QuestionCard q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} onReport={(reason) => onReport(q.id, reason)} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
+                  <QuestionCard reportContext="this practice exam and its score" q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} onReport={(reason) => onReport(q.id, reason)} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
                 </div>
               )}
             </div>

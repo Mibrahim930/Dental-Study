@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { decryptSecret, encryptSecret, gateOk, gateToken, hashPassword, sessionToken, sessionUserId, verifyPassword } from "@/lib/auth";
 
 describe("auth", () => {
-  it("hashes and verifies passwords", () => {
-    const h = hashPassword("correct horse");
+  it("hashes and verifies passwords", async () => {
+    const h = await hashPassword("correct horse");
     expect(h).not.toContain("correct horse");
-    expect(verifyPassword("correct horse", h)).toBe(true);
-    expect(verifyPassword("wrong", h)).toBe(false);
-    expect(hashPassword("same")).not.toBe(hashPassword("same")); // salted
+    expect(await verifyPassword("correct horse", h)).toBe(true);
+    expect(await verifyPassword("wrong", h)).toBe(false);
+    expect(await hashPassword("same")).not.toBe(await hashPassword("same")); // salted
   });
 
   it("session cookies can't be forged or tampered with", () => {
