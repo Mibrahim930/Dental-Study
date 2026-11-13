@@ -35,7 +35,8 @@ test("study a section: lesson, studied mark, quiz score, next section written ah
 
   // One entry per slide, each with its slide number and picture.
   const slides = w.pageIds[0].length;
-  const entries = page.locator("main article ol > li");
+  // A lesson entry is the list item holding a slide's zoom button (the key points are a list too).
+  const entries = page.getByRole("listitem").filter({ has: page.getByRole("button", { name: /^Zoom slide \d+$/ }) });
   await expect(entries).toHaveCount(slides);
   for (let i = 0; i < slides; i++) {
     const entry = entries.nth(i);
@@ -45,7 +46,7 @@ test("study a section: lesson, studied mark, quiz score, next section written ah
     await img.scrollIntoViewIfNeeded();
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBeGreaterThan(0);
   }
-  await expect(page.locator("main article ol > li").getByText("★ You emphasized this")).toHaveCount(1);
+  await expect(entries.getByText("★ You emphasized this", { exact: true })).toHaveCount(1);
   expect(lessonRequests(apiLog, 0).opened, "lesson requests for section 1").toBe(1);
 
   // Studied once on screen (the page reports it), not before.
@@ -73,7 +74,7 @@ test("study a section: lesson, studied mark, quiz score, next section written ah
     await card.getByRole("button", { name: "Check answer" }).click();
     await expect(card.getByText(good ? "✓ Correct" : /✗ Why [A-D]/).first()).toBeVisible();
     if (good) right++;
-    await card.getByRole("button", { name: i + 1 < total ? "Next question →" : "See my score" }).click();
+    await card.getByRole("button", { name: i + 1 < total ? "Next question →" : "See my score", exact: true }).click();
   }
   const pct = Math.round((right / total) * 100);
   await expect(page.getByText(`${pct}% · ${right}/${total} right`)).toBeVisible();
