@@ -6,8 +6,13 @@ import { rebuildPlan } from "./planner";
 export type NewExam = { name: string; date: string; kind: ExamKind; course: string | null };
 
 export const MAX_EXAMS_PER_ADD = 60;
-const MAX_NAME = 120;
-const MAX_COURSE = 80;
+export const MAX_NAME = 120;
+export const MAX_COURSE = 80;
+
+/** A name or course as typed: one line, trimmed, capped at `max`; "" when missing or not a string. */
+export function examText(v: unknown, max: number): string {
+  return typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max).trim() : "";
+}
 
 /** Check rows sent by the browser. Every row needs a name and a real date; the first problem is reported with its row number. */
 export function cleanExamRows(input: unknown): { rows: NewExam[] } | { error: string } {
@@ -16,9 +21,9 @@ export function cleanExamRows(input: unknown): { rows: NewExam[] } | { error: st
   const rows: NewExam[] = [];
   for (const [i, raw] of input.entries()) {
     const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-    const name = typeof r.name === "string" ? r.name.replace(/\s+/g, " ").trim().slice(0, MAX_NAME) : "";
+    const name = examText(r.name, MAX_NAME);
     const date = typeof r.date === "string" ? r.date.trim() : "";
-    const course = typeof r.course === "string" ? r.course.replace(/\s+/g, " ").trim().slice(0, MAX_COURSE) : "";
+    const course = examText(r.course, MAX_COURSE);
     if (!name) return { error: `Row ${i + 1} needs a name.` };
     if (!date) return { error: `Row ${i + 1} (${name}) needs a date.` };
     if (!isValidDate(date)) return { error: `Row ${i + 1} (${name}) has a date that doesn't exist.` };

@@ -278,16 +278,16 @@ describe("question checks", () => {
     expect(qs[1].source_page_id).toBe(w.topicPages[0]);
   });
 
-  it("no usable questions is an AI failure (500, plain message), and nothing is stored", async () => {
+  it("no usable questions is an AI failure (502, plain message), and nothing is stored", async () => {
     const w = world();
     signIn(w.userId);
     gen.questions = () => [q(1, { correct_index: 9 })];
     const res = await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }));
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect((await res.json()).error).toBe("The AI didn't answer in time. Try again in a moment.");
     gen.fail = new Error("socket hang up");
     const res2 = await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }));
-    expect(res2.status).toBe(500);
+    expect(res2.status).toBe(502);
     expect((await res2.json()).error).toBe("The AI didn't answer in time. Try again in a moment.");
     expect((db.prepare("SELECT COUNT(*) n FROM quizme WHERE user_id = ?").get(w.userId) as { n: number }).n).toBe(0);
   });

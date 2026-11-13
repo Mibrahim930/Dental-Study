@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { apiUser, unauthorized } from "@/lib/user";
 import { rebuildPlan } from "@/lib/planner";
 import { isValidDate, kindOrDefault } from "@/lib/calendar";
-import { cleanExamRows, createExams } from "@/lib/examImport";
+import { cleanExamRows, createExams, examText, MAX_COURSE, MAX_NAME } from "@/lib/examImport";
+import { readJson } from "@/lib/http";
 
 // Adding an exam on the calendar creates its exam workspace.
 // Body: one exam { name, course, kind, date }, or several { exams: [...] } (the "+ Add exams" table and the importers),
@@ -11,13 +12,7 @@ import { cleanExamRows, createExams } from "@/lib/examImport";
 export async function POST(request: Request) {
   const user = await apiUser();
   if (!user) return unauthorized();
-  let body: Record<string, unknown>;
-  try {
-    body = (await request.json()) as Record<string, unknown>;
-    if (!body || typeof body !== "object") throw new Error("not an object");
-  } catch {
-    return NextResponse.json({ error: "Something went wrong sending that. Try again." }, { status: 400 });
-  }
+  const body = await readJson(request);
 
   if ("exams" in body) {
     const cleaned = cleanExamRows(body.exams);
@@ -26,13 +21,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ ids, added: ids.length });
   }
 
-  const { name, course, kind, date } = body as { name?: unknown; course?: unknown; kind?: unknown; date?: unknown };
-  if (typeof name !== "string" || !name.trim()) return NextResponse.json({ error: "Give the exam a name." }, { status: 400 });
+  // Same rules as a row of the table: a name, a real date (refused otherwise, like the table), capped lengths.
+  const name = examText(body.name, MAX_NAME);
+  const course = examText(body.course, MAX_COURSE) || null;
+  const date = typeof body.date === "string" ? body.date.trim() : body.date;
+  if (!name) return NextResponse.json({ error: "Give the exam a name." }, { status: 400 });
   if (!isValidDate(date)) return NextResponse.json({ error: "Pick a date." }, { status: 400 });
   const id = Number(
-    db
-      .prepare("INSERT INTO exams (user_id, name, course, exam_date, kind) VALUES (?, ?, ?, ?, ?)")
-      .run(user.id, name.trim(), (typeof course === "string" && course.trim()) || null, date, kindOrDefault(kind)).lastInsertRowid,
+    db.prepare("INSERT INTO exams (user_id, name, course, exam_date, kind) VALUES (?, ?, ?, ?, ?)").run(user.id, name, course, date, kindOrDefault(body.kind)).lastInsertRowid,
   );
   rebuildPlan(user.id);
   return NextResponse.json({ id });

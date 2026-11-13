@@ -9,6 +9,6 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/attempts/[i
   const ownedId = Number((await ctx.params).id);
   if (!ownsAttempt(user.id, ownedId)) return notFound();
   const view = attemptView(Number((await ctx.params).id));
-  if (!view) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!view) return notFound();
   return NextResponse.json(view);
 }

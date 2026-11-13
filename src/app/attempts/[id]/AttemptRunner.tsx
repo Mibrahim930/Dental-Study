@@ -5,10 +5,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AttemptView } from "@/lib/attemptView";
 import { QuestionCard, type QuestionData } from "@/components/QuestionCard";
 import type { Confidence } from "@/lib/practicePlan";
-import { DoubleRing, Icon, ICONS } from "@/components/ui";
+import { DoubleRing, Icon, ICONS, RingLegend } from "@/components/ui";
 import { toast } from "@/components/Toaster";
 import { ServerMessage, failureText, jsonOf, signedOut } from "@/components/clientFetch";
 import { QuizMe } from "@/components/QuizMe";
+import { friendlyError, needsKeyFix } from "@/components/friendlyError";
+
+/** After this long "generating", the writing screen says it is taking longer than usual and polls less often. */
+const SLOW_AFTER_MS = 3 * 60 * 1000;
+
+/** A SQLite "YYYY-MM-DD HH:MM:SS" time (UTC) in milliseconds. */
+const utcMs = (sqlTime: string) => new Date(sqlTime.replace(" ", "T") + "Z").getTime();
 
 const CONFIDENCE_CHOICES: [Confidence, string, string][] = [
   ["guess", "Guessed", "bg-lilac text-on-lilac"],
@@ -63,44 +70,75 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
     try {
       const res = await fetch(`/api/attempts/${attemptId}`);
       if (signedOut(res)) return;
-      if (res.ok) setView(await res.json());
+      const json = await jsonOf<AttemptView>(res);
+      if (res.ok && json?.attempt) setView(json);
     } catch {
       // Offline for a moment: the next poll tries again.
     }
   }, [attemptId]);
 
-  // Poll while questions are being written.
+  // Poll while questions are being written: every 3 s, then every 10 s once it is taking longer than usual (a
+  // writer cut off by a restart is turned into an error by the server, which the next poll picks up).
+  const startedMs = utcMs(attempt.started_at);
   useEffect(() => {
     if (attempt.status !== "generating") return;
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [attempt.status, refresh]);
+    let gone = false;
+    let t: ReturnType<typeof setTimeout>;
+    const next = () => {
+      t = setTimeout(tick, Date.now() - startedMs >= SLOW_AFTER_MS ? 10_000 : 3000);
+    };
+    const tick = async () => {
+      await refresh();
+      if (!gone) next();
+    };
+    next();
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  }, [attempt.status, refresh, startedMs]);
 
-  const finish = useCallback(async () => {
-    setFinishing(true);
-    try {
-      const res = await fetch(`/api/attempts/${attemptId}/finish`, { method: "POST" });
-      if (signedOut(res)) return;
-      const json = await jsonOf<AttemptView>(res);
-      if (!res.ok || !json?.attempt) throw new Error(String(res.status));
-      setView(json);
-      window.scrollTo({ top: 0 });
-    } catch {
-      // The exam is still open on the server; nothing is lost. (When the timer ran out, the server has already stopped the clock.)
-      toast("Couldn't finish the exam. Check your connection and press Finish again.", "error");
-    } finally {
-      setFinishing(false);
-    }
-  }, [attemptId]);
+  // The floating Report button is hidden while a timed exam runs, so it never covers an answer option.
+  const timedRunning = attempt.status === "ready" && attempt.mode === "timed";
+  useEffect(() => {
+    if (!timedRunning) return;
+    document.body.dataset.examRunning = "";
+    return () => {
+      delete document.body.dataset.examRunning;
+    };
+  }, [timedRunning]);
 
-  if (attempt.status === "generating") return <Writing view={view} />;
+  /** True when the exam is finished (or she was signed out and is leaving). `quiet` skips the toast (timer retries). */
+  const finish = useCallback(
+    async (quiet = false): Promise<boolean> => {
+      setFinishing(true);
+      try {
+        const res = await fetch(`/api/attempts/${attemptId}/finish`, { method: "POST" });
+        if (signedOut(res)) return true;
+        const json = await jsonOf<AttemptView>(res);
+        if (!res.ok || !json?.attempt) throw new Error(String(res.status));
+        setView(json);
+        window.scrollTo({ top: 0 });
+        return true;
+      } catch {
+        // The exam is still open on the server; nothing is lost. (When the timer ran out, the server has already stopped the clock.)
+        if (!quiet) toast("Couldn't finish the exam. Check your connection and press Finish again.", "error");
+        return false;
+      } finally {
+        setFinishing(false);
+      }
+    },
+    [attemptId],
+  );
+
+  if (attempt.status === "generating") return <Writing view={view} startedMs={startedMs} />;
   if (attempt.status === "error") {
-    const keyProblem = /key|auth|401|403|credit|billing/i.test(attempt.error ?? "");
+    const keyProblem = needsKeyFix(attempt.error);
     return (
       <div className="mx-auto mt-6 flex max-w-lg flex-col gap-3">
         <section className="tile cb-coral flex flex-col gap-3 rounded-[28px]">
           <div className="text-[22px] font-extrabold tracking-tight">{keyProblem ? "Your AI key needs attention." : "Couldn't write this exam."}</div>
-          <p className="text-[15px] font-medium break-words">{attempt.error}</p>
+          <p className="text-[15px] font-medium break-words">{friendlyError(attempt.error, "Something went wrong while writing it. Start a new one from the exam page.")}</p>
           <div className="flex flex-wrap gap-2">
             {keyProblem ? (
               <>
@@ -248,7 +286,7 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
             onClick={() => goto(i)}
             aria-current={i === index ? "step" : undefined}
             aria-label={`Question ${i + 1}${x.chosen_index == null ? "" : tutor ? (x.correct ? ", right" : ", wrong") : ", answered"}`}
-            className={`h-9 w-9 rounded-[11px] text-[13px] font-extrabold transition-colors ${
+            className={`h-11 w-11 rounded-[12px] text-[13px] font-extrabold transition-colors ${
               x.chosen_index == null
                 ? "bg-card text-muted-foreground"
                 : tutor
@@ -299,7 +337,14 @@ export function AttemptRunner({ attemptId, initial }: { attemptId: number; initi
 }
 
 /** Loading screen while the AI writes the exam: real steps from the exam's plan, and a spinning ring. */
-function Writing({ view }: { view: AttemptView }) {
+function Writing({ view, startedMs }: { view: AttemptView; startedMs: number }) {
+  // After three minutes she is told it is slow and that she doesn't have to wait here.
+  const [slow, setSlow] = useState(() => Date.now() - startedMs >= SLOW_AFTER_MS);
+  useEffect(() => {
+    if (slow) return;
+    const t = setTimeout(() => setSlow(true), Math.max(0, startedMs + SLOW_AFTER_MS - Date.now()));
+    return () => clearTimeout(t);
+  }, [slow, startedMs]);
   const plan = view.plan;
   const cases = plan?.style === "caseset";
   const steps: { label: string; state: "done" | "active" | "todo" }[] = plan
@@ -323,7 +368,7 @@ function Writing({ view }: { view: AttemptView }) {
           </svg>
           <div>
             <h1 className="text-[24px] leading-tight font-extrabold tracking-tight">Writing your practice exam…</h1>
-            <p className="text-[15px] text-nav-foreground">Usually 30–90 seconds.</p>
+            <p className="text-[15px] text-nav-foreground">{slow ? "This is taking longer than usual." : "Usually 30–90 seconds."}</p>
           </div>
         </div>
         <ol className="flex flex-col gap-2.5" aria-live="polite">
@@ -341,32 +386,57 @@ function Writing({ view }: { view: AttemptView }) {
             </li>
           ))}
         </ol>
-        <p className="text-[13px] text-nav-foreground">
-          {view.attempt.adaptive ? "Extra focus on what you missed or weren't sure about." : "Spread evenly over the material."} You can leave this page; it&apos;ll be waiting on the exam
-          page.
-        </p>
+        {slow ? (
+          <p role="status" className="rounded-2xl bg-white/10 px-4 py-3 text-[15px] font-semibold">
+            This is taking longer than usual. You don&apos;t have to wait here: go back to the exam, and this practice exam will appear on the exam page
+            when it&apos;s ready.
+          </p>
+        ) : (
+          <p className="text-[13px] text-nav-foreground">
+            {view.attempt.adaptive ? "Extra focus on what you missed or weren't sure about." : "Spread evenly over the material."} You can leave this page; it&apos;ll be waiting on the
+            exam page.
+          </p>
+        )}
+        <Link href={`/exams/${view.attempt.exam_id}`} className={`${slow ? "btn-hero" : "btn-secondary bg-white/10 text-white hover:bg-white/20"} btn-sm self-start`}>
+          <Icon d={ICONS.arrowLeft} size={16} /> Back to exam
+        </Link>
       </section>
     </div>
   );
 }
 
-function Timer({ startedAt, limit, onExpire }: { startedAt: string; limit: number; onExpire: () => void }) {
-  const end = new Date(startedAt.replace(" ", "T") + "Z").getTime() + limit * 1000;
+function Timer({ startedAt, limit, onExpire }: { startedAt: string; limit: number; onExpire: (quiet: boolean) => Promise<boolean> }) {
+  const end = utcMs(startedAt) + limit * 1000;
   const [left, setLeft] = useState(() => Math.max(0, end - Date.now()));
   useEffect(() => {
+    let gone = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let tries = 0;
+    // Time's up: finish for her. A dropped connection is retried (5 s, 10 s, 20 s, then every 30 s) with only the
+    // first failure shown, so the exam doesn't sit open at 0:00 waiting for her to notice.
+    const expire = async () => {
+      const ok = await onExpire(tries > 0);
+      if (ok || gone) return;
+      tries++;
+      retry = setTimeout(() => void expire(), Math.min(30_000, 5000 * 2 ** (tries - 1)));
+    };
     const t = setInterval(() => {
       const l = Math.max(0, end - Date.now());
       setLeft(l);
       if (l === 0) {
         clearInterval(t);
-        onExpire();
+        void expire();
       }
     }, 1000);
-    return () => clearInterval(t);
+    return () => {
+      gone = true;
+      clearInterval(t);
+      clearTimeout(retry);
+    };
   }, [end, onExpire]);
   const s = Math.floor(left / 1000);
   return (
-    <span className={`flex h-[38px] items-center rounded-xl px-3 font-mono text-sm font-bold ${s < 120 ? "bg-coral text-on-coral" : "bg-butter text-on-butter"}`}>
+    <span className={`flex h-11 items-center rounded-xl px-3 font-mono text-sm font-bold ${s < 120 ? "bg-coral text-on-coral" : "bg-butter text-on-butter"}`}>
       ⏱ {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
     </span>
   );
@@ -375,6 +445,7 @@ function Timer({ startedAt, limit, onExpire }: { startedAt: string; limit: numbe
 function Results({ view, onReport }: { view: AttemptView; onReport: (questionId: number, reason: string) => Promise<void> }) {
   const router = useRouter();
   const { attempt, questions, context } = view;
+  // Keyed by question id: reporting a question removes it from the list, and the one she has open must stay open.
   const [open, setOpen] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
 
@@ -405,8 +476,11 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
         ? "Getting there."
         : "Good practice. Now let's fix the misses.";
 
+  // Topics of the missed questions that still exist (a removed lecture takes its topics with it).
+  const missedTopicIds = [...new Set(missed.map((q) => q.topic_id).filter((t): t is number => t != null))];
+
   async function studyMisses() {
-    const topicIds = [...new Set(missed.map((q) => q.topic_id).filter((t): t is number => t != null))];
+    const topicIds = missedTopicIds;
     if (topicIds.length === 0) return;
     setStarting(true);
     try {
@@ -447,20 +521,12 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
             center={`${Math.round(score * 100)}%`}
             label={`Score ${Math.round(score * 100)} percent, ${right} of ${total} right, ${confidentRight} right and confident`}
           />
-          <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[13px] font-semibold text-hero-muted">Score</span>
-              <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-hero-accent" aria-hidden /> {Math.round(score * 100)}% · {right}/{total}
-              </span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[13px] font-semibold text-hero-muted">Right and confident</span>
-              <span className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-3 w-3 rounded-[4px] bg-hero-accent-2" aria-hidden /> {total ? Math.round((confidentRight / total) * 100) : 0}% · {confidentRight}/{total}
-              </span>
-            </div>
-          </div>
+          <RingLegend
+            items={[
+              { color: "var(--hero-accent)", label: "Score", value: `${Math.round(score * 100)}% · ${right}/${total}` },
+              { color: "var(--hero-accent-2)", label: "Right and confident", value: `${total ? Math.round((confidentRight / total) * 100) : 0}% · ${confidentRight}/${total}` },
+            ]}
+          />
         </div>
       </section>
 
@@ -481,12 +547,13 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
       {(missed.length > 0 || (attempt.adaptive && unsureRight > 0)) && (
         <p className="px-2 text-[15px] text-muted-foreground">
           {missed.length > 0 && "Missed questions come back in your next practice exam and in daily review. "}
+          {missed.length > 0 && missedTopicIds.length === 0 && "The lectures your misses came from have been removed, so there's no new practice to write from them. "}
           {attempt.adaptive && unsureRight > 0 ? "Ideas you weren't sure about get new questions." : ""}
         </p>
       )}
 
       <div className="flex flex-col gap-2 sm:flex-row">
-        {missed.length > 0 && (
+        {missed.length > 0 && missedTopicIds.length > 0 && (
           <button className="btn-primary btn-lg flex-1" disabled={starting} onClick={studyMisses}>
             {starting ? "Starting…" : "Study my misses now"}
           </button>
@@ -523,8 +590,8 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
           return (
             <div key={q.id}>
               <button
-                onClick={() => setOpen(open === i ? null : i)}
-                aria-expanded={open === i}
+                onClick={() => setOpen(open === q.id ? null : q.id)}
+                aria-expanded={open === q.id}
                 className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 text-left hover:bg-muted"
               >
                 <span
@@ -541,7 +608,7 @@ function Results({ view, onReport }: { view: AttemptView; onReport: (questionId:
                   </span>
                 )}
               </button>
-              {open === i && (
+              {open === q.id && (
                 <div className="flex flex-col gap-2.5 px-1 pt-1 pb-3">
                   <QuestionCard q={q as QuestionData} practice marksKey={`attempt:${attempt.id}:${q.id}`} onReport={(reason) => onReport(q.id, reason)} header={q.topic ? <div className="px-1 text-[13px] font-bold text-muted-foreground">{q.topic}</div> : undefined} />
                 </div>

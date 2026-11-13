@@ -38,12 +38,23 @@ const PRICES: Record<string, { input: number; output: number; cacheRead: number;
 
 export type Part = { type: "text"; text: string } | { type: "image"; base64: string };
 type Effort = "low" | "medium" | "high";
-export type ChatTurn = { role: "user" | "assistant"; content: string };
 
 type Usage = { input: number; cached: number; cacheWrite: number; output: number };
 
-function logUsage(creds: Credentials, model: string, purpose: string, u: Usage, discount = 1) {
-  const p = PRICES[model] ?? PRICES["claude-sonnet-5-5"];
+/** Prices for a model id as the API reports it, which may carry a date or version suffix ("claude-opus-5-5-20261001"). */
+function priceOf(model: string) {
+  const key = PRICES[model] ? model : Object.keys(PRICES).find((k) => model.startsWith(k));
+  return PRICES[key ?? "claude-sonnet-5-5"];
+}
+
+/**
+ * Record one call's tokens and estimated cost. `answered` is the model the reply says produced it: a server-side
+ * fallback (or a model alias) can answer on a different model than the one asked for, and that is the one billed.
+ * Cache writes are priced at the cache-write rate; they count as input tokens in the table.
+ */
+function logUsage(creds: Credentials, requested: string, answered: string | null | undefined, purpose: string, u: Usage, discount = 1) {
+  const model = answered || requested;
+  const p = priceOf(model);
   const cost = ((u.input * p.input + u.cached * p.cacheRead + u.cacheWrite * p.cacheWrite + u.output * p.output) / 1e6) * discount;
   db.prepare(
     "INSERT INTO ai_usage (user_id, provider, model, purpose, input_tokens, cached_tokens, output_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -52,12 +63,16 @@ function logUsage(creds: Credentials, model: string, purpose: string, u: Usage, 
 
 // ---- Clients (one per API key) ----
 
+// A busy or briefly failing API is retried by the SDK with back-off (it honours retry-after) before the call fails.
+// One request may take up to five minutes: a long section quiz or practice set is written in one go.
+const CLIENT_OPTIONS = { maxRetries: 4, timeout: 5 * 60_000 };
+
 const clients = new Map<string, Anthropic | OpenAI>();
 function client<T extends Anthropic | OpenAI>(creds: Credentials): T {
   const k = creds.provider + crypto.createHash("sha256").update(creds.apiKey).digest("hex");
   let c = clients.get(k);
   if (!c) {
-    c = creds.provider === "anthropic" ? new Anthropic({ apiKey: creds.apiKey }) : new OpenAI({ apiKey: creds.apiKey });
+    c = creds.provider === "anthropic" ? new Anthropic({ apiKey: creds.apiKey, ...CLIENT_OPTIONS }) : new OpenAI({ apiKey: creds.apiKey, ...CLIENT_OPTIONS });
     clients.set(k, c);
   }
   return c as T;
@@ -109,6 +124,12 @@ export async function generate<S extends z.ZodType>(opts: {
   maxTokens?: number;
   /** "quality" for the question writers (Opus on Anthropic keys); default "standard". */
   tier?: Tier;
+  /**
+   * Mark the system prompt and the first content block for prompt caching (Claude only; ChatGPT caches long repeated
+   * prefixes by itself). Worth it only when the same prefix is sent again within five minutes: writing the cache costs
+   * a quarter more than plain input, reading it a tenth. Put the part that repeats first in `content`.
+   */
+  cache?: boolean;
 }): Promise<z.infer<S>> {
   const { creds } = opts;
   const model = modelFor(creds.provider, opts.tier);
@@ -116,18 +137,19 @@ export async function generate<S extends z.ZodType>(opts: {
   const maxTokens = opts.maxTokens ?? 32000;
 
   if (creds.provider === "anthropic") {
+    const content = toAnthropic(opts.content) as Anthropic.Beta.BetaContentBlockParam[] | string;
     const stream = client<Anthropic>(creds).beta.messages.stream({
       model,
       max_tokens: maxTokens,
-      system: opts.system,
-      messages: [{ role: "user", content: toAnthropic(opts.content) as Anthropic.Beta.BetaContentBlockParam[] | string }],
+      system: opts.cache ? [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }] : opts.system,
+      messages: [{ role: "user", content: opts.cache ? cacheFirstBlock(content) : content }],
       output_config: { effort, format: betaZodOutputFormat(opts.schema) },
       // If a safety classifier declines, the API retries on a suitable fallback model in the same call.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
     });
     const msg = await stream.finalMessage();
-    logUsage(creds, model, opts.purpose, {
+    logUsage(creds, model, msg.model, opts.purpose, {
       input: msg.usage.input_tokens,
       cached: msg.usage.cache_read_input_tokens ?? 0,
       cacheWrite: msg.usage.cache_creation_input_tokens ?? 0,
@@ -148,7 +170,7 @@ export async function generate<S extends z.ZodType>(opts: {
     max_output_tokens: maxTokens,
   });
   const cached = res.usage?.input_tokens_details?.cached_tokens ?? 0;
-  logUsage(creds, model, opts.purpose, {
+  logUsage(creds, model, res.model, opts.purpose, {
     input: (res.usage?.input_tokens ?? 0) - cached,
     cached,
     cacheWrite: 0,
@@ -159,62 +181,11 @@ export async function generate<S extends z.ZodType>(opts: {
   return res.output_parsed as z.infer<S>;
 }
 
-// ---- Streaming chat ----
-
-/**
- * Streams a chat reply as text chunks. The system prompt (lecture context) is the same on every turn,
- * so it's cached: Claude via cache_control, OpenAI automatically for long repeated prefixes.
- */
-export async function* chatStream(opts: {
-  creds: Credentials;
-  purpose: string;
-  system: string;
-  messages: ChatTurn[];
-  effort?: Effort;
-}): AsyncGenerator<string> {
-  const { creds } = opts;
-  const model = MODELS[creds.provider];
-
-  if (creds.provider === "anthropic") {
-    const stream = client<Anthropic>(creds).beta.messages.stream({
-      model,
-      max_tokens: 8000,
-      system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
-      messages: opts.messages,
-      output_config: { effort: opts.effort ?? "low" },
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-    });
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") yield event.delta.text;
-    }
-    const msg = await stream.finalMessage();
-    logUsage(creds, model, opts.purpose, {
-      input: msg.usage.input_tokens,
-      cached: msg.usage.cache_read_input_tokens ?? 0,
-      cacheWrite: msg.usage.cache_creation_input_tokens ?? 0,
-      output: msg.usage.output_tokens,
-    });
-    if (msg.stop_reason === "refusal") yield "\n\n_(The tutor couldn't answer that one. Try rephrasing.)_";
-    return;
-  }
-
-  const stream = await client<OpenAI>(creds).responses.create({
-    model,
-    instructions: opts.system,
-    input: opts.messages,
-    reasoning: { effort: opts.effort ?? "low" },
-    max_output_tokens: 8000,
-    stream: true,
-  });
-  for await (const event of stream) {
-    if (event.type === "response.output_text.delta") yield event.delta;
-    else if (event.type === "response.completed") {
-      const u = event.response.usage;
-      const cached = u?.input_tokens_details?.cached_tokens ?? 0;
-      logUsage(creds, model, opts.purpose, { input: (u?.input_tokens ?? 0) - cached, cached, cacheWrite: 0, output: u?.output_tokens ?? 0 });
-    } else if (event.type === "error") throw new Error(event.message);
-  }
+/** The content with a cache breakpoint on its first block (a plain string becomes one text block). */
+function cacheFirstBlock(content: Anthropic.Beta.BetaContentBlockParam[] | string): Anthropic.Beta.BetaContentBlockParam[] {
+  const blocks: Anthropic.Beta.BetaContentBlockParam[] = typeof content === "string" ? [{ type: "text", text: content }] : [...content];
+  if (blocks[0]?.type === "text" || blocks[0]?.type === "image") blocks[0] = { ...blocks[0], cache_control: { type: "ephemeral" } };
+  return blocks;
 }
 
 // ---- Batch (Claude only): 50% cheaper, results arrive within minutes to an hour ----
@@ -245,24 +216,35 @@ export async function cancelBatch(creds: Credentials, batchId: string): Promise<
 
 export type BatchResult<T> = { customId: string; ok: true; value: T } | { customId: string; ok: false; error: string };
 
-/** null while the batch is still running; otherwise every result (parsed and validated). */
+/**
+ * A finished batch: every result (parsed and validated), and `logUsage`, which records what it cost. The caller runs
+ * `logUsage` in the same database transaction that saves the results and forgets the batch, so a batch collected again
+ * after a crash or restart is never counted twice.
+ */
+export type BatchOutcome<T> = { results: BatchResult<T>[]; logUsage: () => void };
+
+/** null while the batch is still running; otherwise its results. */
 export async function batchResults<S extends z.ZodType>(
   creds: Credentials,
   purpose: string,
   schema: S,
   batchId: string,
-): Promise<BatchResult<z.infer<S>>[] | null> {
+): Promise<BatchOutcome<z.infer<S>> | null> {
   const anthropic = client<Anthropic>(creds);
   const batch = await anthropic.messages.batches.retrieve(batchId);
   if (batch.processing_status !== "ended") return null;
   const out: BatchResult<z.infer<S>>[] = [];
-  const total: Usage = { input: 0, cached: 0, cacheWrite: 0, output: 0 };
+  // Per answering model (a fallback can answer some requests on another model).
+  const totals = new Map<string, Usage>();
   for await (const r of await anthropic.messages.batches.results(batchId)) {
     if (r.result.type !== "succeeded") {
       out.push({ customId: r.custom_id, ok: false, error: r.result.type });
       continue;
     }
     const msg = r.result.message;
+    const answered = msg.model || MODELS.anthropic;
+    const total = totals.get(answered) ?? { input: 0, cached: 0, cacheWrite: 0, output: 0 };
+    totals.set(answered, total);
     total.input += msg.usage.input_tokens;
     total.output += msg.usage.output_tokens;
     total.cached += msg.usage.cache_read_input_tokens ?? 0;
@@ -271,8 +253,13 @@ export async function batchResults<S extends z.ZodType>(
     const parsed = msg.stop_reason === "end_turn" ? schema.safeParse(safeJson(text)) : null;
     out.push(parsed?.success ? { customId: r.custom_id, ok: true, value: parsed.data } : { customId: r.custom_id, ok: false, error: msg.stop_reason ?? "invalid output" });
   }
-  logUsage(creds, MODELS.anthropic, purpose, total, 0.5);
-  return out;
+  if (totals.size === 0) totals.set(MODELS.anthropic, { input: 0, cached: 0, cacheWrite: 0, output: 0 });
+  return {
+    results: out,
+    logUsage: () => {
+      for (const [answered, total] of totals) logUsage(creds, MODELS.anthropic, answered, purpose, total, 0.5);
+    },
+  };
 }
 
 function safeJson(text: string): unknown {

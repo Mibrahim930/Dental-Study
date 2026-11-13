@@ -245,7 +245,8 @@ describe("the checking pass", () => {
 });
 
 describe("old 10-question quiz with answers", () => {
-  it("is rewritten once, answers detached, rewrite not repeated, concurrent opens share one rewrite", async () => {
+  // Audit M5: an answered old quiz is kept and served as it is (no AI call); only "Write new questions" replaces it.
+  it("is kept with its answers when opened (no rewrite, no AI call), even by concurrent opens", async () => {
     const w = world(6);
     const old = Array.from({ length: 10 }, (_, i) => ({ question: `old ${i}`, options: ["a", "b", "c", "d"], correct_index: 0, explanation: "", concept: "c" }));
     db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(old), w.topicId);
@@ -255,17 +256,16 @@ describe("old 10-question quiz with answers", () => {
     const [a, b] = await Promise.all([quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId)), quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId))]);
     const ja = await a.json();
     const jb = await b.json();
-    expect(ja.questions).toHaveLength(sizeFor(6));
-    expect(jb.questions.map((q: QuizQuestion) => q.id)).toEqual(ja.questions.map((q: QuizQuestion) => q.id));
-    expect(ja.answered).toEqual({});
-    expect(db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId)).toEqual([{ check_index: null }]);
-    expect(db.prepare("SELECT * FROM quiz_answers WHERE topic_id = ?").all(w.topicId)).toEqual([]);
-    const n = calls.length;
-    await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId));
-    expect(calls.length).toBe(n);
+    expect(ja.questions).toHaveLength(10);
+    expect(jb.questions.map((q: QuizQuestion) => q.question)).toEqual(ja.questions.map((q: QuizQuestion) => q.question));
+    expect(ja.answered).toEqual({ 3: 0 });
+    expect(db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId)).toEqual([{ check_index: 3 }]);
+    expect(w.topic().checks_json).toBe(JSON.stringify(old));
+    expect(calls).toHaveLength(0);
   });
 
-  it("opening with a failing AI returns a 500 with a message and leaves the old quiz and its answers alone", async () => {
+  // (no quiz_answers here, so the old quiz is rewritten on open; the failure answers 502 through aiFailure, audit S7)
+  it("opening with a failing AI returns a 502 with a message and leaves the old quiz and its answers alone", async () => {
     const w = world(4);
     const old = [{ question: "old", options: ["a", "b"], correct_index: 0, explanation: "", concept: "c" }];
     db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(old), w.topicId);
@@ -273,7 +273,7 @@ describe("old 10-question quiz with answers", () => {
     mutate = () => null;
     currentUserId = w.userId;
     const res = await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId));
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect(w.topic().checks_json).toBe(JSON.stringify(old));
     expect(db.prepare("SELECT check_index FROM session_checks WHERE topic_id = ?").all(w.topicId)).toEqual([{ check_index: 0 }]);
   });

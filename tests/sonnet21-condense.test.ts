@@ -270,35 +270,6 @@ describe("planQuizByFacts: invariants over random shapes", () => {
     }
   });
 
-  it("mode 'cut' is the old behaviour: stressed slides' facts first, then case slides, then slide order, one fact per slot (300 shapes)", () => {
-    const r = rng(2104);
-    for (let t = 0; t < 300; t++) {
-      const slides = randomShape(r);
-      if (slides.length === 0) continue;
-      const size = 1 + Math.floor(r() * 30);
-      const entries = oracleEntries(slides);
-      const rank = (e: OEntry) => (e.emphasized ? 0 : 2) + (e.hasCase ? 0 : 1);
-      const kept =
-        entries.length <= size
-          ? entries
-          : entries
-              .map((e, i) => ({ e, i }))
-              .sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i)
-              .slice(0, size)
-              .sort((a, b) => a.i - b.i)
-              .map((x) => x.e);
-      const plan = planQuizByFacts(slides, size, "cut");
-      const label = `shape #${t} size ${size}`;
-      expect(plan, label).toHaveLength(kept.length);
-      plan.forEach((s, i) => {
-        const e = kept[i];
-        expect(s.page, label).toBe(slides[e.slideIdx].id);
-        expect(s.pages, label).toBeUndefined();
-        expect(s.facts.map(normStem), label).toEqual(e.key ? [e.key] : []);
-        expect(s.angle, label).toBe(e.hasCase ? "apply" : i % 3 === 1 ? "apply" : i % 3 === 2 ? "compare" : "recall");
-      });
-    }
-  });
 });
 
 // ---- 2. proportionality and edges ------------------------------------------------------------------------------------

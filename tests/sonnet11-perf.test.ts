@@ -196,7 +196,18 @@ describe("job 2: quiz started with the lesson, under concurrency", () => {
     quizGate = new Promise((r) => (release = r));
     const l = lesson(w.sessionId, 0);
     await until(() => quizWrites() >= 2);
+    // The route awaits the user, params and body before it looks the topic up; from that lookup to joining the
+    // in-flight run nothing is awaited. Release the gate only once the lookup has run, or the lesson's run could
+    // finish first and the route would (rightly) start a second generation.
+    const prepare = db.prepare.bind(db);
+    let joined = false;
+    vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+      if (sql.includes("JOIN study_sessions s ON s.exam_id = t.exam_id WHERE s.id = ? AND t.id = ?")) joined = true;
+      return prepare(sql);
+    }) as typeof db.prepare);
     const r = regen(w.sessionId, w.topicIds[0]);
+    await until(() => joined);
+    expect(joined).toBe(true);
     release();
     await l;
     const res = await r;

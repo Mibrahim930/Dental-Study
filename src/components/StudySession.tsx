@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { SlideImage, type CropBox } from "./SlideImage";
 import { toast } from "./Toaster";
@@ -32,7 +33,7 @@ type TopicLite = {
   sections: number;
 };
 type LessonData = {
-  topic: { id: number; title: string; summary: string; emphasized: boolean };
+  topic: { id: number; title: string; emphasized: boolean };
   concepts: { id: number; name: string; mastery: number | null; earlier_exams: string[] }[];
   lesson: {
     intro: string;
@@ -73,30 +74,80 @@ export function StudySession(props: {
   // Lesson results are tagged with their position so stale responses never show on the wrong topic.
   const [result, setResult] = useState<{ position: number; data?: LessonData; error?: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The section whose lesson has come back (written or failed): its quiz shows from then on, and stays through a "Try again".
+  const [settled, setSettled] = useState<number | null>(null);
   const [visited, setVisited] = useState<Set<number>>(new Set([props.initialPosition]));
   const [ending, setEnding] = useState(false);
   const [starting, setStarting] = useState(false);
   const [endSummary, setEndSummary] = useState<string | null | undefined>(undefined);
+  // Concept chip whose "Also in: …" line is open (a tap shows it; there is no hover on a phone).
+  const [conceptOpen, setConceptOpen] = useState<number | null>(null);
+  // The last position a lesson was asked for: a new position waits a moment to settle, a "Try again" goes at once.
+  const asked = useRef(props.initialPosition);
+  // Lessons already on their way or loaded: never prefetched (again).
+  const prefetched = useRef(new Set<number>());
 
+  // Tapping "Next section" five times must not write five lessons: wait ~400 ms for the position to settle, and drop
+  // the request for a section she has already left. The header and section list follow `position` at once.
   useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/sessions/${sessionId}/lesson?position=${position}`)
-      .then(async (res) => {
-        if (signedOut(res)) return;
-        const json = await res.json();
-        if (!cancelled) setResult(res.ok ? { position, data: json } : { position, error: json.error ?? "Could not load this topic." });
-      })
-      .catch((err) => !cancelled && setResult({ position, error: String(err) }));
-    // Warm up the next topic so it's ready when the student gets there.
-    if (position + 1 < topics.length) void fetch(`/api/sessions/${sessionId}/lesson?position=${position + 1}&prefetch=1`);
+    const ctrl = new AbortController();
+    const timer = setTimeout(
+      () => {
+        asked.current = position;
+        prefetched.current.add(position);
+        fetch(`/api/sessions/${sessionId}/lesson?position=${position}`, { signal: ctrl.signal })
+          .then(async (res) => {
+            if (signedOut(res)) return;
+            const json = await jsonOf<LessonData & { error?: unknown }>(res);
+            if (!res.ok || !json?.lesson) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+            if (ctrl.signal.aborted) return;
+            setResult({ position, data: json });
+            setSettled(position);
+          })
+          .catch((err) => {
+            if (ctrl.signal.aborted) return;
+            setResult({ position, error: failureText(err, "Couldn't load this section. Check your connection and try again.") });
+            setSettled(position);
+          });
+      },
+      asked.current === position ? 0 : 400,
+    );
     return () => {
-      cancelled = true;
+      clearTimeout(timer);
+      ctrl.abort();
     };
-  }, [position, attempt, sessionId, topics.length]);
+  }, [position, attempt, sessionId]);
 
   const current = result?.position === position ? result : null;
   const data = current?.data ?? null;
   const error = current?.error ?? "";
+
+  // Once the lesson is on screen, the section counts as studied and its quiz is started (server side). Once per
+  // lesson shown; silent if it fails (one retry), since nothing on screen depends on it.
+  const shownFor = useRef<LessonData | null>(null);
+  useEffect(() => {
+    if (!data || shownFor.current === data) return;
+    shownFor.current = data;
+    void markShown(sessionId, position);
+  }, [data, sessionId, position]);
+
+  // The next section's lesson is written ahead only once she reaches this section's quiz (it scrolls into view).
+  const quizBlock = useRef<HTMLDivElement>(null);
+  const hasLesson = data != null;
+  useEffect(() => {
+    const next = position + 1;
+    const el = quizBlock.current;
+    if (!hasLesson || !el || next >= topics.length || prefetched.current.has(next) || typeof IntersectionObserver === "undefined") return;
+    const seen = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting) || prefetched.current.has(next)) return;
+      prefetched.current.add(next);
+      seen.disconnect();
+      // 204 (nothing to write ahead) or a failure: nothing to do; the lesson loads normally when she gets there.
+      fetch(`/api/sessions/${sessionId}/lesson?position=${next}&prefetch=1`).catch(() => {});
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [hasLesson, position, sessionId, topics.length]);
 
   const go = (pos: number) => {
     setPosition(pos);
@@ -113,13 +164,13 @@ export function StudySession(props: {
         setEnding(false);
         return;
       }
-      if (!res.ok) throw new Error(String(res.status));
-      const json = await res.json();
-      setEndSummary(json.summary ?? null);
+      const json = await jsonOf<{ summary?: unknown }>(res);
+      if (!res.ok || !json) throw new Error(String(res.status));
+      setEndSummary(typeof json.summary === "string" ? json.summary : null);
     } catch {
-      // Offline, or the server didn't answer: the "Saving…" overlay must not stay up forever. Answers are already saved one by one.
+      // Offline, or the server didn't answer. Her answers are already saved one by one; only the session note is missing.
       setEnding(false);
-      toast("Couldn't save the session notes. Check your connection and press End session again.", "error");
+      toast("Couldn't end the session. Check your connection and try again.", "error");
     }
   }
 
@@ -173,8 +224,8 @@ export function StudySession(props: {
           <button className="btn-secondary btn-sm hidden lg:inline-flex" disabled={isLast} onClick={() => go(position + 1)}>
             Next →
           </button>
-          <button className="btn-primary btn-sm" onClick={endSession} disabled={ending}>
-            End session
+          <button className="btn-primary btn-sm" onClick={endSession} disabled={ending} aria-busy={ending}>
+            {ending && endSummary === undefined ? "Ending…" : "End session"}
           </button>
         </div>
       </div>
@@ -200,11 +251,6 @@ export function StudySession(props: {
               <Link className="btn-secondary btn-lg" href={`/exams/${examId}`}>Not now</Link>
             </div>
           </div>
-        </div>
-      )}
-      {ending && endSummary === undefined && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="card text-[15px] font-semibold">Saving session notes…</div>
         </div>
       )}
 
@@ -252,18 +298,39 @@ export function StudySession(props: {
             <h1 className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.03em] sm:text-[38px]">{topic.title}</h1>
             {data && data.concepts.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
-                {data.concepts.map((c) => (
-                  <span
-                    key={c.id}
-                    className="inline-flex items-center gap-1.5 rounded-[10px] bg-white/10 py-0.5 pr-2 pl-0.5 text-[13px] font-semibold"
-                    title={c.earlier_exams.length ? `Also in: ${c.earlier_exams.join(", ")}` : ""}
-                  >
-                    <MasteryChip value={c.mastery} className="px-1.5 py-0 text-[12px]" />
-                    {c.name}
-                    {c.earlier_exams.length > 0 && " ↺"}
-                  </span>
-                ))}
+                {data.concepts.map((c) => {
+                  const chip = "inline-flex items-center gap-1.5 rounded-[10px] bg-white/10 py-0.5 pr-2 pl-0.5 text-[13px] font-semibold";
+                  const inner = (
+                    <>
+                      <MasteryChip value={c.mastery} className="px-1.5 py-0 text-[12px]" />
+                      {c.name}
+                      {c.earlier_exams.length > 0 && " ↺"}
+                    </>
+                  );
+                  if (c.earlier_exams.length === 0) return <span key={c.id} className={chip}>{inner}</span>;
+                  // Seen in other exams: a tap shows where (the hit area is 44 px tall; the chip looks the same).
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`${chip} relative text-left after:absolute after:inset-x-0 after:-inset-y-2.5 ${conceptOpen === c.id ? "ring-2 ring-white/40" : ""}`}
+                      aria-expanded={conceptOpen === c.id}
+                      title={`Also in: ${c.earlier_exams.join(", ")}`}
+                      onClick={() => setConceptOpen((o) => (o === c.id ? null : c.id))}
+                    >
+                      {inner}
+                    </button>
+                  );
+                })}
               </div>
+            )}
+            {data && conceptOpen != null && data.concepts.some((c) => c.id === conceptOpen) && (
+              <p id="concept-also-in" className="text-[13px] font-semibold text-hero-muted">
+                {(() => {
+                  const c = data.concepts.find((x) => x.id === conceptOpen)!;
+                  return `↺ ${c.name} is also in: ${c.earlier_exams.join(", ")}`;
+                })()}
+              </p>
             )}
           </section>
 
@@ -283,23 +350,28 @@ export function StudySession(props: {
             </div>
           )}
           {data && <Lesson key={data.topic.id} data={data} />}
-          {data && (
-            <SectionQuiz
-              key={`quiz-${data.topic.id}`}
-              sessionId={sessionId}
-              position={position}
-              isLast={isLast}
-              label={byLecture ? `Section ${topic.section}` : `Topic ${position + 1}`}
-              nextLabel={nextLabel}
-              onNext={() => (isLast ? endSession() : go(position + 1))}
-              lectureReview={(lastInLecture || isLast) && topic.lectureId != null ? { examId, documentId: topic.lectureId, lecture: topic.lecture ?? "" } : null}
-            />
+          {/* The quiz shows once this section has settled, even when its lesson failed (it doesn't need the lesson). */}
+          {settled === position && (
+            <div ref={quizBlock} className="flex flex-col">
+              <SectionQuiz
+                key={`quiz-${topic.id}`}
+                sessionId={sessionId}
+                position={position}
+                isLast={isLast}
+                label={byLecture ? `Section ${topic.section}` : `Topic ${position + 1}`}
+                nextLabel={nextLabel}
+                onNext={() => (isLast ? endSession() : go(position + 1))}
+                lectureReview={(lastInLecture || isLast) && topic.lectureId != null ? { examId, documentId: topic.lectureId, lecture: topic.lecture ?? "" } : null}
+              />
+            </div>
           )}
 
           <div className="grid grid-cols-[1fr_2fr] gap-2">
             <button className="btn-secondary btn-lg bg-card" disabled={position === 0} onClick={() => go(position - 1)}>← Back</button>
             {isLast ? (
-              <button className="btn-primary btn-lg" onClick={endSession}>Finish session</button>
+              <button className="btn-primary btn-lg" onClick={endSession} disabled={ending}>
+                {ending && endSummary === undefined ? "Ending…" : "Finish session"}
+              </button>
             ) : (
               <button className="btn-primary btn-lg" onClick={() => go(position + 1)}>{nextLabel}</button>
             )}
@@ -311,6 +383,80 @@ export function StudySession(props: {
       </div>
 
     </div>
+  );
+}
+
+/** Tells the server the section's lesson is on screen (marks it studied, starts its quiz). Silent: one retry, then gives up. */
+async function markShown(sessionId: number, position: number) {
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/shown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ position }),
+      });
+      // Done, or a refusal that a second try won't change (signed out, gone): nothing to show either way.
+      if (res.status < 500) return;
+    } catch {
+      // Dropped connection: try once more.
+    }
+  }
+}
+
+/**
+ * A slide at full size (1280 px wide, the size it was rendered at), in a box she can scroll and pinch-zoom. Closes with
+ * the button, Escape, or a tap beside the slide; the page behind stays put and focus goes back to the slide she tapped.
+ */
+function SlideZoom({ pageId, aspect, number, onClose }: { pageId: number; aspect?: number; number?: number; onClose: () => void }) {
+  const close = useRef<HTMLButtonElement>(null);
+  const live = useRef(onClose);
+  useEffect(() => {
+    live.current = onClose;
+  });
+  useEffect(() => {
+    const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const html = document.documentElement;
+    const before = { html: html.style.overflow, body: document.body.style.overflow };
+    html.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    close.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      live.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = before.html;
+      document.body.style.overflow = before.body;
+      back?.focus({ preventScroll: true });
+    };
+  }, []);
+  const label = number != null ? `Slide ${number}, full size` : "Slide, full size";
+  return createPortal(
+    <div role="dialog" aria-modal="true" aria-label={label} className="fixed inset-0 z-50 bg-black/90">
+      <div
+        className="h-full w-full overflow-auto overscroll-contain [touch-action:pan-x_pan-y_pinch-zoom]"
+        onClick={(e) => e.target === e.currentTarget && onClose()}
+      >
+        <div className="flex min-h-full min-w-full p-4 pt-16" onClick={(e) => e.target === e.currentTarget && onClose()}>
+          <div className="m-auto w-[1280px] max-w-none shrink-0">
+            <SlideImage pageId={pageId} aspect={aspect} alt={number != null ? `Slide ${number}` : "Slide"} />
+          </div>
+        </div>
+      </div>
+      <button
+        ref={close}
+        type="button"
+        onClick={onClose}
+        aria-label="Close the slide"
+        className="fixed top-[calc(12px+env(safe-area-inset-top))] right-3 z-10 flex h-11 w-11 items-center justify-center rounded-xl bg-white/90 text-black shadow-[0_4px_16px_rgba(0,0,0,.35)]"
+      >
+        <Icon d={ICONS.close} size={20} />
+      </button>
+    </div>,
+    document.body,
   );
 }
 
@@ -354,13 +500,7 @@ function Lesson({ data }: { data: LessonData }) {
           })}
         </ol>
       </section>
-      {zoom != null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4" onClick={() => setZoom(null)}>
-          <div className="w-full max-w-5xl">
-            <SlideImage pageId={zoom} aspect={data.aspects?.[zoom]} alt="Slide" />
-          </div>
-        </div>
-      )}
+      {zoom != null && <SlideZoom pageId={zoom} aspect={data.aspects?.[zoom]} number={data.slideInfo?.[zoom]?.number} onClose={() => setZoom(null)} />}
 
       {data.stressed && data.stressed.length > 0 && (
         <section className="tile cb-coral rounded-[28px]">
@@ -383,7 +523,8 @@ function Lesson({ data }: { data: LessonData }) {
         <h2 className="mb-3 text-[22px] font-extrabold tracking-tight">Key points</h2>
         <ol className="flex flex-col gap-2.5">
           {lesson.key_points.map((k, i) => (
-            <li key={k} className="flex gap-3 text-[15px] leading-snug font-medium">
+            // Two key points can read the same: the place in the list keeps the keys apart.
+            <li key={`${i}:${k}`} className="flex gap-3 text-[15px] leading-snug font-medium">
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-on-butter text-[12px] font-extrabold text-butter">{i + 1}</span>
               {k}
             </li>
@@ -435,8 +576,12 @@ function SectionQuiz({
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  // While "Write new questions" runs, answering is paused so no answer lands on a question that's about to be replaced.
-  const [rewriting, setRewriting] = useState(false);
+  // "Write new questions": kept here (not in the button's own block, which the question and score views each show) so
+  // switching views mid-rewrite can't offer it a second time. While it runs, answering is paused so no answer lands on
+  // a question that's about to be replaced.
+  const [regen, setRegen] = useState<{ state: RegenState; error: string }>({ state: "idle", error: "" });
+  const regenRunning = useRef(false);
+  const rewriting = regen.state === "working";
   // After "Next question →" on a phone the student would otherwise land on the bottom of the next question: when the
   // question changes by her own tap (not on load), the quiz scrolls back to its top and focus moves to its heading.
   const box = useRef<HTMLElement>(null);
@@ -454,18 +599,18 @@ function SectionQuiz({
     fetch(`/api/sessions/${sessionId}/quiz?position=${position}`)
       .then(async (res) => {
         if (signedOut(res)) return;
-        const json = await res.json();
+        const json = await jsonOf<{ topicId: number; questions: QuizQ[]; answered?: Record<string, number>; slides?: number; error?: unknown }>(res);
+        if (!res.ok || !json || !Array.isArray(json.questions)) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
         if (cancelled) return;
-        if (!res.ok) return setError(json.error ?? "Couldn't load the quiz.");
-        const answered = Object.fromEntries(Object.entries(json.answered as Record<string, number>).map(([k, v]) => [Number(k), v]));
+        const answered = Object.fromEntries(Object.entries(json.answered ?? {}).map(([k, v]) => [Number(k), v]));
         setQuiz({ topicId: json.topicId, questions: json.questions, slides: Number(json.slides) || 0 });
         setAnswers(answered);
         // Pick up where the student left off.
-        const shown = (json.questions as QuizQ[]).map((q, i) => ({ q, i })).filter((x) => !x.q.hidden);
+        const shown = json.questions.map((q, i) => ({ q, i })).filter((x) => !x.q.hidden);
         const firstOpen = shown.findIndex((x) => answered[x.i] == null);
         setIndex(firstOpen === -1 ? shown.length : firstOpen);
       })
-      .catch((err) => !cancelled && setError(String(err)));
+      .catch((err) => !cancelled && setError(failureText(err, "Check your connection and try again.")));
     return () => {
       cancelled = true;
     };
@@ -487,10 +632,31 @@ function SectionQuiz({
     setSaveError("");
     setAttempt((a) => a + 1);
   };
+  async function regenerate() {
+    if (!quiz || regenRunning.current) return;
+    regenRunning.current = true;
+    setRegen({ state: "working", error: "" });
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/quiz/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topicId: quiz.topicId }),
+      });
+      if (signedOut(res)) return;
+      const json = await jsonOf<{ error?: unknown }>(res);
+      if (!res.ok) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      setRegen({ state: "idle", error: "" });
+      reload();
+    } catch (err) {
+      setRegen({ state: "error", error: failureText(err, "Couldn't reach the server. Check your connection and try again.") });
+    } finally {
+      regenRunning.current = false;
+    }
+  }
   /** "Retake this quiz": the same questions, her answers for this section cleared (asks first). */
   const [retaking, setRetaking] = useState(false);
   async function retake() {
-    if (!quiz || retaking) return;
+    if (!quiz || retaking || rewriting) return;
     if (!window.confirm("Start this quiz over? Your answers for this section are cleared; the questions stay the same.")) return;
     setRetaking(true);
     try {
@@ -580,19 +746,36 @@ function SectionQuiz({
     setIndex(i);
   };
 
+  // The dots stay thin, but each is a 44 px tall tap target (the negative margin keeps the spacing close to before).
   const strip = (
-    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, total)}, minmax(0, 1fr))` }}>
+    <div className="-my-3.5 grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, total)}, minmax(0, 1fr))` }}>
       {shown.map(({ q, at }, i) => (
         <button
           key={q.id ?? at}
+          type="button"
           onClick={() => goTo(i)}
           aria-label={`Question ${i + 1}${answers[at] == null ? "" : answers[at] === q.correct_index ? ", right" : ", wrong"}`}
-          className={`h-1.5 rounded-full ${
-            answers[at] == null ? (i === index ? "bg-foreground" : "bg-muted-strong") : answers[at] === q.correct_index ? "bg-hero" : "bg-coral"
-          }`}
-        />
+          aria-current={i === index ? "step" : undefined}
+          className="flex h-11 items-center"
+        >
+          <span
+            aria-hidden
+            className={`h-1.5 w-full rounded-full ${
+              answers[at] == null ? (i === index ? "bg-foreground" : "bg-muted-strong") : answers[at] === q.correct_index ? "bg-hero" : "bg-coral"
+            }`}
+          />
+        </button>
       ))}
     </div>
+  );
+  const regenerateBlock = (
+    <RegenerateQuiz
+      state={regen.state}
+      error={regen.error}
+      onAsk={() => setRegen({ state: "confirm", error: "" })}
+      onCancel={() => setRegen({ state: "idle", error: "" })}
+      onRun={() => void regenerate()}
+    />
   );
 
   // Finished (or stopped early): score and what to look at again.
@@ -628,14 +811,14 @@ function SectionQuiz({
           <div className="flex flex-col gap-2 sm:flex-row">
             <button className="btn-secondary btn-lg" onClick={() => goTo(0)}>Look back at the questions</button>
             {done > 0 && (
-              <button className="btn-ghost btn-lg" disabled={retaking} onClick={retake}>
+              <button className="btn-ghost btn-lg" disabled={retaking || rewriting} onClick={retake}>
                 {retaking ? "Clearing…" : "Retake this quiz"}
               </button>
             )}
           </div>
           <button className="btn-primary btn-lg" onClick={onNext}>{nextLabel}</button>
         </div>
-        <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
+        {regenerateBlock}
       </section>
     );
   }
@@ -665,7 +848,7 @@ function SectionQuiz({
           Section quiz · {index + 1} of {total}
         </div>
         <div className="flex flex-wrap items-center gap-1">
-          {q.id && <ReportQuestion onReport={report} />}
+          {q.id && <ReportQuestion onReport={report} context="this quiz and your score" />}
           {done > 0 && (
             <button className="btn-ghost px-1" onClick={() => goTo(total)}>
               I&apos;m done — see my score
@@ -699,7 +882,7 @@ function SectionQuiz({
           Check answer
         </button>
       )}
-      <RegenerateQuiz sessionId={sessionId} topicId={quiz.topicId} onDone={reload} onWorking={setRewriting} />
+      {regenerateBlock}
     </section>
   );
 }
@@ -769,46 +952,30 @@ function QuizBody({
   );
 }
 
+type RegenState = "idle" | "confirm" | "working" | "error";
+
 /**
  * "Write new questions": the one way a section's quiz changes. Asks first (it takes a minute or two and costs a
  * little), then has the server write a fresh 20 (the old ones stay until the new ones are ready), and reloads the quiz.
+ * Only draws it: the state and the request live in SectionQuiz, so it can never run twice.
  */
 function RegenerateQuiz({
-  sessionId,
-  topicId,
-  onDone,
-  onWorking,
+  state,
+  error,
+  onAsk,
+  onCancel,
+  onRun,
 }: {
-  sessionId: number;
-  topicId: number;
-  onDone: () => void;
-  /** Told when the rewrite starts and stops, so the quiz can lock its answer buttons meanwhile. */
-  onWorking?: (working: boolean) => void;
+  state: RegenState;
+  error: string;
+  onAsk: () => void;
+  onCancel: () => void;
+  onRun: () => void;
 }) {
-  const [state, setState] = useState<"idle" | "confirm" | "working" | "error">("idle");
-  const [error, setError] = useState("");
-  useEffect(() => () => onWorking?.(false), [onWorking]);
-
-  async function run() {
-    setState("working");
-    onWorking?.(true);
-    setError("");
-    const res = await fetch(`/api/sessions/${sessionId}/quiz/regenerate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topicId }),
-    }).catch(() => null);
-    onWorking?.(false);
-    if (res?.ok) return onDone();
-    const json = res ? await res.json().catch(() => ({})) : {};
-    setError((json as { error?: string }).error ?? "Couldn't reach the server. Check your connection and try again.");
-    setState("error");
-  }
-
   if (state === "idle") {
     return (
       <div className="flex justify-end">
-        <button className="btn-ghost px-1 text-[13px]" onClick={() => setState("confirm")}>
+        <button className="btn-ghost px-1 text-[13px]" onClick={onAsk}>
           Write new questions for this section
         </button>
       </div>
@@ -829,10 +996,10 @@ function RegenerateQuiz({
       </p>
       {state === "error" && <p className="text-[13px] font-bold">{error}</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-primary btn-sm" onClick={run}>
+        <button type="button" className="btn-primary btn-sm" onClick={onRun}>
           {state === "error" ? "Try again" : "Yes, write new questions"}
         </button>
-        <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={() => setState("idle")}>
+        <button type="button" className="btn-secondary btn-sm bg-card" autoFocus onClick={onCancel}>
           Keep these
         </button>
       </div>

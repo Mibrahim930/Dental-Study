@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Brand } from "@/components/Brand";
+import { ServerMessage, failureText, jsonOf } from "@/components/clientFetch";
 
 export default function AccountPage() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -13,16 +14,21 @@ export default function AccountPage() {
     e.preventDefault();
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/account/${mode}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const json = await res.json();
-    setBusy(false);
-    if (!res.ok) return setError(json.error ?? "Something went wrong.");
-     
-    window.location.assign(json.mustChangePassword ? "/account/password" : mode === "signup" || !json.hasKey ? "/setup" : "/");
+    // No signedOut() here: a 401 from this route means a wrong password, not a lost sign-in.
+    try {
+      const res = await fetch(`/api/account/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const json = await jsonOf<{ error?: string; mustChangePassword?: boolean; hasKey?: boolean }>(res);
+      if (!res.ok || !json) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      window.location.assign(json.mustChangePassword ? "/account/password" : mode === "signup" || !json.hasKey ? "/setup" : "/");
+    } catch (err) {
+      setError(failureText(err, "Couldn't reach the site. Check your connection and try again."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

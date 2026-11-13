@@ -114,19 +114,3 @@ export function sameSlides(a: number[], b: number[]): boolean {
   const s = new Set(a);
   return b.every((x) => s.has(x));
 }
-
-/**
- * Final order when new topics are added to an existing map: old topics keep their order, and each new topic goes
- * right after the existing topic number it names (1-based; 0 or less = at the start, too big = at the end).
- * New topics anchored to the same place keep the AI's order.
- */
-export function placeNewTopics<O, N>(oldInOrder: O[], fresh: { topic: N; after: number }[]): ({ old: O } | { fresh: N })[] {
-  const out: ({ old: O } | { fresh: N })[] = [];
-  const at = (k: number) => fresh.filter((f) => Math.min(Math.max(Math.round(f.after) || 0, 0), oldInOrder.length) === k).map((f) => ({ fresh: f.topic }));
-  out.push(...at(0));
-  oldInOrder.forEach((o, i) => {
-    out.push({ old: o });
-    out.push(...at(i + 1));
-  });
-  return out;
-}

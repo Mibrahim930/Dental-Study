@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "./Toaster";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 const hoursText = (min: number) => {
   const h = Math.round((min / 60) * 100) / 100;
@@ -29,12 +30,13 @@ export function MissedBanner({ count, yesterdayOnly }: { count: number; yesterda
             setError("");
             try {
               const res = await fetch("/api/planner/replan", { method: "POST" });
-              const data = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-              if (!res.ok) throw new Error(data.error ?? "Couldn't re-plan. Try again.");
-              toast(data.message ?? "Done. Your plan now starts from today.");
+              if (signedOut(res)) return;
+              const data = await jsonOf<{ message?: string; error?: string }>(res);
+              if (!res.ok) throw new ServerMessage(typeof data?.error === "string" ? data.error : "");
+              toast(typeof data?.message === "string" && data.message ? data.message : "Done. Your plan now starts from today.");
               router.refresh();
             } catch (err) {
-              setError(err instanceof Error && err.message !== "Failed to fetch" ? err.message : "Couldn't reach the site. Try again.");
+              setError(failureText(err, "Couldn't re-plan. Check your connection and try again."));
             } finally {
               setPending(false);
             }
@@ -67,13 +69,14 @@ export function DayHours({ date, usual, override }: { date: string; usual: numbe
     setError("");
     try {
       const res = await fetch("/api/planner/day", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date, minutes }) });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Couldn't save. Try again.");
+      if (signedOut(res)) return;
+      const data = await jsonOf<{ error?: string }>(res);
+      if (!res.ok) throw new ServerMessage(typeof data?.error === "string" ? data.error : "");
       toast(minutes == null ? "Back to your usual time for this day" : minutes === 0 ? "Day off. Your plan moved around it." : "Saved. Your plan is updated.");
       if (minutes == null) setHours(String(Math.round((usual / 60) * 100) / 100));
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error && err.message !== "Failed to fetch" ? err.message : "Couldn't reach the site. Try again.");
+      setError(failureText(err, "Couldn't save. Check your connection and try again."));
     } finally {
       setPending(false);
     }

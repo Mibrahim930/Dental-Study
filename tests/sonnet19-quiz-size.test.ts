@@ -51,6 +51,7 @@ import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { POST as regenPOST } from "@/app/api/sessions/[id]/quiz/regenerate/route";
 import { POST as endPOST } from "@/app/api/sessions/[id]/end/route";
+import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
 
 const notes = (facts: string[]) =>
@@ -138,14 +139,6 @@ describe("quizSize / planQuizByFacts edge cases", () => {
     const slots = planQuizByFacts(slides);
     expect(slots).toHaveLength(10);
     expect(slots.filter((s) => s.fact === "Shared fact.")).toEqual([expect.objectContaining({ page: 1 })]);
-  });
-
-  it("smaller explicit size: stressed slides' facts first, then case slides, then slide order, kept in slide order", () => {
-    const slides = [slide(1, ["a1", "a2"]), slide(2, ["b1"], { hasCase: true }), slide(3, ["c1", "c2"], { emphasized: true }), slide(4, ["d1"])];
-    expect(planQuizByFacts(slides, 3, "cut").map((s) => s.fact)).toEqual(["b1", "c1", "c2"]);
-    expect(planQuizByFacts(slides, 1, "cut").map((s) => s.fact)).toEqual(["c1"]);
-    expect(planQuizByFacts(slides, 5, "cut").map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2"]);
-    expect(planQuizByFacts(slides, 6, "cut").map((s) => s.fact)).toEqual(["a1", "a2", "b1", "c1", "c2", "d1"]);
   });
 
   it("angle variety: a 9-fact section uses recall, apply and compare; 'not' appears only on list slides (4+ facts)", () => {
@@ -280,8 +273,13 @@ describe("quizIsCurrent boundaries", () => {
   });
 });
 
-describe("lesson route starts the quiz only when quizIsCurrent is false", () => {
-  const lesson = (sessionId: number) => lessonGET(new Request("http://x/l?position=0"), ctx(sessionId));
+// Audit M4: the quiz is started by POST …/shown (the lesson is on screen), no longer by the lesson GET.
+describe("'shown' starts the quiz only when quizIsCurrent is false", () => {
+  const lesson = async (sessionId: number) => {
+    const res = await lessonGET(new Request("http://x/l?position=0"), ctx(sessionId));
+    await post(shownPOST, sessionId, { position: 0 });
+    return res;
+  };
 
   it("kept v3 quiz (6 facts): no writer call; padded v3 quiz (3 facts): the writer starts and stamps v4; no quiz at all: starts", async () => {
     const kept = world(distinct(6));
@@ -374,11 +372,12 @@ describe("tutor chat removal", () => {
     expect(hits).toEqual([]);
   });
 
+  // Audit M10: the end note is built without AI and never reads chat_messages.
   it("session end with zero chat rows and no activity: plain summary, no AI call", async () => {
     const w = world(distinct(2));
     const res = await endPOST(new Request("http://x/e", { method: "POST" }), ctx(w.sessionId));
     expect(res.status).toBe(200);
-    expect((await res.json()).summary).toBe("Session ended with no activity.");
+    expect((await res.json()).summary).toBe("You didn't open any section in this session.");
     expect(calls.filter((c) => c.purpose === "session summary")).toHaveLength(0);
   });
 
@@ -395,7 +394,8 @@ describe("tutor chat removal", () => {
     await post(checkPOST, v.sessionId, { topicId: v.topicId, index: 0, chosen: 0 });
     db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', 'leftover')").run(v.sessionId);
     const res2 = await endPOST(new Request("http://x/e", { method: "POST" }), ctx(v.sessionId));
-    expect((await res2.json()).summary).toBe("Summed up");
+    expect((await res2.json()).summary).toMatch(/^You covered one section: .+\. You got [01] of 1 section-quiz question right\./);
+    expect(calls.filter((c) => c.purpose === "session summary")).toHaveLength(0);
   });
 
   it("deleting a session still cascades its leftover chat rows", () => {

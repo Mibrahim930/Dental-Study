@@ -3,12 +3,12 @@ import { z } from "zod";
 import { db, examOwner, getMeta, setMeta, type PageRow, type Topic } from "./db";
 import { generate } from "./ai";
 import { credentials } from "./credentials";
-import { parseNotes } from "./processing";
+import { parseNotes, type SlideNotes } from "./processing";
 import { searchLibrary, topicConcepts, upsertConcept } from "./memory";
 import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
 import { ANGLE_TEXT, distinctFacts, normStem, planQuizByFacts, QUIZ_MAX, type Angle, type FactSlide } from "./quizPlan";
-import { coveredFacts, quotedFacts, trimRamble } from "./lessonCoverage";
-import { clearTopicQuizAnswers } from "./quizProgress";
+import { coveredFacts, FILLER_SCAN_VERSION, quotedFacts, trimRamble } from "./lessonCoverage";
+import { clearTopicQuizAnswers, topicHasQuizAnswers } from "./quizProgress";
 import { EXAM_STYLE, EXAM_STYLE_CHECK, NO_COVER_CHECK, NO_COVER_RULE } from "./examStyle";
 import { reportedStems } from "./reportedQuestions";
 import { markPictures, mentionsPicture, pictureFor, PICTURE_RULES } from "./questionImage";
@@ -51,9 +51,24 @@ const LESSON_QUOTED_MAX = 0.3;
  * be a third or more of it on its own.
  */
 const copiesSlides = (q: ReturnType<typeof quotedFacts>) => q.judged >= 3 && q.ratio > LESSON_QUOTED_MAX;
+/**
+ * A slide's notes with damage tolerated: unreadable notes count as none, and only the text entries of the fact and
+ * annotation lists are kept. One damaged slide must not stop a whole lesson or quiz.
+ */
+export function slideNotes(p: Pick<PageRow, "notes_json">): SlideNotes | null {
+  let n: SlideNotes | null;
+  try {
+    n = parseNotes(p);
+  } catch {
+    return null;
+  }
+  if (!n || typeof n !== "object" || Array.isArray(n)) return null;
+  const texts = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return { ...n, key_facts: texts(n.key_facts), annotations: texts(n.annotations) };
+}
 /** The section's distinct facts, as the coverage and copy checks see them (each once; slides often repeat one). */
 function sectionFacts(pages: PageRow[]): string[] {
-  return [...new Map(pages.flatMap((p) => parseNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
+  return [...new Map(pages.flatMap((p) => slideNotes(p)?.key_facts ?? []).map((f) => [normStem(f), f.trim()] as const)).entries()]
     .filter(([key, f]) => key && f)
     .map(([, f]) => f);
 }
@@ -141,7 +156,7 @@ export function topicPages(topic: Topic): (PageRow & { filename: string })[] {
 export function slideNotesText(pages: (PageRow & { filename: string })[]): string {
   return pages
     .map((p) => {
-      const n = parseNotes(p);
+      const n = slideNotes(p);
       if (!n) return `[P${p.id}] ${p.filename} slide ${p.page_number}\n${p.text}`;
       return [
         `[P${p.id}] ${p.filename} slide ${p.page_number}: ${n.title}${n.emphasized ? ` ★IMPORTANT${n.emphasis_note ? ` (${n.emphasis_note})` : ""}` : ""}`,
@@ -177,20 +192,50 @@ export const lessonIsCurrent = (topic: Pick<Topic, "lesson_json" | "page_ids">):
   }
 };
 
+/** How long a failed lesson or quiz is left alone by automatic starts (prefetch, the quiz begun when a lesson shows). */
+export const FAILURE_COOLDOWN_MS = 10 * 60_000;
+type FailureKind = "lesson" | "quiz";
+const failureKey = (kind: FailureKind, topicId: number) => `${kind}_fail:${topicId}`;
+
+/**
+ * Remember that writing a topic's lesson or quiz just failed (meta: the time, then a short reason). A failure that
+ * will recur (the writer runs out of room, the key has no credit) is billed again on every try, so nothing starts it
+ * again on its own for a while; the student's own open or "Try again" still does.
+ */
+function markFailure(kind: FailureKind, topicId: number, err: unknown) {
+  const reason = (err instanceof Error ? err.message : String(err)).split("\n")[0].replace(/sk-[\w-]+/g, "[key]").slice(0, 120);
+  setMeta(failureKey(kind, topicId), `${new Date().toISOString()} ${reason}`);
+}
+
+function clearFailure(kind: FailureKind, topicId: number) {
+  db.prepare("DELETE FROM meta WHERE key = ?").run(failureKey(kind, topicId));
+}
+
+/** Writing this topic's lesson or quiz failed less than FAILURE_COOLDOWN_MS ago. */
+export function recentFailure(kind: FailureKind, topicId: number): boolean {
+  const at = Date.parse((getMeta(failureKey(kind, topicId)) ?? "").split(" ")[0]);
+  return Number.isFinite(at) && Date.now() - at < FAILURE_COOLDOWN_MS;
+}
+
 export function getLesson(topic: Topic): Promise<Lesson> {
   if (lessonIsCurrent(topic)) {
-    const clean = cleanStoredLesson(topic, JSON.parse(topic.lesson_json!) as Lesson);
+    const clean = cleanStoredLesson(topic, topic.lesson_json!, JSON.parse(topic.lesson_json!) as Lesson);
     if (clean) return Promise.resolve(clean);
     // (the stored lesson was nothing but filler: written again below)
   }
   let p = inflight.get(topic.id);
   if (!p) {
     p = generateLesson(topic)
+      .then((lesson) => {
+        clearFailure("lesson", topic.id);
+        return lesson;
+      })
       .catch((err: unknown) => {
+        markFailure("lesson", topic.id, err);
         // A rewrite that fails (the AI is down, the key is out of credit) doesn't take away the slide-by-slide
         // lesson she already had: that one is shown, and the rewrite is tried again on a later open.
         const old = storedSlideLesson(topic);
-        const clean = old && cleanStoredLesson(topic, old);
+        const clean = old && cleanStoredLesson(topic, topic.lesson_json!, old);
         if (!clean) throw err;
         console.error(`Rewriting the lesson for topic ${topic.id} failed; showing the stored one`, err);
         return clean;
@@ -239,18 +284,30 @@ function tidyLesson(raw: Lesson, pages: PageRow[]): Lesson {
 /**
  * A stored lesson with filler the writer drifted into (lessons written before the trim existed): the filler is cut
  * when the lesson is served and the clean lesson saved back, with no AI call. Returns the lesson to show.
+ * `raw` is the stored JSON the lesson was read from: the clean one is saved only over that exact text, so a topic
+ * read a while ago never overwrites a lesson written since; then the newer stored lesson is shown instead.
  */
-function cleanStoredLesson(topic: Pick<Topic, "id">, lesson: Lesson): Lesson | null {
+function cleanStoredLesson(topic: Pick<Topic, "id">, raw: string, lesson: Lesson): Lesson | null {
   const c = cleanLesson(lesson);
   if (!c.changed) return lesson;
+  const empty = c.dropped > 0 && c.lesson.slides.length === 0;
+  const saved = db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ? AND lesson_json = ?").run(empty ? null : JSON.stringify(c.lesson), topic.id, raw).changes > 0;
+  if (!saved) return freshStoredLesson(topic.id);
   console.warn(`Lesson for topic ${topic.id}: filler cut from the stored lesson (${c.trimmed} slide(s) trimmed, ${c.dropped} dropped)`);
-  if (c.dropped > 0 && c.lesson.slides.length === 0) {
-    // Nothing but filler: there is no lesson here to show; it is written again on the next open.
-    db.prepare("UPDATE topics SET lesson_json = NULL WHERE id = ?").run(topic.id);
+  // Nothing but filler: there is no lesson here to show; it is written again on the next open.
+  return empty ? null : c.lesson;
+}
+
+/** The topic's stored lesson as it is now (null when there is none or it can't be read). */
+function freshStoredLesson(topicId: number): Lesson | null {
+  const row = db.prepare("SELECT lesson_json FROM topics WHERE id = ?").get(topicId) as { lesson_json: string | null } | undefined;
+  if (!row?.lesson_json) return null;
+  try {
+    const l = JSON.parse(row.lesson_json) as Lesson;
+    return l && typeof l === "object" && Array.isArray(l.slides) ? l : null;
+  } catch {
     return null;
   }
-  db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?").run(JSON.stringify(c.lesson), topic.id);
-  return c.lesson;
 }
 
 /** Cut filler from a lesson's slide entries and intro (pure). `trimmed` entries kept shorter, `dropped` entries gone. */
@@ -287,7 +344,7 @@ const LESSON_SCAN_KEY = "lesson_filler_scan";
 
 /**
  * Check every stored lesson for filler the writer drifted into, clean the ones that have it (no AI call) and record
- * what was found (meta, for the Admin page). Runs at every start and from the Admin page.
+ * what was found (meta, for the Admin page). Runs from the Admin page; at start-up see scanLessonsForFillerOnce.
  */
 export function scanLessonsForFiller(): LessonScan {
   const rows = db
@@ -298,7 +355,8 @@ export function scanLessonsForFiller(): LessonScan {
     )
     .all() as { id: number; exam_id: number; title: string; lesson_json: string; exam: string; lecture: string | null }[];
   const found: LessonScanHit[] = [];
-  const save = db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ?");
+  // Saved only over the exact text that was read (as in cleanStoredLesson): a lesson written since is left alone.
+  const save = db.prepare("UPDATE topics SET lesson_json = ? WHERE id = ? AND lesson_json = ?");
   db.transaction(() => {
     for (const r of rows) {
       let lesson: Lesson;
@@ -311,7 +369,7 @@ export function scanLessonsForFiller(): LessonScan {
       const c = cleanLesson(lesson);
       if (!c.changed) continue;
       // A lesson left with no slides at all was nothing but filler: cleared, so it is written again on the next open.
-      save.run(c.dropped > 0 && c.lesson.slides.length === 0 ? null : JSON.stringify(c.lesson), r.id);
+      if (save.run(c.dropped > 0 && c.lesson.slides.length === 0 ? null : JSON.stringify(c.lesson), r.id, r.lesson_json).changes === 0) continue;
       found.push({ topicId: r.id, examId: r.exam_id, exam: r.exam, lecture: r.lecture, section: r.title, trimmed: c.trimmed, dropped: c.dropped, intro: c.intro });
     }
   })();
@@ -321,6 +379,19 @@ export function scanLessonsForFiller(): LessonScan {
   const prior = lastLessonScan();
   const history = [...(prior?.found ?? []).filter((h) => !found.some((f) => f.topicId === h.topicId)), ...found];
   setMeta(LESSON_SCAN_KEY, JSON.stringify({ ...scan, found: history }));
+  return scan;
+}
+
+const FILLER_SCAN_DONE_KEY = "lesson_filler_scan_done";
+
+/**
+ * The start-up check: every stored lesson is scanned once per version of the filler trimmer (FILLER_SCAN_VERSION),
+ * not on every start. Lessons written since are trimmed as they are written. Returns null when it had already run.
+ */
+export function scanLessonsForFillerOnce(): LessonScan | null {
+  if (getMeta(FILLER_SCAN_DONE_KEY) === String(FILLER_SCAN_VERSION)) return null;
+  const scan = scanLessonsForFiller();
+  setMeta(FILLER_SCAN_DONE_KEY, String(FILLER_SCAN_VERSION));
   return scan;
 }
 
@@ -375,9 +446,9 @@ async function generateLesson(topic: Topic): Promise<Lesson> {
   // A slide that must get its own entry: one with facts, or one that poses a case or question (she should see it
   // answered). Title, agenda and reference slides never do (they don't reach a section anyway).
   const mustAppear = pages.filter((p) => {
-    const n = parseNotes(p);
+    const n = slideNotes(p);
     // The same test as `facts` above: a "fact" with no letters or digits doesn't count.
-    return !!n && !n.is_filler && ((n.key_facts ?? []).some((f) => normStem(f)) || !!n.case_prompt?.trim());
+    return !!n && !n.is_filler && (n.key_facts.some((f) => normStem(f)) || (typeof n.case_prompt === "string" && !!n.case_prompt.trim()));
   });
   const leftOut = (l: Lesson) => mustAppear.filter((p) => !l.slides.some((s) => s.page_id === p.id));
   let lesson = await ask("");
@@ -444,7 +515,7 @@ const quizInflight = new Map<number, Promise<QuizQuestion[]>>();
 /** The facts the section's slides list, the way the quiz planner sees them. */
 function factSlides(pages: ReturnType<typeof topicPages>): FactSlide[] {
   return pages.map((p) => {
-    const n = parseNotes(p);
+    const n = slideNotes(p);
     const facts = n?.key_facts ?? [];
     return { id: p.id, keyFacts: facts.length, emphasized: !!(n?.emphasized ?? p.emphasized), hasCase: !!(n?.case_prompt ?? p.has_case), facts };
   });
@@ -465,12 +536,30 @@ export function quizIsCurrent(topic: Pick<Topic, "checks_json" | "checks_version
   return n <= QUIZ_MAX && (v === 4 || n >= 5);
 }
 
+/**
+ * The stored quiz has to be written (again): there is none, or it is out of date and nobody has answered it. An out of
+ * date quiz with answers is kept as it is: rewriting it would wipe those answers and the misses her lecture review is
+ * built from. Only "Write new questions" replaces it.
+ */
+export function quizNeedsWriting(topic: Pick<Topic, "id" | "checks_json" | "checks_version" | "page_ids">): boolean {
+  return !topic.checks_json || (!quizIsCurrent(topic) && !topicHasQuizAnswers(topic.id));
+}
+
 /** The section quiz after a lesson: written once per topic and cached, like the lesson. */
 export function getSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
-  if (quizIsCurrent(topic)) return Promise.resolve(JSON.parse(topic.checks_json!) as QuizQuestion[]);
+  if (!quizNeedsWriting(topic)) return Promise.resolve(JSON.parse(topic.checks_json!) as QuizQuestion[]);
   let p = quizInflight.get(topic.id);
   if (!p) {
-    p = generateSectionQuiz(topic).finally(() => quizInflight.delete(topic.id));
+    p = generateSectionQuiz(topic)
+      .then((questions) => {
+        clearFailure("quiz", topic.id);
+        return questions;
+      })
+      .catch((err: unknown) => {
+        markFailure("quiz", topic.id, err);
+        throw err;
+      })
+      .finally(() => quizInflight.delete(topic.id));
     quizInflight.set(topic.id, p);
   }
   return p;
@@ -691,44 +780,84 @@ async function generateSectionQuiz(topic: Topic): Promise<QuizQuestion[]> {
   return questions;
 }
 
-const SessionSummary = z.object({
-  summary: z.string().describe("2-4 short sentences: what was covered, what the student struggled with, what to do next"),
-});
+const shownKey = (sessionId: number) => `session_shown:${sessionId}`;
 
-export async function summarizeSession(sessionId: number) {
-  const session = db.prepare("SELECT * FROM study_sessions WHERE id = ?").get(sessionId) as {
-    exam_id: number;
-    current_position: number;
-  };
-  const checks = db
-    .prepare(
-      "SELECT t.title, sc.question, sc.correct FROM session_checks sc JOIN topics t ON t.id = sc.topic_id WHERE sc.session_id = ?",
-    )
-    .all(sessionId) as { title: string; question: string; correct: number }[];
-  const questions = db
-    .prepare("SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' ORDER BY id")
-    .all(sessionId) as { content: string }[];
-  const topics = db
-    .prepare("SELECT position, title FROM topics WHERE exam_id = ? ORDER BY position")
-    .all(session.exam_id) as { position: number; title: string }[];
-
-  let summary = "Session ended with no activity.";
-  if (checks.length || questions.length) {
-    const out = await generate({
-      creds: credentials(examOwner(session.exam_id)),
-      purpose: "session summary",
-      schema: SessionSummary,
-      effort: "low",
-      maxTokens: 4000,
-      system: "Summarize a dental student's study session as a note their tutor will read before the next session.",
-      content: [
-        `Topics in this exam: ${topics.map((t) => `${t.position + 1}. ${t.title}`).join("; ")}`,
-        `Student stopped at topic ${session.current_position + 1}.`,
-        `Quick-check results:\n${checks.map((c) => `- [${c.title}] ${c.correct ? "✓" : "✗"} ${c.question}`).join("\n") || "none"}`,
-        `Questions the student asked the tutor:\n${questions.map((q) => `- ${q.content}`).join("\n") || "none"}`,
-      ].join("\n\n"),
-    });
-    summary = out.summary;
+/** A section's lesson was on screen in this study session: it counts as covered in the note written at the end. */
+export function recordShown(sessionId: number, topicId: number) {
+  const raw = getMeta(shownKey(sessionId));
+  let ids: number[] = [];
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) ids = parsed.filter((x): x is number => Number.isInteger(x));
+  } catch {
+    // a damaged record starts again
   }
-  db.prepare("UPDATE study_sessions SET summary = ?, ended_at = datetime('now') WHERE id = ?").run(summary, sessionId);
+  if (!ids.includes(topicId)) setMeta(shownKey(sessionId), JSON.stringify([...ids, topicId]));
+}
+
+/** "A, B and C" (a long list ends "and N more"). */
+function listed(items: string[], max = 4): string {
+  const shown = items.length > max ? [...items.slice(0, max - 1), `${items.length - max + 1} more`] : items;
+  return shown.length <= 1 ? (shown[0] ?? "") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+}
+
+/**
+ * End a study session with a short note to the student, built from what she did (no AI call, so it is instant and
+ * free): the sections whose lesson she saw or whose quiz she answered, her section-quiz score in this session, and the
+ * concepts she missed most. Ending an ended session gives the same note again. Returns the note.
+ */
+export function endSession(sessionId: number): string {
+  const session = db.prepare("SELECT exam_id, summary, ended_at FROM study_sessions WHERE id = ?").get(sessionId) as
+    | { exam_id: number; summary: string | null; ended_at: string | null }
+    | undefined;
+  if (!session) return "";
+  if (session.ended_at && session.summary) return session.summary;
+
+  const answers = db
+    .prepare("SELECT topic_id, check_index, correct FROM session_checks WHERE session_id = ? ORDER BY id")
+    .all(sessionId) as { topic_id: number; check_index: number | null; correct: number }[];
+  let shown: number[] = [];
+  try {
+    const parsed: unknown = JSON.parse(getMeta(shownKey(sessionId)) ?? "[]");
+    if (Array.isArray(parsed)) shown = parsed.filter((x): x is number => Number.isInteger(x));
+  } catch {
+    // nothing recorded
+  }
+  const covered = new Set([...shown, ...answers.map((a) => a.topic_id)]);
+  const topics = (db.prepare("SELECT id, title, checks_json FROM topics WHERE exam_id = ? ORDER BY position").all(session.exam_id) as {
+    id: number;
+    title: string;
+    checks_json: string | null;
+  }[]).filter((t) => covered.has(t.id));
+
+  // The concept of each missed question, looked up in its section's quiz (an answer to a replaced quiz has no position).
+  const quizzes = new Map<number, QuizQuestion[]>();
+  for (const t of topics) {
+    try {
+      const qs: unknown = t.checks_json ? JSON.parse(t.checks_json) : [];
+      quizzes.set(t.id, Array.isArray(qs) ? (qs as QuizQuestion[]) : []);
+    } catch {
+      quizzes.set(t.id, []);
+    }
+  }
+  const missed = new Map<string, number>();
+  for (const a of answers) {
+    if (a.correct || a.check_index == null) continue;
+    const concept = quizzes.get(a.topic_id)?.[a.check_index]?.concept;
+    if (typeof concept === "string" && concept.trim()) missed.set(concept.trim(), (missed.get(concept.trim()) ?? 0) + 1);
+  }
+  const most = [...missed].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c]) => c);
+  const right = answers.filter((a) => a.correct).length;
+
+  const lines: string[] = [];
+  if (topics.length === 0) lines.push("You didn't open any section in this session.");
+  else lines.push(`You covered ${topics.length === 1 ? "one section" : `${topics.length} sections`}: ${listed(topics.map((t) => t.title))}.`);
+  if (answers.length > 0) lines.push(`You got ${right} of ${answers.length} section-quiz ${answers.length === 1 ? "question" : "questions"} right.`);
+  if (most.length > 0) lines.push(`Worth another look: ${listed(most)}.`);
+  const summary = lines.join(" ");
+  db.transaction(() => {
+    db.prepare("UPDATE study_sessions SET summary = ?, ended_at = COALESCE(ended_at, datetime('now')) WHERE id = ?").run(summary, sessionId);
+    db.prepare("DELETE FROM meta WHERE key = ?").run(shownKey(sessionId));
+  })();
+  return summary;
 }

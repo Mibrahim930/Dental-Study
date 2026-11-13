@@ -15,13 +15,13 @@ import { DoubleRing, Icon, ICONS, MasteryChip, RingLegend, Strip } from "@/compo
 
 export const dynamic = "force-dynamic";
 
-type ExamWithCounts = Exam & { docs: number; pages: number; done_pages: number };
+type ExamWithCounts = Exam & { docs: number; pages: number; done_pages: number; failed_pages: number };
 
 export default async function Home() {
   const user = await requireUser();
   const exams = db
     .prepare(
-      `SELECT e.*, COUNT(DISTINCT d.id) docs, COUNT(p.id) pages, SUM(p.status = 'done') done_pages
+      `SELECT e.*, COUNT(DISTINCT d.id) docs, COUNT(p.id) pages, SUM(p.status = 'done') done_pages, SUM(p.status = 'error') failed_pages
        FROM exams e LEFT JOIN documents d ON d.exam_id = e.id LEFT JOIN pages p ON p.document_id = d.id
        WHERE e.user_id = ?
        GROUP BY e.id ORDER BY COALESCE(e.exam_date, '9999') ASC, e.id DESC`,
@@ -314,7 +314,11 @@ function openAttemptsByExam(examIds: number[]): Map<number, OpenAttempt> {
 
 function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; today: string; lectures?: LectureProgress; open?: OpenAttempt }) {
   const days = daysUntil(exam.exam_date, today);
-  const processing = exam.pages > 0 && exam.done_pages < exam.pages;
+  // A slide that failed is finished too (it waits for "Retry" on the exam page), so the bar never sits at 48/50 forever.
+  const failed = exam.failed_pages ?? 0;
+  const finished = (exam.done_pages ?? 0) + failed;
+  const processing = exam.pages > 0 && finished < exam.pages;
+  const failedText = `${failed} slide${failed === 1 ? "" : "s"} couldn't be read`;
   // Once the topic map is by lecture: "3 of 7 lectures done" (a lecture is done when every section in it is studied).
   const lectureLine = lectures?.lectures
     ? `${lectures.done} of ${lectures.lectures} lecture${lectures.lectures === 1 ? "" : "s"} done`
@@ -349,12 +353,17 @@ function ExamBlock({ exam, today, lectures, open }: { exam: ExamWithCounts; toda
       {processing && (
         <div className="flex items-center gap-2.5">
           <div className="h-2 flex-1 rounded-full bg-black/10">
-            <div className="h-full rounded-full bg-current" style={{ width: `${(exam.done_pages / exam.pages) * 100}%` }} />
+            <div className="h-full rounded-full bg-current" style={{ width: `${(finished / exam.pages) * 100}%` }} />
           </div>
           <span className="text-xs font-bold">
-            Reading slides {exam.done_pages}/{exam.pages}
+            Reading slides {finished}/{exam.pages}
+            {failed > 0 && ` · ${failedText}`}
           </span>
         </div>
+      )}
+      {/* The whole card links to the exam page, where each failed lecture has its Retry button. */}
+      {!processing && failed > 0 && (
+        <span className="self-start rounded-xl bg-coral px-3 py-1.5 text-[13px] font-bold text-on-coral">{failedText}. Open the exam to try them again.</span>
       )}
     </Link>
   );

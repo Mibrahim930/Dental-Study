@@ -5,11 +5,15 @@ import { pictureForIds } from "@/lib/questionImage";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
 import { quizAnswers } from "@/lib/quizProgress";
+import { aiFailure } from "@/lib/http";
+import { refuseCrossSite } from "../../crossSite";
 
 export const maxDuration = 300;
 
 /** The section quiz for one topic of a study session, plus the answers already given in this session. */
 export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id]/quiz">) {
+  const refused = refuseCrossSite(request);
+  if (refused) return refused;
   const user = await apiUser();
   if (!user) return unauthorized();
   const sessionId = Number((await ctx.params).id);
@@ -32,9 +36,6 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
     return NextResponse.json({ topicId: topic.id, questions, answered, slides: (JSON.parse(topic.page_ids) as number[]).length });
   } catch (err) {
     // The technical text goes to the server log; the student sees a plain message (key problems are worth saying).
-    console.error(`Section quiz for topic ${topic.id} failed`, err);
-    const msg = err instanceof Error ? err.message : String(err);
-    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
-    return NextResponse.json({ error: keyProblem ? msg : "The AI didn't answer in time. Try again in a moment." }, { status: 500 });
+    return aiFailure(err, `Section quiz for topic ${topic.id}`, "The AI didn't answer in time. Try again in a moment.");
   }
 }

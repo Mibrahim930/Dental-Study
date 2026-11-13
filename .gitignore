@@ -42,4 +42,8 @@ next-env.d.ts
 
 # local data (database, uploaded lectures, slide images)
 /data
+
+# the student's real past exams (design references) and the local preview build: never committed
+/design/
+/.preview-app/
 !.env.example

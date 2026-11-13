@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 /** A section of the topic map; `group` is the lecture it belongs to ("Lecture 2 · Pulp biology"), shown as a header. */
 type TopicOption = { id: number; title: string; group?: string; lectureIds: number[]; missed: number; unsure: number };
@@ -40,17 +41,21 @@ export function PracticeForm({
     setBusy(true);
     setError("");
     const scope = cover === "lectures" ? { kind: "lectures", documentIds: lectureIds } : cover === "topics" ? { kind: "topics", topicIds } : { kind: "all" };
-    const res = await fetch(`/api/exams/${examId}/attempts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ size, mode, style, scope, adaptive }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/exams/${examId}/attempts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ size, mode, style, scope, adaptive }),
+      });
+      if (signedOut(res)) return;
+      const json = await jsonOf<{ id?: number; error?: string }>(res);
+      if (!res.ok || !json?.id) throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      router.push(`/attempts/${json.id}`);
+      // Stays busy on success: the button must not start a second exam while the next page loads.
+    } catch (err) {
+      setError(failureText(err, "Couldn't start the exam. Check your connection and try again."));
       setBusy(false);
-      return setError(json.error ?? "Couldn't start the exam.");
     }
-    router.push(`/attempts/${json.id}`);
   }
 
   return (

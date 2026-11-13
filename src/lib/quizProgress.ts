@@ -22,6 +22,11 @@ export function quizAnswers(userId: number, topicId: number): Record<number, num
   );
 }
 
+/** Whether anyone has answered this section's quiz (a quiz with answers is never rewritten without being asked). */
+export function topicHasQuizAnswers(topicId: number): boolean {
+  return !!db.prepare("SELECT 1 FROM quiz_answers WHERE topic_id = ? LIMIT 1").get(topicId);
+}
+
 /** "Retake this quiz": the student's own answers for the section go away (history in session_checks stays). */
 export function clearQuizAnswers(userId: number, topicId: number): number {
   return db.prepare("DELETE FROM quiz_answers WHERE user_id = ? AND topic_id = ?").run(userId, topicId).changes;

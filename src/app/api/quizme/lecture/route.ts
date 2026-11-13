@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { lectureReviewStatus, openLectureReview, QuizMeError } from "@/lib/quizMe";
 import { ownsExam } from "@/lib/owner";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
+import { readJson } from "@/lib/http";
 
 const ids = (examId: unknown, documentId: unknown) => (Number.isInteger(examId) && Number.isInteger(documentId) ? { examId: examId as number, documentId: documentId as number } : null);
 
@@ -19,14 +20,16 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await apiUser();
   if (!user) return unauthorized();
-  const body = (await request.json().catch(() => null)) as { examId?: unknown; documentId?: unknown } | null;
-  const p = ids(body?.examId, body?.documentId);
+  const body = await readJson(request);
+  const p = ids(body.examId, body.documentId);
   if (!p) return NextResponse.json({ error: "That lecture wasn't found." }, { status: 400 });
   if (!ownsExam(user.id, p.examId)) return notFound();
   try {
     return NextResponse.json(openLectureReview(user.id, p.examId, p.documentId));
   } catch (err) {
     if (err instanceof QuizMeError) return NextResponse.json({ error: err.message }, { status: 400 });
-    throw err;
+    // Anything else is ours, not hers: the detail goes to the log, she gets a plain sentence.
+    console.error(`Lecture review for exam ${p.examId}, lecture ${p.documentId} failed`, err);
+    return NextResponse.json({ error: "The review couldn't be opened. Try again in a moment." }, { status: 500 });
   }
 }

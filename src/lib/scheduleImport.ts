@@ -57,10 +57,8 @@ export const MAX_PASTE_CHARS = 30000;
 /** Most exams one read shows (the same cap as one "Add N exams" press). */
 export const MAX_IMPORTED = 60;
 
-/** Error text from the AI provider that the student should see as-is (her key or her billing), not internal errors. */
-export function isKeyProblem(msg: string): boolean {
-  return /x-api-key|api[ _-]?key|authentication|unauthori[sz]ed|permission|\b401\b|\b403\b|credit balance|billing|quota/i.test(msg) && !/SQLITE|\bat \/|node:internal/i.test(msg);
-}
+/** Kept under this name for older imports; the one copy lives in lib/http. */
+export { isKeyProblem } from "./http";
 
 /** One AI call over the pasted text and page images. Logged to ai_usage as "exam schedule import" by generate(). */
 export async function readSchedule(opts: {

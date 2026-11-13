@@ -101,13 +101,13 @@ describe("repair vs case sets", () => {
     const r = db.prepare("SELECT image_page_id FROM questions WHERE id = ?").get(id) as { image_page_id: number | null } | undefined;
     expect(r?.image_page_id).toBe(w.photo);
   });
-  it("a case-set question mentioning a picture, in a case with no picture, is deleted and leaves the set short", () => {
+  it("a case-set question mentioning a picture, in a case with no picture, goes like a single question, and the set left under three goes whole", () => {
     const w = world();
     const caseId = Number(db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) VALUES (?, 's', '{}', NULL)").run(w.examId).lastInsertRowid);
     for (const s of ["Q one plain?", "Based on the image below, what is it?", "Q three plain?"]) insCaseQ.run(w.examId, w.topicId, s, OPTS, w.plain, null, caseId);
     repairPictureQuestions();
     const n = (db.prepare("SELECT COUNT(*) c FROM questions WHERE case_id = ? AND flagged = 0").get(caseId) as { c: number }).c;
-    expect(n).toBe(3); // a set should stay whole (or be retired whole); today 2 remain and the later questions build on the deleted one
+    expect(n).toBe(0); // audit L3: the set is retired whole rather than left with a gap the later questions build on
   });
   it("attemptView shows the case image on each case question that carries it", () => {
     const w = world();

@@ -15,9 +15,7 @@
   --muted-foreground: #556070;
   --subtle: #94a3b8;
   --border: #e4e8ee;
-  --input: #cfd6df;
   --primary: #0f766e;
-  --primary-hover: #115e59;
   --primary-foreground: #ffffff;
   --primary-soft: #eefbf8;
   --danger: #be123c;
@@ -26,8 +24,6 @@
   --success-soft: #ecfdf5;
   --warning: #b45309;
   --warning-soft: #fffbeb;
-  --info: #3730a3;
-  --info-soft: #eef2ff;
   /* Hero block (one per screen), the main action button and the floating nav. */
   --hero: #0f766e;
   --hero-foreground: #ffffff;
@@ -66,9 +62,7 @@
   --muted-foreground: #67645b;
   --subtle: #9a968b;
   --border: #e4e1d8;
-  --input: #d9d5ca;
   --primary: #0e5e55;
-  --primary-hover: #0a4a43;
   --primary-foreground: #ffffff;
   --primary-soft: #ddf8f1;
   --danger: #b3243f;
@@ -77,8 +71,6 @@
   --success-soft: #ddf8f1;
   --warning: #855600;
   --warning-soft: #fff1c2;
-  --info: #4b2fa3;
-  --info-soft: #ede6ff;
   --hero: #0e5e55;
   --hero-muted: #cfe9e3;
   --action: #161616;
@@ -99,9 +91,7 @@
   --muted-foreground: #2f4a3b;
   --subtle: #6b7d70;
   --border: #dad5c8;
-  --input: #bdb8a9;
   --primary: #123021;
-  --primary-hover: #1c4231;
   --primary-foreground: #f2efe8;
   --primary-soft: #e2e6da;
   --danger: #9b2c2c;
@@ -110,8 +100,6 @@
   --success-soft: #dde9de;
   --warning: #855600;
   --warning-soft: #f2e6c8;
-  --info: #2e4a6b;
-  --info-soft: #e1e6ea;
   --hero: #123021;
   --hero-foreground: #f2efe8;
   --hero-muted: #c9d6cc;
@@ -144,9 +132,7 @@
   --muted-foreground: #45484d;
   --subtle: #7a7c80;
   --border: #dfdfdb;
-  --input: #c4c5c3;
   --primary: #2b2f36;
-  --primary-hover: #3a3f48;
   --primary-foreground: #f4f4f2;
   --primary-soft: #e6e7e8;
   --danger: #a3333d;
@@ -155,8 +141,6 @@
   --success-soft: #e0ebe4;
   --warning: #855600;
   --warning-soft: #f2e8cf;
-  --info: #34507a;
-  --info-soft: #e2e7ef;
   --hero: #2b2f36;
   --hero-foreground: #f4f4f2;
   --hero-muted: #c9cbcf;
@@ -190,9 +174,7 @@
     --muted-foreground: #9aa6b5;
     --subtle: #64748b;
     --border: #222c38;
-    --input: #334155;
     --primary: #2dd4bf;
-    --primary-hover: #5eead4;
     --primary-foreground: #042f2e;
     --primary-soft: rgb(45 212 191 / 0.12);
     --danger: #fb7185;
@@ -201,8 +183,6 @@
     --success-soft: rgb(16 185 129 / 0.14);
     --warning: #fbbf24;
     --warning-soft: rgb(245 158 11 / 0.14);
-    --info: #a5b4fc;
-    --info-soft: rgb(99 102 241 / 0.16);
     --hero: #134e4a;
     --hero-muted: #bfe3db;
     --action: #e6ebf1;
@@ -221,9 +201,7 @@
     --muted-foreground: #a8a59c;
     --subtle: #77746c;
     --border: #2e2e2b;
-    --input: #3d3d39;
     --primary: #b8f5e6;
-    --primary-hover: #d4faf0;
     --primary-foreground: #06332d;
     --primary-soft: rgb(184 245 230 / 0.12);
     --danger: #ff8a73;
@@ -232,8 +210,6 @@
     --success-soft: rgb(111 220 160 / 0.14);
     --warning: #ffd465;
     --warning-soft: rgb(255 212 101 / 0.16);
-    --info: #c9b8ff;
-    --info-soft: rgb(201 184 255 / 0.16);
     --hero: #134e47;
     --hero-muted: #bfe3db;
     --action: #f4f2ec;
@@ -253,9 +229,7 @@
     --muted-foreground: #a9bdae;
     --subtle: #6e8475;
     --border: #233328;
-    --input: #34473a;
     --primary: #d2e5d6;
-    --primary-hover: #e6f1e8;
     --primary-foreground: #0d1710;
     --primary-soft: rgb(210 229 214 / 0.1);
     --danger: #f08a8a;
@@ -264,8 +238,6 @@
     --success-soft: rgb(127 211 160 / 0.14);
     --warning: #e8c170;
     --warning-soft: rgb(232 193 112 / 0.14);
-    --info: #a9c4e8;
-    --info-soft: rgb(169 196 232 / 0.14);
     --hero: #1c3326;
     --hero-foreground: #e6f1e8;
     --hero-muted: #a9bdae;
@@ -298,9 +270,7 @@
     --muted-foreground: #b2b5ba;
     --subtle: #6f737a;
     --border: #2a2e35;
-    --input: #3b4049;
     --primary: #e6e7e9;
-    --primary-hover: #ffffff;
     --primary-foreground: #14161a;
     --primary-soft: rgb(230 231 233 / 0.1);
     --danger: #f28b95;
@@ -309,8 +279,6 @@
     --success-soft: rgb(125 207 163 / 0.14);
     --warning: #e8c170;
     --warning-soft: rgb(232 193 112 / 0.14);
-    --info: #a8bfe6;
-    --info-soft: rgb(168 191 230 / 0.14);
     --hero: #2a2f37;
     --hero-foreground: #f4f4f2;
     --hero-muted: #b2b5ba;
@@ -344,9 +312,7 @@
   /* Faint text still has to pass AA contrast, so it shares the muted foreground. */
   --color-subtle: var(--muted-foreground);
   --color-border: var(--border);
-  --color-input: var(--input);
   --color-primary: var(--primary);
-  --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-soft: var(--primary-soft);
   --color-danger: var(--danger);
@@ -355,8 +321,6 @@
   --color-success-soft: var(--success-soft);
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
-  --color-info: var(--info);
-  --color-info-soft: var(--info-soft);
   --color-hero: var(--hero);
   --color-hero-foreground: var(--hero-foreground);
   --color-hero-muted: var(--hero-muted);
@@ -437,7 +401,7 @@
   .btn-secondary { @apply btn bg-muted text-foreground hover:bg-muted-strong; }
   .btn-ghost { @apply btn text-muted-foreground underline-offset-4 hover:text-foreground hover:underline; }
   .btn-danger { @apply btn bg-danger-soft text-danger hover:brightness-95; }
-  .btn-sm { @apply min-h-[38px] rounded-xl px-4 text-sm; }
+  .btn-sm { @apply min-h-[44px] rounded-xl px-4 text-sm; }
   .btn-lg { @apply min-h-[54px] rounded-[18px] px-6 text-base; }
 
   .input { @apply h-[50px] w-full rounded-2xl border-2 border-transparent bg-muted px-4 text-[15px] text-foreground outline-none transition-colors placeholder:text-subtle focus:border-foreground focus:bg-card; }
@@ -494,4 +458,10 @@
 ::selection {
   background: color-mix(in srgb, var(--butter) 70%, var(--foreground) 15%);
   color: var(--on-butter);
+}
+
+/* While a timed practice exam runs (AttemptRunner sets the attribute), the floating Report button stays out of the way
+   of the answer options. Reporting a single question is still on each question card. */
+body[data-exam-running] [data-report-fab] {
+  display: none;
 }

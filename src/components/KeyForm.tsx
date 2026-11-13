@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 type Provider = "anthropic" | "openai";
 
@@ -14,16 +15,23 @@ export function KeyForm({ initialProvider, done }: { initialProvider?: Provider 
     e.preventDefault();
     setBusy(true);
     setError("");
-    const res = await fetch("/api/account/key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, apiKey }),
-    });
-    setBusy(false);
-    if (res.ok) {
-       
+    try {
+      const res = await fetch("/api/account/key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, apiKey }),
+      });
+      if (signedOut(res)) return;
+      if (!res.ok) {
+        const json = await jsonOf<{ error?: string }>(res);
+        throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      }
       window.location.assign(done);
-    } else setError((await res.json()).error ?? "Couldn't save that key.");
+    } catch (err) {
+      setError(failureText(err, "Couldn't save that key. Check your connection and try again."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

@@ -47,6 +47,7 @@ import { weakConcepts } from "@/lib/memory";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
 import { POST as checkPOST } from "@/app/api/sessions/[id]/check/route";
 import { POST as endPOST } from "@/app/api/sessions/[id]/end/route";
+import { POST as regenPOST } from "@/app/api/sessions/[id]/quiz/regenerate/route";
 import { makeUser, makeExam } from "./helpers";
 
 const mk = (n: number, over: Partial<Q> = {}): Q[] =>
@@ -257,14 +258,15 @@ describe("GET /quiz", () => {
     expect((await (await get(w.sessionId, 0)).json()).answered).toEqual({ 1: 2 });
   });
 
-  it("returns 500 with a message when the AI fails, and a retry works", async () => {
+  // Audit S7: an AI failure answers 502 through aiFailure.
+  it("returns 502 with a message when the AI fails, and a retry works", async () => {
     const w = world();
     currentUserId = w.userId;
     quizResponse = () => {
       throw new Error("boom");
     };
     const res = await get(w.sessionId, 0);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     // The technical text stays in the server log; the student gets a plain message.
     const error = (await res.json()).error as string;
     expect(error).not.toContain("boom");
@@ -282,33 +284,47 @@ describe("GET /quiz", () => {
     expect(genCalls).toHaveLength(0);
   });
 
-  it("a version-2 quiz (the old fixed 20) is rewritten once at the fact-based size", async () => {
+  // Audit M5: an out-of-date quiz she already answered is kept (with her answers) until she asks for new questions.
+  it("an answered version-2 quiz (the old fixed 20) is kept as it is: no rewrite, her answer stays", async () => {
     const w = world();
     currentUserId = w.userId;
     db.prepare("UPDATE topics SET checks_json = ?, checks_version = 2 WHERE id = ?").run(JSON.stringify(mk(20)), w.topicIds[0]);
     expect((await post(w.sessionId, { topicId: w.topicIds[0], index: 15, chosen: 1 })).status).toBe(200);
     const r = await (await get(w.sessionId, 0)).json();
-    expect(r.questions).toHaveLength(SIZE);
-    expect(r.answered).toEqual({});
-    expect(w.topic().checks_version).toBe(QUIZ_VERSION);
-    expect(db.prepare("SELECT * FROM quiz_answers WHERE topic_id = ?").all(w.topicIds[0])).toEqual([]);
+    expect(r.questions).toHaveLength(20);
+    expect(r.answered).toEqual({ 15: 1 });
+    expect(w.topic().checks_version).toBe(2);
     await get(w.sessionId, 0);
-    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(2);
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(0);
   });
 
-  it("an old 10-question quiz is rewritten once at the new size; answers given to it are detached but kept", async () => {
+  it("an unanswered old 10-question quiz is rewritten once at the new size", async () => {
+    const w = world();
+    currentUserId = w.userId;
+    db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(mk(10)), w.topicIds[0]);
+    const r = await (await get(w.sessionId, 0)).json();
+    expect(r.questions).toHaveLength(SIZE);
+    expect(w.topic().checks_version).toBe(QUIZ_VERSION);
+    await get(w.sessionId, 0);
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(2); // only once
+  });
+
+  it("an answered old 10-question quiz is kept; 'Write new questions' replaces it and detaches the answers (kept for history)", async () => {
     const w = world();
     currentUserId = w.userId;
     db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?").run(JSON.stringify(mk(10)), w.topicIds[0]);
     expect((await post(w.sessionId, { topicId: w.topicIds[0], index: 3, chosen: 1 })).status).toBe(200);
     const r = await (await get(w.sessionId, 0)).json();
-    expect(r.questions).toHaveLength(SIZE);
-    expect(r.answered).toEqual({}); // the old answer no longer points at a (different) question
-    expect(db.prepare("SELECT * FROM quiz_answers WHERE topic_id = ?").all(w.topicIds[0])).toEqual([]);
+    expect(r.questions).toHaveLength(10);
+    expect(r.answered).toEqual({ 3: 1 });
+    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(0);
+    const regen = await regenPOST(new Request("http://x/r", { method: "POST", body: JSON.stringify({ topicId: w.topicIds[0] }) }), ctx(w.sessionId));
+    expect(regen.status).toBe(200);
+    const r2 = await (await get(w.sessionId, 0)).json();
+    expect(r2.questions).toHaveLength(SIZE);
+    expect(r2.answered).toEqual({}); // the old answer no longer points at a (different) question
     const rows = db.prepare("SELECT check_index, question FROM session_checks WHERE session_id = ?").all(w.sessionId) as { check_index: number | null; question: string }[];
     expect(rows).toEqual([{ check_index: null, question: "Question 3?" }]);
-    await get(w.sessionId, 0);
-    expect(genCalls.filter((c) => c === "section quiz")).toHaveLength(2); // only once
   });
 });
 
@@ -440,13 +456,14 @@ describe("POST /check", () => {
     expect(blank.n).toBe(0);
   });
 
+  // Audit M10: the note is built from her answers, with no AI call.
   it("session end summary works with new rows", async () => {
     const w = await ready();
     await post(w.sessionId, { topicId: w.topicId, index: 0, chosen: 0 });
     summaryText = "Did well";
     const res = await endPOST(new Request("http://x/e", { method: "POST" }), ctx(w.sessionId));
-    expect((await res.json()).summary).toBe("Did well");
-    expect(genCalls).toContain("session summary");
+    expect((await res.json()).summary).toMatch(/^You covered one section: .+\. You got [01] of 1 section-quiz question right\./);
+    expect(genCalls).not.toContain("session summary");
   });
 
   it("deleting the topic cascades session_checks and quiz_answers", async () => {

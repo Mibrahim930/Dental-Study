@@ -104,6 +104,7 @@ export function ReportButton() {
           onClick={() => setOpen(true)}
           aria-label="Report a problem or suggest an idea"
           title="Report a problem or suggest an idea"
+          data-report-fab
           className="fixed left-3.5 bottom-[calc(100px+env(safe-area-inset-bottom))] z-30 flex h-11 w-11 items-center justify-center rounded-full bg-card text-muted-foreground shadow-[0_8px_24px_rgba(22,22,22,.18)] transition-colors hover:text-foreground sm:left-6 sm:bottom-6"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

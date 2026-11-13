@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Brand } from "@/components/Brand";
+import { ServerMessage, failureText, jsonOf } from "@/components/clientFetch";
 
 export default function LoginPage() {
   const [passcode, setPasscode] = useState("");
@@ -11,16 +12,25 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError("");
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ passcode }),
-    });
-    setBusy(false);
-    // Full page load: client-side navigation could reuse a cached "redirect to /login" from before sign-in.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    if (res.ok) window.location.assign("/account");
-    else setError("That passcode didn't work.");
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passcode }),
+      });
+      if (res.status === 401) throw new ServerMessage("That passcode didn't work.");
+      if (!res.ok) {
+        const json = await jsonOf<{ error?: string }>(res);
+        throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      }
+      // Full page load: client-side navigation could reuse a cached "redirect to /login" from before sign-in.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.assign("/account");
+    } catch (err) {
+      setError(failureText(err, "Couldn't reach the site. Check your connection and try again."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

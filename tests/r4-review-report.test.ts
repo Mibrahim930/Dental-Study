@@ -453,7 +453,7 @@ describe("reporting a question", () => {
     expect(r).toMatchObject({ source: "review", ref: `question:${qId}`, topic_id: w.t2 });
     expect(r.reason).toHaveLength(500); // capped
     expect(r.question).toMatchObject({ question: "Rev?", correct_index: 2, section: "Pulp disease" });
-    expect((await exportGET()).status).toBe(404); // not an admin
+    expect((await exportGET()).status).toBe(401); // not an admin, answered like the other admin routes
     signIn(apiReadyUser(true));
     const ex = await exportGET();
     expect(ex.status).toBe(200);

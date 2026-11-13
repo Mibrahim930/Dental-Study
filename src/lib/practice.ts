@@ -13,8 +13,6 @@ import {
   retryCases,
   retryQuestions,
   RETRY_SHARE,
-  checkedAnswer,
-  isValidChoice,
   lastPracticed,
   shuffle,
   shuffledOrder,
@@ -28,6 +26,10 @@ import { EXAM_STYLE, NO_COVER_RULE } from "./examStyle";
 import { flagQuestionEverywhere } from "./classes";
 import { saveReportedQuestion, slideOrigin } from "./reportedQuestions";
 import { markPictures, mentionsPicture, pictureFor, pictureOf, PICTURE_RULES } from "./questionImage";
+import { validateMcq } from "./mcq";
+import { normStem } from "./quizPlan";
+import { track } from "./inflight";
+import { isKeyProblem } from "./http";
 
 export type Style = "mixed" | "recall" | "case" | "caseset";
 export type Mode = "tutor" | "timed";
@@ -117,11 +119,14 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
   );
   // Exams for the same course are built one after another, so two started together never pick the same questions.
   const previous = buildQueue.get(examId) ?? Promise.resolve();
-  const build = previous
-    .then(() => generateAttempt(attemptId, examId, { ...opts, adaptive }))
-    .catch((err) => {
-      db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
-    });
+  // Tracked, so a deploy waits a little for an exam being written instead of throwing away what was paid for.
+  const build = track(
+    previous
+      .then(() => generateAttempt(attemptId, examId, { ...opts, adaptive }))
+      .catch((err) => {
+        db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(String(err), attemptId);
+      }),
+  );
   buildQueue.set(examId, build);
   void build.finally(() => {
     if (buildQueue.get(examId) === build) buildQueue.delete(examId);
@@ -132,6 +137,33 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
 const buildQueue = new Map<number, Promise<void>>();
 
 /**
+ * A practice exam this student started on this exam (from this plan task, or from no task) that is still being
+ * written and is under two minutes old: a second tap on Start gets that one back instead of paying for another.
+ */
+export function writingAttempt(userId: number, examId: number, taskId: number | null = null): number | null {
+  const row = db
+    .prepare(
+      `SELECT a.id FROM attempts a JOIN exams e ON e.id = a.exam_id
+       WHERE e.user_id = ? AND a.exam_id = ? AND a.task_id IS ? AND a.status = 'generating' AND a.started_at > datetime('now', '-2 minutes')
+       ORDER BY a.id DESC LIMIT 1`,
+    )
+    .get(userId, examId, taskId) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+export const INTERRUPTED_ATTEMPT = "This practice exam was interrupted while it was being written. Start it again; questions already written are reused.";
+
+/**
+ * At boot: practice exams still "generating" after five minutes were cut off by a restart (nothing is writing them
+ * any more), so they become errors the student can start again instead of a page that waits forever. Returns how many.
+ */
+export function failStaleAttempts(): number {
+  return db
+    .prepare("UPDATE attempts SET status = 'error', error = ? WHERE status = 'generating' AND started_at < datetime('now', '-5 minutes')")
+    .run(INTERRUPTED_ATTEMPT).changes;
+}
+
+/**
  * What goes into a practice exam:
  * - Questions missed last time come back (never within the same exam), up to RETRY_SHARE of it, with shuffled options.
  * - Everything else is new: questions answered before never repeat, and the AI is shown what was already asked.
@@ -140,12 +172,27 @@ const buildQueue = new Map<number, Promise<void>>();
  */
 /**
  * How many sections (and case sets) are written at the same time. A 20-topic exam makes about 20 AI calls of 20–40 s
- * each: 8 at a time is 3 waves instead of 5 (roughly 1–2 minutes instead of 2–3). Higher risks rate limits (429) on
- * low-tier API keys; a section that fails is caught below and its share is backfilled from the sections that did
- * deliver, so the exam still has its full size. Case sets are longer calls, so they run fewer at once.
+ * each. More at once is faster but hits rate limits (429) on low-tier API keys, since every call is on the expensive
+ * model; a section that fails is caught below and its share is backfilled from the sections that did deliver, so the
+ * exam still has its full size. Case sets are longer calls, so they run fewer at once.
  */
-const SECTION_CONCURRENCY = 8;
-const CASESET_CONCURRENCY = 6;
+export const SECTION_CONCURRENCY = 4;
+export const CASESET_CONCURRENCY = 3;
+
+/**
+ * The most questions (or case sets) asked of one AI call. A bigger request is written in turns of at most this many,
+ * each told what the earlier turns wrote: a long answer can be cut off at the output limit, and a cut-off answer is
+ * billed and lost whole, so this bounds what one failure costs.
+ */
+export const QUESTIONS_PER_CALL = 12;
+export const CASES_PER_CALL = 3;
+
+/** `total` split into near-equal turns of at most `max` (30 by 12 → 10, 10, 10). */
+export function chunkSizes(total: number, max: number): number[] {
+  if (total <= 0) return [];
+  const n = Math.ceil(total / max);
+  return Array.from({ length: n }, (_, i) => Math.floor(total / n) + (i < total % n ? 1 : 0));
+}
 
 async function generateAttempt(attemptId: number, examId: number, opts: AttemptOptions & { adaptive: boolean }) {
   let topics = db.prepare("SELECT * FROM topics WHERE exam_id = ? ORDER BY position").all(examId) as Topic[];
@@ -401,7 +448,8 @@ followed by 3-5 single-best-answer questions about that same patient that build 
 diagnosis → what test or finding confirms it → emergency/definitive treatment → prognosis, complication or follow-up.
 - 5 options per question.
 - The scenario and patient box must not give away answers. Later questions may reveal what earlier ones asked.
-- If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image.
+- If an [IMAGE-CASE] slide fits the patient, set image_page_id; the student sees only its clinical image, with every question of the case.
+- ${PICTURE_RULES} In a case set, image_page_id belongs to the case: only a case with one may ask the student to look at a picture.
 - Slides marked ★IMPORTANT were emphasized by the professor: build cases around them first. Also prioritize annotated slides. Every fact must be supported by the slides.
 
 ${NO_COVER_RULE}
@@ -456,6 +504,30 @@ function unusedCases(topicId: number, limit: number, pages: PageFilter = null): 
   return caseIds.map((id) => (db.prepare("SELECT id FROM questions WHERE case_id = ? ORDER BY id").all(id) as { id: number }[]).map((r) => r.id));
 }
 
+/** Output room for one AI call: enough for `n` questions (or case sets) with their explanations and notes, never more. */
+const tokensFor = (n: number, each: number) => Math.min(32000, 4000 + n * each);
+
+/**
+ * Run `turns` one after another (each sees what the earlier ones wrote). A turn that fails doesn't lose the earlier
+ * ones and doesn't stop the later ones, unless the problem is her key (every turn would fail the same way). Throws
+ * only when nothing at all was written.
+ */
+async function inTurns<T>(sizes: number[], turn: (size: number) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  let error: unknown = null;
+  for (const size of sizes) {
+    try {
+      out.push(...(await turn(size)));
+    } catch (err) {
+      error ??= err;
+      console.error("A practice-writing turn failed; keeping what the other turns wrote", err);
+      if (isKeyProblem(err instanceof Error ? err.message : String(err))) break;
+    }
+  }
+  if (out.length === 0 && error) throw error;
+  return out;
+}
+
 async function generateCases(topic: Topic, count: number, focus: FocusPoint[], only: PageFilter = null): Promise<number[][]> {
   const userId = examOwner(topic.exam_id);
   const pages = pagesFor(topic, only);
@@ -470,59 +542,82 @@ async function generateCases(topic: Topic, count: number, focus: FocusPoint[], o
     }[]
   ).map((c) => `- ${c.scenario.slice(0, 200)}`);
 
-  const out = await generate({
-    creds: credentials(userId),
-    purpose: "case sets",
-    tier: "quality",
-    schema: GeneratedCases,
-    system: CASE_SYSTEM,
-    effort: "medium",
-    maxTokens: 32000,
-    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} case set${count === 1 ? "" : "s"}.${
-      usedPatients.length
-        ? `\n\nCases already used for this topic. Write different patients and, where the slides allow, a different diagnosis or problem:\n${usedPatients.join("\n")}`
-        : ""
-    }${focusText(focus)}\n\nSlides:\n${notes}`,
-  });
-
   const valid = new Set(pages.map((p) => p.id));
   const insertCase = db.prepare("INSERT INTO cases (exam_id, scenario, patient_box, image_page_id) VALUES (?, ?, ?, ?)");
   const insertQ = db.prepare(
     `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id, case_id)
      VALUES (?, ?, ?, 'case', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  const groups: number[][] = [];
-  for (const c of out.cases.slice(0, count)) {
-    const qs = c.questions
-      .map((q) => ({ ...q, correct_index: checkedAnswer(q.options, q.correct_index, q.correct_answer) }))
-      .filter((q) => isValidChoice(q.options, q.correct_index));
-    if (qs.length === 0) continue;
-    const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
-    const box = JSON.stringify(c.patient_box);
-    const caseId = Number(insertCase.run(topic.exam_id, c.scenario, box, image).lastInsertRowid);
-    groups.push(
-      qs.map((q) => {
-        const order = shuffle(q.options.map((_, i) => i));
-        return Number(
-          insertQ.run(
-            topic.exam_id,
-            topic.id,
-            upsertConcept(userId, q.concept),
-            box,
-            q.stem,
-            JSON.stringify(order.map((i) => q.options[i])),
-            order.indexOf(q.correct_index),
-            q.explanation,
-            optionNotesJson(q.options, q.option_notes, order),
-            valid.has(q.source_page_id) ? q.source_page_id : null,
-            image,
-            caseId,
-          ).lastInsertRowid,
-        );
-      }),
-    );
-  }
-  return groups;
+  // Cases written by the earlier turns of this request, so a later turn writes other patients.
+  const written: string[] = [];
+
+  return inTurns(chunkSizes(count, CASES_PER_CALL), async (size) => {
+    const out = await generate({
+      creds: credentials(userId),
+      purpose: "case sets",
+      tier: "quality",
+      schema: GeneratedCases,
+      system: CASE_SYSTEM,
+      effort: "medium",
+      maxTokens: tokensFor(size, 5000),
+      content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${size} case set${size === 1 ? "" : "s"}.${
+        usedPatients.length
+          ? `\n\nCases already used for this topic. Write different patients and, where the slides allow, a different diagnosis or problem:\n${usedPatients.join("\n")}`
+          : ""
+      }${
+        written.length
+          ? `\n\nCases already written for this practice exam. Write different patients and questions:\n${written.map((w) => `- ${w}`).join("\n")}`
+          : ""
+      }${focusText(focus)}\n\nSlides:\n${notes}`,
+    });
+
+    const groups: number[][] = [];
+    for (const c of out.cases.slice(0, size)) {
+      const image = c.image_page_id != null && imageIds.has(c.image_page_id) ? c.image_page_id : null;
+      let droppedForPicture = 0;
+      const qs = c.questions.flatMap((raw) => {
+        const q = validateMcq(raw, { optionCount: 5, validPageIds: valid });
+        if (typeof q === "string") return [];
+        // A question that sends the student to a picture must have one: the case's, else its own slide's (the same
+        // check as single questions); otherwise it goes.
+        let picture = image;
+        if (picture == null && mentionsPicture(q.stem, "generous")) {
+          picture = pictureFor(pages, null, q.source_page_id, q.stem)?.page_id ?? null;
+          if (picture == null) {
+            droppedForPicture++;
+            return [];
+          }
+        }
+        return [{ ...q, explanation: raw.explanation, concept: raw.concept, image_page_id: picture }];
+      });
+      // A case is a set: one left with fewer than three questions after dropping picture questions isn't one any more.
+      if (qs.length === 0 || (droppedForPicture > 0 && qs.length < 3)) continue;
+      const box = JSON.stringify(c.patient_box);
+      const caseId = Number(insertCase.run(topic.exam_id, c.scenario, box, image).lastInsertRowid);
+      written.push(`${c.scenario.slice(0, 200)} (${qs.map((q) => q.stem.slice(0, 100)).join(" / ")})`);
+      groups.push(
+        qs.map((q) =>
+          Number(
+            insertQ.run(
+              topic.exam_id,
+              topic.id,
+              upsertConcept(userId, q.concept),
+              box,
+              q.stem,
+              JSON.stringify(q.options),
+              q.correct_index,
+              q.explanation,
+              q.option_notes ? JSON.stringify(q.option_notes) : null,
+              q.source_page_id,
+              q.image_page_id,
+              caseId,
+            ).lastInsertRowid,
+          ),
+        ),
+      );
+    }
+    return groups;
+  });
 }
 
 async function generateForTopic(topic: Topic, count: number, style: Style, focus: FocusPoint[], only: PageFilter = null): Promise<number[]> {
@@ -536,9 +631,9 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
     }[]
   ).map((c) => c.name);
 
-  const mix =
+  const mix = (n: number) =>
     style === "recall"
-      ? `all ${count} type=recall`
+      ? `all ${n} type=recall`
       : style === "case"
         ? `mostly type=case${withPictures.length ? ", plus type=image where a slide marked [IMAGE] or [IMAGE-CASE] fits" : ""}, at most 1 recall`
         : `a mix: about 60% recall, 25% case${withPictures.length ? ", 15% image" : ""}`;
@@ -546,68 +641,72 @@ async function generateForTopic(topic: Topic, count: number, style: Style, focus
   const notes = markCoverage(markPictures(slideNotesText(pages), pages), topic.id);
   const asked = askedStems(topic.id);
 
-  const out = await generate({
-    creds: credentials(userId),
-    purpose: "practice questions",
-    tier: "quality",
-    schema: GeneratedQuestions,
-    system: SYSTEM,
-    effort: "medium",
-    maxTokens: 32000,
-    content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${count} questions: ${mix}.${
-      asked.length
-        ? `\n\nQuestions the student has already had on this topic. Do not repeat them or write close variants; test other facts and slides:\n${asked.map((a) => `- ${a}`).join("\n")}`
-        : ""
-    }${focusText(focus)}\n\nSlides:\n${notes}`,
-  });
-
   const valid = new Set(pages.map((p) => p.id));
   const insert = db.prepare(
     `INSERT INTO questions (exam_id, topic_id, concept_id, type, patient_box, stem, options, correct_index, explanation, option_notes, source_page_id, image_page_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // Drop anything the AI wrote that repeats an existing question on this topic word for word.
-  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const seen = new Set(
-    (db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL").all(topic.id) as { stem: string }[]).map((r) => norm(r.stem)),
-  );
-  const ids: number[] = [];
-  for (const q of out.questions.slice(0, count)) {
-    q.correct_index = checkedAnswer(q.options, q.correct_index, q.correct_answer);
-    if (!isValidChoice(q.options, q.correct_index)) continue;
-    if (seen.has(norm(q.stem))) continue;
-    seen.add(norm(q.stem));
-    // A question about a picture must have one to show: the slide it names, else the slide it was written from.
-    // "generous": there is no checking pass on practice exams, so a missed picture question would be shown without its picture.
-    const wantsPicture = q.type === "image" || q.image_page_id != null || mentionsPicture(q.stem, "generous");
-    const picture = wantsPicture ? pictureFor(pages, q.image_page_id, valid.has(q.source_page_id) ? q.source_page_id : null, q.stem) : null;
-    if (wantsPicture && !picture) continue;
-    const imagePage = picture?.page_id ?? null;
-    const type = q.type === "image" && !imagePage ? (q.patient_box ? "case" : "recall") : q.type;
-    // Shuffle options so the correct answer isn't biased to one position.
-    const order = shuffle(q.options.map((_, i) => i));
-    const options = order.map((i) => q.options[i]);
-    const correct = order.indexOf(q.correct_index);
-    ids.push(
-      Number(
-        insert.run(
-          topic.exam_id,
-          topic.id,
-          upsertConcept(userId, q.concept),
-          type,
-          q.patient_box ? JSON.stringify(q.patient_box) : null,
-          q.stem,
-          JSON.stringify(options),
-          correct,
-          q.explanation,
-          optionNotesJson(q.options, q.option_notes, order),
-          valid.has(q.source_page_id) ? q.source_page_id : null,
-          imagePage,
-        ).lastInsertRowid,
-      ),
-    );
-  }
-  return ids;
+  const seen = new Set((db.prepare("SELECT stem FROM questions WHERE topic_id = ? AND case_id IS NULL").all(topic.id) as { stem: string }[]).map((r) => normStem(r.stem)));
+  // Questions written by the earlier turns of this request, so a later turn tests other facts.
+  const written: string[] = [];
+
+  return inTurns(chunkSizes(count, QUESTIONS_PER_CALL), async (size) => {
+    const out = await generate({
+      creds: credentials(userId),
+      purpose: "practice questions",
+      tier: "quality",
+      schema: GeneratedQuestions,
+      system: SYSTEM,
+      effort: "medium",
+      maxTokens: tokensFor(size, 1000),
+      content: `Topic: ${topic.title}\nConcept names: ${concepts.join("; ")}\n\nWrite ${size} questions: ${mix(size)}.${
+        asked.length
+          ? `\n\nQuestions the student has already had on this topic. Do not repeat them or write close variants; test other facts and slides:\n${asked.map((a) => `- ${a}`).join("\n")}`
+          : ""
+      }${
+        written.length
+          ? `\n\nQuestions already written for this practice exam. Do not repeat them or ask the same facts again:\n${written.map((w) => `- ${w}`).join("\n")}`
+          : ""
+      }${focusText(focus)}\n\nSlides:\n${notes}`,
+    });
+
+    const ids: number[] = [];
+    for (const raw of out.questions.slice(0, size)) {
+      const q = validateMcq(raw, { optionCount: 5, validPageIds: valid });
+      if (typeof q === "string") continue;
+      const key = normStem(q.stem);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // A question about a picture must have one to show: the slide it names, else the slide it was written from.
+      // "generous": there is no checking pass on practice exams, so a missed picture question would be shown without its picture.
+      const wantsPicture = raw.type === "image" || raw.image_page_id != null || mentionsPicture(q.stem, "generous");
+      const picture = wantsPicture ? pictureFor(pages, raw.image_page_id, q.source_page_id, q.stem) : null;
+      if (wantsPicture && !picture) continue;
+      const imagePage = picture?.page_id ?? null;
+      const type = raw.type === "image" && !imagePage ? (raw.patient_box ? "case" : "recall") : raw.type;
+      written.push(q.stem.length > 160 ? q.stem.slice(0, 157) + "…" : q.stem);
+      ids.push(
+        Number(
+          insert.run(
+            topic.exam_id,
+            topic.id,
+            upsertConcept(userId, raw.concept),
+            type,
+            raw.patient_box ? JSON.stringify(raw.patient_box) : null,
+            q.stem,
+            JSON.stringify(q.options),
+            q.correct_index,
+            raw.explanation,
+            q.option_notes ? JSON.stringify(q.option_notes) : null,
+            q.source_page_id,
+            imagePage,
+          ).lastInsertRowid,
+        ),
+      );
+    }
+    return ids;
+  });
 }
 
 /** Tag slides that already have questions, e.g. "[P12] (asked 3x)", so the AI favours untested slides. */
@@ -668,34 +767,45 @@ export function reportAttemptQuestion(userId: number, attemptId: number, questio
     if (!row || row.reported) return false;
     db.prepare("UPDATE attempt_questions SET reported = 1 WHERE attempt_id = ? AND question_id = ?").run(attemptId, questionId);
     flagQuestionEverywhere(questionId, reason);
-    const q = db
-      .prepare(
-        `SELECT q.id, q.exam_id, q.topic_id, q.stem, q.options, q.correct_index, q.explanation, q.option_notes, q.source_page_id, c.name AS concept, e.name AS exam
-         FROM questions q JOIN exams e ON e.id = q.exam_id LEFT JOIN concepts c ON c.id = q.concept_id WHERE q.id = ?`,
-      )
-      .get(questionId) as { exam_id: number; topic_id: number | null; stem: string; options: string; correct_index: number; explanation: string; option_notes: string | null; source_page_id: number | null; concept: string | null; exam: string };
-    saveReportedQuestion({
-      userId,
-      examId: q.exam_id,
-      topicId: q.topic_id,
-      source: "practice",
-      ref: `question:${questionId}`,
-      question: {
-        question: q.stem,
-        options: JSON.parse(q.options) as string[],
-        correct_index: q.correct_index,
-        explanation: q.explanation,
-        option_notes: q.option_notes ? (JSON.parse(q.option_notes) as string[]) : null,
-        concept: q.concept,
-        ...slideOrigin(q.source_page_id, q.topic_id),
-        exam: q.exam,
-      },
-      reason,
-    });
+    saveQuestionReport(userId, questionId, "practice", reason);
     const a = db.prepare("SELECT status FROM attempts WHERE id = ?").get(attemptId) as { status: string };
     if (a.status === "finished") db.prepare("UPDATE attempts SET score = ? WHERE id = ?").run(attemptScore(attemptId), attemptId);
     return true;
   })();
+}
+
+/**
+ * The owner's record of a reported practice question (its text, key, notes and where it came from), shared by the
+ * report from inside an exam and the one from the review page or an old results page.
+ */
+export function saveQuestionReport(userId: number, questionId: number, source: "practice" | "review", reason: string | null) {
+  const q = db
+    .prepare(
+      `SELECT q.id, q.exam_id, q.topic_id, q.stem, q.options, q.correct_index, q.explanation, q.option_notes, q.source_page_id, c.name AS concept, e.name AS exam
+       FROM questions q JOIN exams e ON e.id = q.exam_id LEFT JOIN concepts c ON c.id = q.concept_id WHERE q.id = ?`,
+    )
+    .get(questionId) as
+    | { id: number; exam_id: number; topic_id: number | null; stem: string; options: string; correct_index: number; explanation: string; option_notes: string | null; source_page_id: number | null; concept: string | null; exam: string }
+    | undefined;
+  if (!q) return;
+  saveReportedQuestion({
+    userId,
+    examId: q.exam_id,
+    topicId: q.topic_id,
+    source,
+    ref: `question:${q.id}`,
+    question: {
+      question: q.stem,
+      options: JSON.parse(q.options) as string[],
+      correct_index: q.correct_index,
+      explanation: q.explanation,
+      option_notes: q.option_notes ? (JSON.parse(q.option_notes) as string[]) : null,
+      concept: q.concept,
+      ...slideOrigin(q.source_page_id, q.topic_id),
+      exam: q.exam,
+    },
+    reason,
+  });
 }
 
 /** Right answers over the questions that count (reported ones don't); 0 when none count. */

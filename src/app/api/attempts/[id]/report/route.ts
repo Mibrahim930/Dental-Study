@@ -4,6 +4,7 @@ import { attemptView } from "@/lib/attemptView";
 import { cleanReason } from "@/lib/reportedQuestions";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsAttempt } from "@/lib/owner";
+import { readJson } from "@/lib/http";
 
 /**
  * Report a question during (or after) a practice exam: it leaves this exam and its score, is flagged everywhere (own
@@ -14,9 +15,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/attempts/[i
   if (!user) return unauthorized();
   const attemptId = Number((await ctx.params).id);
   if (!ownsAttempt(user.id, attemptId)) return notFound();
-  const body = (await request.json().catch(() => null)) as { questionId?: unknown; reason?: unknown } | null;
-  if (!Number.isInteger(body?.questionId)) return NextResponse.json({ error: "Unknown question" }, { status: 400 });
-  if (!reportAttemptQuestion(user.id, attemptId, body!.questionId as number, cleanReason(body?.reason))) {
+  const body = await readJson(request);
+  if (!Number.isInteger(body.questionId)) return NextResponse.json({ error: "Unknown question" }, { status: 400 });
+  if (!reportAttemptQuestion(user.id, attemptId, body.questionId as number, cleanReason(body.reason))) {
     return NextResponse.json({ error: "Unknown question" }, { status: 400 });
   }
   return NextResponse.json(attemptView(attemptId));

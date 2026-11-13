@@ -4,6 +4,7 @@ import { apiUser, unauthorized } from "@/lib/user";
 import { addDays, rebuildPlan } from "@/lib/planner";
 import { isValidDate } from "@/lib/calendar";
 import { firstOccurrence, maskOf } from "@/lib/busy";
+import { readJson } from "@/lib/http";
 
 /**
  * Mark busy days. Body: { start, end, label } for a range, or { start, label, weekdays: [0..6], until } for
@@ -12,12 +13,7 @@ import { firstOccurrence, maskOf } from "@/lib/busy";
 export async function POST(request: Request) {
   const user = await apiUser();
   if (!user) return unauthorized();
-  let body: { start?: unknown; end?: unknown; label?: unknown; weekdays?: unknown; until?: unknown };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return NextResponse.json({ error: "Something went wrong sending that. Try again." }, { status: 400 });
-  }
+  const body = await readJson(request);
   const { start, end, weekdays, until } = body;
   const label = (typeof body.label === "string" && body.label.replace(/\s+/g, " ").trim().slice(0, 80)) || "Busy";
   if (!isValidDate(start)) return NextResponse.json({ error: "Pick a start date." }, { status: 400 });

@@ -3,6 +3,7 @@ import { db, type Topic } from "@/lib/db";
 import { getSectionQuiz } from "@/lib/study";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
+import { aiFailure } from "@/lib/http";
 
 export const maxDuration = 300;
 
@@ -29,9 +30,6 @@ export async function POST(request: Request, ctx: RouteContext<"/api/sessions/[i
     const questions = await getSectionQuiz({ ...topic, checks_json: null, checks_version: null });
     return NextResponse.json({ ok: true, count: questions.length });
   } catch (err) {
-    console.error(`Rewriting the section quiz for topic ${topic.id} failed`, err);
-    const msg = err instanceof Error ? err.message : String(err);
-    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
-    return NextResponse.json({ error: keyProblem ? msg : "The AI didn't answer in time. Try again in a moment." }, { status: 500 });
+    return aiFailure(err, `Rewriting the section quiz for topic ${topic.id}`, "The AI didn't answer in time. Try again in a moment.");
   }
 }

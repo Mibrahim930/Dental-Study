@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { weakestTopics, type PlanTask } from "@/lib/planner";
-import { startAttempt } from "@/lib/practice";
+import { startAttempt, writingAttempt } from "@/lib/practice";
 
 // Where a plan task leads: a study session at the right topic, a practice exam, or the review queue.
 export async function POST(_request: Request, ctx: RouteContext<"/api/planner/tasks/[id]/start">) {
@@ -26,7 +26,8 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/planner/ta
     default: {
       const ids = task.kind === "weak_review" ? weakestTopics(task.exam_id!) : task.kind === "final_practice" ? [] : topicIds;
       const size = task.kind === "final_practice" ? 25 : 10;
-      const id = startAttempt(task.exam_id!, { size, mode: task.kind === "final_practice" ? "timed" : "tutor", style: "mixed", topicIds: ids, taskId: task.id });
+      // A second tap while this task's exam is still being written gets that exam, not a second one to pay for.
+      const id = writingAttempt(user.id, task.exam_id!, task.id) ?? startAttempt(task.exam_id!, { size, mode: task.kind === "final_practice" ? "timed" : "tutor", style: "mixed", topicIds: ids, taskId: task.id });
       return NextResponse.json({ url: `/attempts/${id}` });
     }
   }

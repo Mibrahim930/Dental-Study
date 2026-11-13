@@ -720,7 +720,7 @@ describe("reportAttemptQuestion", () => {
 
 // ---------------------------------------------------------------------------------------------------------------
 describe("report routes", () => {
-  it("signed out: 401 on the four report routes, 404 on the admin export", async () => {
+  it("signed out: 401 on the four report routes and on the admin export", async () => {
     const w = world();
     const { attemptId, qIds } = attemptWith(w, 1);
     const v = (recordQuizAnswer(w.userId, w.t1, 0, 1, false), openLectureReview(w.userId, w.examId, w.doc1));
@@ -729,7 +729,7 @@ describe("report routes", () => {
     expect((await attemptReportPOST(post({ questionId: qIds[0] }), ctx(attemptId))).status).toBe(401);
     expect((await quizReportPOST(post({ topicId: w.t1, questionId: "a0" }), ctx(w.sessionId))).status).toBe(401);
     expect((await flagPOST(post({}), ctx(qIds[0]))).status).toBe(401);
-    expect((await exportGET()).status).toBe(404);
+    expect((await exportGET()).status).toBe(401);
     expect((db.prepare("SELECT reported FROM attempt_questions WHERE attempt_id = ?").get(attemptId) as { reported: number }).reported).toBe(0);
   });
 

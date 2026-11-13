@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
 import { db, type Topic } from "@/lib/db";
-import { getLesson, getSectionQuiz, quizIsCurrent, topicPages } from "@/lib/study";
-import { parseNotes } from "@/lib/processing";
-import { markTopicStudied } from "@/lib/planner";
+import { getLesson, lessonIsCurrent, recentFailure, slideNotes, topicPages } from "@/lib/study";
 import { topicConcepts } from "@/lib/memory";
 import { apiUser, notFound, unauthorized } from "@/lib/user";
 import { ownsSession } from "@/lib/owner";
+import { aiFailure } from "@/lib/http";
+import { refuseCrossSite } from "../../crossSite";
 
 export const maxDuration = 300;
 
+/**
+ * One section's lesson (written once and cached). Nothing else happens here: the page reports the lesson as shown with
+ * POST …/shown, which moves her place, marks the section studied and starts its quiz. `prefetch=1` (the page warming
+ * the next section) never retries a lesson whose writing failed a moment ago: it answers 204 instead.
+ */
 export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id]/lesson">) {
+  const refused = refuseCrossSite(request);
+  if (refused) return refused;
   const user = await apiUser();
   if (!user) return unauthorized();
   if (!ownsSession(user.id, Number((await ctx.params).id))) return notFound();
@@ -21,17 +28,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
   if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
   const topic = db.prepare("SELECT * FROM topics WHERE exam_id = ? AND position = ?").get(session.exam_id, position) as Topic | undefined;
   if (!topic) return NextResponse.json({ error: "Topic not found" }, { status: 404 });
-  if (!prefetch) {
-    db.prepare("UPDATE study_sessions SET current_position = ? WHERE id = ?").run(position, sessionId);
-    markTopicStudied(user.id, topic.id);
-    // Start writing this topic's section quiz now, alongside the lesson, instead of after it (saves ~30 s on a first
-    // open). The quiz request the page sends once the lesson shows joins this same run (getSectionQuiz shares one
-    // generation per topic). Only for the topic she actually opened, never for a prefetch: a cached quiz costs nothing,
-    // and the next topic's quiz isn't written until she goes there.
-    if (!quizIsCurrent(topic)) {
-      void getSectionQuiz(topic).catch((err) => console.error(`Section quiz for topic ${topic.id} (started with the lesson) failed`, err));
-    }
-  }
+  if (prefetch && !lessonIsCurrent(topic) && recentFailure("lesson", topic.id)) return new NextResponse(null, { status: 204 });
 
   try {
     const lesson = await getLesson(topic);
@@ -53,20 +50,17 @@ export async function GET(request: Request, ctx: RouteContext<"/api/sessions/[id
       stressed: pages
         .filter((p) => p.emphasized)
         .map((p) => {
-          const n = parseNotes(p);
+          const n = slideNotes(p);
           return {
             page_id: p.id,
             where: `${p.filename.replace(/\.pdf$/i, "")}, slide ${p.page_number}`,
-            point: n?.emphasis_note ?? n?.key_facts?.[0] ?? n?.summary ?? p.title ?? "",
+            point: n?.emphasis_note ?? n?.key_facts[0] ?? n?.summary ?? p.title ?? "",
           };
         })
         .filter((s) => s.point),
     });
   } catch (err) {
     // The technical text goes to the server log; the student sees a plain message (key problems are worth saying).
-    console.error(`Lesson for topic ${topic.id} failed`, err);
-    const msg = err instanceof Error ? err.message : String(err);
-    const keyProblem = /key|auth|401|403|credit|billing/i.test(msg);
-    return NextResponse.json({ error: keyProblem ? msg : "Couldn't write this lesson right now. Try again in a moment." }, { status: 500 });
+    return aiFailure(err, `Lesson for topic ${topic.id}`, "Couldn't write this lesson right now. Try again in a moment.");
   }
 }

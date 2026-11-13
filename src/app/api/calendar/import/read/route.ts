@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { apiUser, unauthorized } from "@/lib/user";
 import { credentials, type Credentials } from "@/lib/credentials";
 import { plannerSettings, todayIn } from "@/lib/planner";
-import { ImageTooLarge, imageToJpeg, openPdf, renderPage, sniffFile } from "@/lib/pdf";
-import { isKeyProblem, MAX_PASTE_CHARS, readSchedule } from "@/lib/scheduleImport";
+import { ImageTooLarge, imageToJpeg, openPdf, PageShapeError, pictureRefusal, renderPage, sniffFile } from "@/lib/pdf";
+import { MAX_PASTE_CHARS, readSchedule } from "@/lib/scheduleImport";
+import { aiFailure } from "@/lib/http";
 
 export const maxDuration = 120;
 
@@ -46,13 +47,8 @@ export async function POST(request: Request) {
   for (const file of files) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const kind = sniffFile(bytes);
-    if (kind === "heic") {
-      return fail(
-        `"${file.name}" is an iPhone HEIC photo, which can't be read here yet. Take a screenshot of the photo (screenshots are PNG) and add that instead.`,
-      );
-    }
-    if (kind === "webp") return fail(`"${file.name}" is a WebP image, which can't be read here. Take a screenshot of it or save it as JPG or PNG.`);
-    if (kind === "unknown") return fail(`"${file.name}" isn't a photo or a PDF. Use a JPG or PNG photo, a PDF, or paste the text.`);
+    const refusal = pictureRefusal(file.name, kind, { pdf: true });
+    if (refusal) return fail(refusal);
     try {
       if (kind === "pdf") {
         const doc = openPdf(bytes);
@@ -71,7 +67,7 @@ export async function POST(request: Request) {
         images.push(imageToJpeg(bytes, kind));
       }
     } catch (err) {
-      if (err instanceof ImageTooLarge) return fail(err.message);
+      if (err instanceof ImageTooLarge || err instanceof PageShapeError) return fail(err.message);
       console.error("Schedule import: couldn't open", file.name, err);
       return fail(`We couldn't open "${file.name}". Try another photo, or paste the text instead.`);
     }
@@ -96,8 +92,6 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     // Technical detail to the server log; the student sees a plain message (key and billing problems are worth saying).
-    console.error("Schedule import failed", err);
-    const msg = err instanceof Error ? err.message : String(err);
-    return fail(isKeyProblem(msg) ? msg :"The AI couldn't read that just now. Try again in a moment, or type the exams in the table.", 502);
+    return aiFailure(err, "Schedule import", "The AI couldn't read that just now. Try again in a moment, or type the exams in the table.");
   }
 }

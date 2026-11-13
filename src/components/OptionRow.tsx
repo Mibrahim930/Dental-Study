@@ -109,7 +109,7 @@ export function OptionRow({
             onToggleCross();
           }}
           onKeyDown={(e) => e.stopPropagation()}
-          className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[15px] font-extrabold transition-colors ${
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[15px] font-extrabold transition-colors ${
             crossed ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted-strong hover:text-foreground"
           }`}
         >

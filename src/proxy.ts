@@ -19,5 +19,9 @@ export function proxy(request: NextRequest) {
 export const config = {
   // api/ics is the calendar feed: Google/Apple fetch it with a secret token instead of cookies.
   // The app icons and manifest are public so the browser tab and home-screen icon work before signing in.
-  matcher: ["/((?!login|api/login|api/ics|_next/static|_next/image|favicon.ico|icon.svg|apple-icon|manifest.webmanifest).*)"],
+  // Each exemption is the whole path (only Next's own .rsc/.json transport endings may follow), so a look-alike such as
+  // /loginfoo or /icon.svg.bak is still guarded. /_next/image is guarded too: the app never uses next/image.
+  matcher: [
+    "/((?!(?:login|api/login|api/ics/[^/]+|_next/static/.+|favicon\\.ico|icon\\.svg|apple-icon|manifest\\.webmanifest)(?:\\.json|\\.rsc|\\.segments/.+)?/?$).*)",
+  ],
 };

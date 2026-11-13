@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 const KINDS = [
   ["block", "Block exam"],
@@ -19,11 +20,20 @@ export function CalendarForms({ date }: { date: string }) {
   async function submit(url: string, body: object) {
     setBusy(true);
     setError("");
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    setBusy(false);
-    if (!res.ok) return setError((await res.json()).error ?? "Something went wrong.");
-    setOpen(null);
-    router.refresh();
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (signedOut(res)) return;
+      if (!res.ok) {
+        const json = await jsonOf<{ error?: string }>(res);
+        throw new ServerMessage(typeof json?.error === "string" ? json.error : "");
+      }
+      setOpen(null);
+      router.refresh();
+    } catch (err) {
+      setError(failureText(err, "Couldn't save that. Check your connection and try again."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

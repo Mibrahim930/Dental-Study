@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { Icon, ICONS } from "./ui";
 
 /** Largest PDF accepted; keep in step with MAX_UPLOAD_MB in the upload route and proxyClientMaxBodySize in next.config.ts. */
 const MAX_UPLOAD_MB = 125;
@@ -77,9 +78,7 @@ export function Uploader({ examId }: { examId: number }) {
       }`}
     >
       <span className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-butter text-on-butter" aria-hidden>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />
-        </svg>
+        <Icon d={ICONS.upload} size={22} />
       </span>
       <p className="text-[15px] font-semibold">Drop lecture PDFs here</p>
       <button type="button" className="btn-primary btn-sm" disabled={!!status} onClick={() => input.current?.click()}>

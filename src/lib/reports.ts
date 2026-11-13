@@ -96,6 +96,11 @@ export function reportImagePath(reportId: number, n: number): string | null {
   return fs.existsSync(file) ? file : null;
 }
 
+/** Screenshots of reports after `afterId`, oldest report first, with their paths relative to FILES_DIR (for backups). */
+export function reportImagesAfter(afterId: number): { reportId: number; path: string }[] {
+  return db.prepare("SELECT report_id reportId, path FROM report_images WHERE report_id > ? ORDER BY report_id, n").all(afterId) as { reportId: number; path: string }[];
+}
+
 export function markReportSeen(reportId: number): boolean {
   return db.prepare("UPDATE reports SET seen_at = datetime('now') WHERE id = ? AND seen_at IS NULL").run(reportId).changes > 0;
 }

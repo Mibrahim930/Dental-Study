@@ -1,4 +1,5 @@
-// Perf fix #3: practice exams write 8 sections (6 case sets) at once; rate-limited sections are backfilled.
+// Perf fix #3: practice exams write sections in parallel; rate-limited sections are backfilled.
+// Audit M3 lowered the limits to 4 sections (3 case sets) at once: 8 parallel calls on the expensive model hit rate limits on small keys.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let inFlight = 0;
@@ -98,20 +99,20 @@ beforeEach(() => {
 });
 
 describe("practice exams write sections in parallel", () => {
-  it("8 sections are written at the same time", async () => {
+  it("4 sections are written at the same time", async () => {
     const w = world(8);
     const id = startAttempt(w.examId, { size: 16, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
     expect(members(id)).toHaveLength(16);
-    expect(maxInFlight).toBe(8);
+    expect(maxInFlight).toBe(4);
   });
 
-  it("never more than 8 at once on a bigger exam", async () => {
+  it("never more than 4 at once on a bigger exam", async () => {
     const w = world(20);
     const id = startAttempt(w.examId, { size: 25, mode: "tutor", style: "recall", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
     expect(members(id)).toHaveLength(25);
-    expect(maxInFlight).toBe(8);
+    expect(maxInFlight).toBe(4);
   });
 
   it("3 of 8 sections rate-limited (429): the exam still forms at full size from the other 5", async () => {
@@ -137,12 +138,12 @@ describe("practice exams write sections in parallel", () => {
     expect(st.error).toMatch(/429|rate/i);
   });
 
-  it("case sets: 6 at once, and rate-limited ones don't sink the exam", async () => {
+  it("case sets: 3 at once, and rate-limited ones don't sink the exam", async () => {
     const w = world(8);
     // 32 questions → 8 case sets, one per section.
     const id = startAttempt(w.examId, { size: 32, mode: "tutor", style: "caseset", adaptive: false });
     expect((await ready(id)).status).toBe("ready");
-    expect(maxInFlight).toBe(6);
+    expect(maxInFlight).toBe(3);
 
     maxInFlight = 0;
     const w2 = world(8);

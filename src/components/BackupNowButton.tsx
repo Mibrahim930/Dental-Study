@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { jsonOf, signedOut } from "./clientFetch";
 
 export function BackupNowButton() {
   const router = useRouter();
@@ -14,11 +15,18 @@ export function BackupNowButton() {
         onClick={async () => {
           setBusy(true);
           setMsg("");
-          const res = await fetch("/api/admin/backup", { method: "POST" });
-          const json = await res.json();
-          setBusy(false);
-          setMsg(json.ok ? "Backup complete." : `Backup failed: ${json.message}`);
-          router.refresh();
+          try {
+            const res = await fetch("/api/admin/backup", { method: "POST" });
+            if (signedOut(res)) return;
+            const json = await jsonOf<{ ok?: boolean; message?: string }>(res);
+            // Admin only: the backup's own message is kept, since the owner needs it to fix the backup settings.
+            setMsg(json?.ok ? "Backup complete." : `Backup failed${typeof json?.message === "string" && json.message ? `: ${json.message}` : ". Try again in a minute."}`);
+            router.refresh();
+          } catch {
+            setMsg("Couldn't reach the site. Check your connection and try again.");
+          } finally {
+            setBusy(false);
+          }
         }}
       >
         {busy ? "Backing up…" : "Back up now"}

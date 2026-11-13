@@ -31,6 +31,7 @@ import { db, type Topic } from "@/lib/db";
 import { getLesson, lessonIsCurrent, lessonText, LESSON_VERSION } from "@/lib/study";
 import { addSharedExam, createClass, joinClass, shareExam } from "@/lib/classes";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
+import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
 
 const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
@@ -545,7 +546,8 @@ describe("lesson route", () => {
     expect(body.lesson.slides).toEqual([]);
   });
 
-  it("a prefetch doesn't mark the topic studied or move the session; a real open does", async () => {
+  // Audit M4: no lesson GET marks or moves anything any more; the page's POST …/shown (lesson on screen) does.
+  it("neither a prefetch nor a real open marks the topic studied or moves the session; 'shown' does", async () => {
     const w = world(1);
     currentUserId = w.userId;
     lessonWriter = () => good(w, "fact a0 fact b0");
@@ -554,7 +556,10 @@ describe("lesson route", () => {
     expect(db.prepare("SELECT COUNT(*) c FROM topic_study WHERE topic_id = ?").get(w.topicId)).toEqual({ c: 0 });
     expect(db.prepare("SELECT current_position p FROM study_sessions WHERE id = ?").get(w.sessionId)).toEqual({ p: 5 });
     expect(calls.some((c) => c.purpose === "section quiz")).toBe(false);
-    await getRoute(w);
+    expect((await getRoute(w)).status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) c FROM topic_study WHERE topic_id = ?").get(w.topicId)).toEqual({ c: 0 });
+    expect(db.prepare("SELECT current_position p FROM study_sessions WHERE id = ?").get(w.sessionId)).toEqual({ p: 5 });
+    expect((await shownPOST(new Request("http://x/s", { method: "POST", body: JSON.stringify({ position: 0 }) }), ctx(w.sessionId))).status).toBe(200);
     expect(db.prepare("SELECT COUNT(*) c FROM topic_study WHERE topic_id = ?").get(w.topicId)).toEqual({ c: 1 });
     expect(db.prepare("SELECT current_position p FROM study_sessions WHERE id = ?").get(w.sessionId)).toEqual({ p: 0 });
   });
@@ -569,7 +574,8 @@ describe("lesson route", () => {
     expect((await getRoute(w, "position=9")).status).toBe(404);
   });
 
-  it("a failing writer gives a 500 with a plain message", async () => {
+  // Audit S7: an AI failure answers 502 (the upstream failed), through aiFailure.
+  it("a failing writer gives a 502 with a plain message", async () => {
     const w = world(1);
     currentUserId = w.userId;
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -578,7 +584,7 @@ describe("lesson route", () => {
     };
     const res = await getRoute(w);
     err.mockRestore();
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect((await res.json()).error).not.toContain("internal");
   });
 });

@@ -1,0 +1,32 @@
+# Checks every push and pull request before anything reaches Railway: types, lint, the test suite, and known
+# security advisories in the packages the live site runs.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Dummy values: the tests sign cookies and gate pages with them. Nothing real is used in CI.
+      SECRET_KEY: ci-dummy-secret
+      APP_PASSCODE: ci-dummy-passcode
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: seven migration tests read old versions of files with `git show`.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Generates the RouteContext/PageProps types tsc needs; the throwaway DATA_DIR keeps it away from any real data.
+      - run: DATA_DIR=$RUNNER_TEMP/typegen npx next typegen
+      - run: NODE_OPTIONS=--max-old-space-size=6144 npx tsc --noEmit -p .
+      - run: npx eslint .
+      - run: npx vitest run
+      - run: npm audit --omit=dev --audit-level=high

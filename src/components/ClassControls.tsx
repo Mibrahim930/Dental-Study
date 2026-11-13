@@ -3,10 +3,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "./Toaster";
+import { jsonOf, signedOut } from "./clientFetch";
 
-async function post(url: string, body?: object) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  return { ok: res.ok, json: await res.json().catch(() => ({})) };
+/** POST and never throw: a dropped connection or a non-JSON answer comes back as `ok: false` with a plain message. */
+async function post(url: string, body?: object): Promise<{ ok: boolean; json: Record<string, unknown> & { error?: string } }> {
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    if (signedOut(res)) return { ok: false, json: {} };
+    const json = (await jsonOf<Record<string, unknown>>(res)) ?? {};
+    const error = typeof json.error === "string" && json.error ? json.error : res.ok ? undefined : "That didn't go through. Try again in a minute.";
+    return { ok: res.ok, json: { ...json, error } };
+  } catch {
+    return { ok: false, json: { error: "Couldn't reach the site. Check your connection and try again." } };
+  }
 }
 
 export function ClassForms() {

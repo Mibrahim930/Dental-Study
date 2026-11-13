@@ -4,13 +4,15 @@ import { encryptSecret } from "@/lib/auth";
 import { currentUser, unauthorized, type Provider } from "@/lib/user";
 import { verifyKey } from "@/lib/ai";
 import { resumeUnfinished } from "@/lib/processing";
+import { readJson } from "@/lib/http";
 
 // Save (or replace) the user's own API key after checking that it works.
 export async function POST(request: Request) {
   const user = await currentUser();
   if (!user) return unauthorized();
-  const { provider, apiKey } = (await request.json()) as { provider?: Provider; apiKey?: string };
-  const key = apiKey?.trim() ?? "";
+  const body = await readJson(request);
+  const provider = body.provider as Provider | undefined;
+  const key = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   if (provider !== "anthropic" && provider !== "openai") return NextResponse.json({ error: "Choose Claude or ChatGPT." }, { status: 400 });
   if (key.length < 20) return NextResponse.json({ error: "That doesn't look like a full API key." }, { status: 400 });
   if (provider === "anthropic" && !key.startsWith("sk-ant-")) {

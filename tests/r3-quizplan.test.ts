@@ -36,21 +36,6 @@ describe("planQuizByFacts", () => {
     expect(slots.map((s) => s.fact)).toEqual(["x", "y", "z"]);
   });
 
-  it("with an explicit smaller size, stressed slides' facts survive first, then case slides, back in slide order", () => {
-    const slides = [
-      slide(1, ["a1", "a2", "a3"]),
-      slide(2, ["b1", "b2"], { emphasized: true }),
-      slide(3, ["c1", "c2"], { hasCase: true }),
-      slide(4, ["d1", "d2", "d3"]),
-    ];
-    const slots = planQuizByFacts(slides, 5, "cut");
-    expect(slots).toHaveLength(5);
-    const facts = slots.map((s) => s.fact);
-    expect(facts).toEqual(expect.arrayContaining(["b1", "b2", "c1", "c2"]));
-    expect(facts[0]).toBe("a1"); // the one remaining slot goes to the earliest other fact, and order is slide order
-    expect(facts.indexOf("b1")).toBeLessThan(facts.indexOf("c1"));
-  });
-
   it("never more slots than facts: a small section gets a short quiz, nothing is padded (padding made the writer repeat itself)", () => {
     const slots = planQuizByFacts([slide(1, ["only fact"], { emphasized: true }), slide(2, [])]);
     expect(slots).toHaveLength(2); // the fact, plus the fact-less slide in general

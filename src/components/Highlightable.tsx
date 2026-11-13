@@ -143,7 +143,7 @@ export function Highlightable({
                 e.stopPropagation();
                 apply();
               }}
-              className="flex h-10 items-center gap-1.5 rounded-full bg-foreground px-4 text-[14px] font-extrabold text-background shadow-[0_8px_24px_rgba(0,0,0,.25)]"
+              className="flex h-11 items-center gap-1.5 rounded-full bg-foreground px-4 text-[14px] font-extrabold text-background shadow-[0_8px_24px_rgba(0,0,0,.25)]"
             >
               <span aria-hidden className="h-3 w-3 rounded-[3px] bg-butter" />
               {pill.kind === "add" ? "Highlight" : "Remove highlight"}

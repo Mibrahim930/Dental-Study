@@ -148,7 +148,7 @@ describe("regenerate", () => {
     await getSectionQuiz(w.topic());
     await post(checkPOST, w.sessionId, { topicId: w.topicId, index: 1, chosen: 3 });
     failWriter = true;
-    expect((await post(regenPOST, w.sessionId, { topicId: w.topicId })).status).toBe(500);
+    expect((await post(regenPOST, w.sessionId, { topicId: w.topicId })).status).toBe(502);
     failWriter = false;
     expect((await (await quizGET(new Request("http://x/q?position=0"), ctx(w.sessionId))).json()).answered).toEqual({ 1: 3 });
   });
@@ -168,13 +168,13 @@ describe("regenerate", () => {
     expect(count("section quiz")).toBe(2);
   });
 
-  it("AI failure keeps the old quiz and its answers (plain 500); the old questions are still served afterwards", async () => {
+  it("AI failure keeps the old quiz and its answers (plain 502, audit S7); the old questions are still served afterwards", async () => {
     const w = world();
     currentUserId = w.userId;
     const old = await getSectionQuiz(w.topic());
     failWriter = true;
     const res = await post(regenPOST, w.sessionId, { topicId: w.topicId });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect(((await res.json()) as { error: string }).error).not.toMatch(/overloaded/);
     expect(stored(w).map((q) => q.id)).toEqual(old.map((q) => q.id)); // nothing lost
     failWriter = false;

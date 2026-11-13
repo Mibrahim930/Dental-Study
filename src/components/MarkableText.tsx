@@ -255,7 +255,7 @@ export function MarkableText({ marksKey, children, className = "" }: { marksKey:
     },
     onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
   };
-  const btn = "flex h-10 items-center gap-1.5 px-3.5 text-[14px] font-extrabold";
+  const btn = "flex h-11 items-center gap-1.5 px-3.5 text-[14px] font-extrabold";
 
   return (
     <>

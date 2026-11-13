@@ -89,13 +89,32 @@ export function saveReportedQuestion(input: {
       .run(input.userId, input.examId, input.topicId, input.source, input.ref, JSON.stringify(input.question), input.reason).lastInsertRowid,
   );
   try {
-    const dir = path.join(FILES_DIR, "reported-questions");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, ...input, created_at: new Date().toISOString() }, null, 2));
+    fs.mkdirSync(path.join(FILES_DIR, "reported-questions"), { recursive: true });
+    fs.writeFileSync(path.join(FILES_DIR, reportedFile(id)), JSON.stringify({ id, ...input, created_at: new Date().toISOString() }, null, 2));
   } catch (err) {
     console.error(`Reported question ${id}: couldn't write its file`, err);
   }
   return id;
+}
+
+/** Where a report's JSON file lives, relative to FILES_DIR. */
+export function reportedFile(id: number): string {
+  return path.join("reported-questions", `${id}.json`);
+}
+
+/** Ids of reports after `afterId`, oldest first (for backups). */
+export function reportedIdsAfter(afterId: number): number[] {
+  return (db.prepare("SELECT id FROM reported_questions WHERE id > ? ORDER BY id").all(afterId) as { id: number }[]).map((r) => r.id);
+}
+
+/**
+ * Remove a student's report files when her account is deleted. Call it before deleting the user: the rows go with the
+ * account (ON DELETE CASCADE), and these ids are read from them.
+ */
+export function deleteReportedFilesForUser(userId: number) {
+  for (const { id } of db.prepare("SELECT id FROM reported_questions WHERE user_id = ?").all(userId) as { id: number }[]) {
+    fs.rmSync(path.join(FILES_DIR, reportedFile(id)), { force: true });
+  }
 }
 
 /** Every report, newest first, with who sent it. */

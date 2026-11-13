@@ -18,8 +18,13 @@ import { KIND_LABEL, KIND_STYLE } from "@/lib/calendar";
 import { examProgress } from "@/lib/readiness";
 import { DoubleRing, Icon, ICONS, MasteryChip } from "@/components/ui";
 import { groupByLecture, lectureName, sectionPlaces } from "@/lib/lectures";
+import { friendlyError } from "@/components/friendlyError";
 
 export const dynamic = "force-dynamic";
+
+/** Asked before "Re-split every lecture": it bills her key and can reset lessons and quizzes she already has. */
+const RESPLIT_CONFIRM =
+  "Re-split every lecture into new sections?\n\nThis uses your AI key and takes a few minutes. Sections whose slides change get a new lesson and a new quiz, and your quiz answers in those sections start over.";
 
 type DocWithProgress = DocumentRow & { done: number; failed: number; batch_id: string | null };
 
@@ -127,7 +132,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
   const current = topics[lastPosition];
   const currentPlace = current ? places.get(current.id) : undefined;
   const notes = sessions.filter((s) => s.summary);
-  // The one-time upgrade (or a Rebuild) is turning an old-style map into lecture maps.
+  // The one-time upgrade (or "Re-split every lecture") is turning an old-style map into lecture maps.
   const reorganising = exam.topic_status === "building" && topics.some((t) => t.document_id == null);
   const mapRow = { examId: id, conceptsByTopic, studiedIds, current: started ? lastPosition : null };
 
@@ -215,7 +220,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               <>
                 <h2 className="section-title">Study</h2>
                 <p className="text-[15px] text-hero-muted">
-                  Upload this exam&apos;s lectures. Once they&apos;re read, a topic map is built and you can start studying.
+                  Upload this exam&apos;s lectures. Once they&apos;re read, they&apos;re split into sections and you can start studying.
                 </p>
               </>
             ) : (
@@ -265,9 +270,12 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               <h2 className="section-title">Lectures</h2>
               <div className="flex items-center gap-2">
                 {totalPages > 0 && <span className="eyebrow">{totalPages} slides</span>}
-                {exam.topic_status !== "building" && docs.length > 0 && !processing && (
-                  <ActionButton url={`/api/exams/${id}/topics`} label={topics.length ? "Rebuild" : "Build topic map"} className="btn-secondary btn-sm" />
-                )}
+                {exam.topic_status !== "building" && docs.length > 0 && !processing &&
+                  (topics.length ? (
+                    <ActionButton url={`/api/exams/${id}/topics`} body={{ mode: "full" }} confirm={RESPLIT_CONFIRM} label="Re-split every lecture" className="btn-secondary btn-sm" />
+                  ) : (
+                    <ActionButton url={`/api/exams/${id}/topics`} body={{ mode: "auto" }} label="Split into sections" className="btn-secondary btn-sm" />
+                  ))}
               </div>
             </div>
             {exam.topic_status === "building" && (
@@ -278,15 +286,23 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               </p>
             )}
             {exam.topic_status === "error" && (
-              <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">Topic map failed: {exam.topic_error}</p>
+              <p className="rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-on-coral">
+                Couldn&apos;t split your lectures into sections. {friendlyError(exam.topic_error, "Try again in a minute.")}
+              </p>
             )}
             {topics.length > 0 && exam.topic_status !== "building" && contentSlides > 0 && (
-              <p className={`text-[13px] font-semibold ${missingSlides ? "rounded-2xl bg-butter px-4 py-3 text-on-butter" : "text-muted-foreground"}`}>
-                {missingSlides
-                  ? `${missingSlides} of ${contentSlides} slides aren't in a section yet. Tap Rebuild to add them.`
-                  : `All ${contentSlides} slides are in your study plan.`}
-                {fillerSlides > 0 && ` ${fillerSlides} title or agenda slide${fillerSlides === 1 ? " was" : "s were"} left out.`}
-              </p>
+              <div
+                className={`flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold ${missingSlides ? "rounded-2xl bg-butter px-4 py-3 text-on-butter" : "text-muted-foreground"}`}
+              >
+                <p className="min-w-0 flex-1">
+                  {missingSlides ? `${missingSlides} of ${contentSlides} slides aren't in a section yet.` : `All ${contentSlides} slides are in your study plan.`}
+                  {fillerSlides > 0 && ` ${fillerSlides} title or agenda slide${fillerSlides === 1 ? " was" : "s were"} left out.`}
+                </p>
+                {/* Places only the missing slides (no AI for lectures that already have sections; nothing she has is reset). */}
+                {missingSlides > 0 && !processing && (
+                  <ActionButton url={`/api/exams/${id}/topics`} body={{ mode: "auto" }} label="Add them" className="btn-primary btn-sm shrink-0" />
+                )}
+              </div>
             )}
             <Uploader examId={id} />
             {docs.map((d, i) => {
@@ -314,7 +330,13 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                           ? "Being split into sections…"
                           : oldStyle
                             ? "In the topic list below until it's split into sections."
-                            : "No sections yet. Tap Rebuild to split it into sections."}
+                            : processing
+                              ? "No sections yet. It's split into sections once every lecture is read."
+                              : topics.length === 0
+                                ? "No sections yet. Tap “Split into sections” above."
+                                : missingSlides > 0
+                                  ? "No sections yet. Tap “Add them” above."
+                                  : "No sections yet."}
                       </p>
                     )}
                     {status}
@@ -368,8 +390,8 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
                   <div className="min-w-0">
                     <div className="leading-snug font-bold">Topics from all lectures</div>
                     <div className="text-[13px] font-medium text-muted-foreground">
-                      {oldStyle.sections.length} topics, made before topics were grouped by lecture.
-                      {exam.topic_status === "building" ? "" : " Tap Rebuild to split them by lecture."}
+                      {oldStyle.sections.length} topics from an earlier version of the site, not sorted by lecture yet.
+                      {exam.topic_status === "building" ? "" : " “Re-split every lecture” sorts them into each lecture's sections."}
                     </div>
                   </div>
                   <Icon d={ICONS.chevronDown} size={18} className="mt-1 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
@@ -382,9 +404,24 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               </details>
             )}
             {topics.length > 0 && (
-              <p className="text-[13px] text-muted-foreground">
-                Chips show mastery: mint ≥80%, butter ≥60%, coral below, “New” untested. ★ you emphasized in your notes. ↺ covered in an earlier exam. ✓ studied.
-              </p>
+              <div className="flex flex-col gap-1.5 text-[13px] text-muted-foreground">
+                <p className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span>How well you know a section:</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="chip cb-mint">80%+</span> well
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="chip cb-butter">60–79%</span> getting there
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="chip cb-coral">under 60%</span> needs work
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="chip bg-muted text-muted-foreground">New</span> not tested yet
+                  </span>
+                </p>
+                <p>★ you emphasized in your notes. ↺ covered in an earlier exam. ✓ studied.</p>
+              </div>
             )}
           </section>
         </div>
@@ -406,7 +443,7 @@ export default async function ExamPage(props: PageProps<"/exams/[id]">) {
               </Link>
             )}
             {topics.length === 0 ? (
-              <p className="text-[15px] text-muted-foreground">Available once the topic map is ready.</p>
+              <p className="text-[15px] text-muted-foreground">Available once your lectures are split into sections.</p>
             ) : (
               <PracticeForm
                 examId={id}
@@ -481,7 +518,7 @@ function LectureStatus({ doc }: { doc: DocWithProgress }) {
   if (doc.status === "error") {
     return (
       <div className="flex items-center justify-between gap-2 text-sm text-danger">
-        <span className="min-w-0 break-words">{doc.error}</span>
+        <span className="min-w-0 break-words">{friendlyError(doc.error, "Some slides couldn't be read. Tap Retry to try them again.")}</span>
         <ActionButton url={`/api/documents/${doc.id}/retry`} label="Retry" className="btn-secondary btn-sm shrink-0 bg-card" />
       </div>
     );

@@ -27,23 +27,32 @@ export function Toaster() {
     };
   }, []);
 
+  const box = current && (
+    <div
+      key={current.id}
+      className={`pointer-events-auto flex min-h-14 items-center gap-3 rounded-[18px] px-4 py-3 text-[15px] font-bold shadow-[0_12px_36px_rgba(22,22,22,.16)] ${
+        current.kind === "error" ? "bg-coral text-on-coral" : "bg-nav text-white"
+      }`}
+    >
+      {current.kind === "success" ? (
+        <span className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-mint text-on-mint">
+          <Icon d={ICONS.check} size={16} />
+        </span>
+      ) : null}
+      {current.message}
+    </div>
+  );
+
+  // Two live regions that are always on the page (a region added together with its text is often not read out):
+  // errors interrupt the screen reader, other messages wait their turn.
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-28 z-40 flex justify-center px-4 sm:inset-x-auto sm:right-6 sm:bottom-6">
-      {current && (
-        <div
-          key={current.id}
-          className={`pointer-events-auto flex min-h-14 items-center gap-3 rounded-[18px] px-4 py-3 text-[15px] font-bold shadow-[0_12px_36px_rgba(22,22,22,.16)] ${
-            current.kind === "error" ? "bg-coral text-on-coral" : "bg-nav text-white"
-          }`}
-        >
-          {current.kind === "success" ? (
-            <span className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-mint text-on-mint">
-              <Icon d={ICONS.check} size={16} />
-            </span>
-          ) : null}
-          {current.message}
-        </div>
-      )}
+    <div className="pointer-events-none fixed inset-x-0 bottom-28 z-40 flex justify-center px-4 sm:inset-x-auto sm:right-6 sm:bottom-6">
+      <div role="status" aria-live="polite">
+        {current?.kind === "success" && box}
+      </div>
+      <div role="alert" aria-live="assertive">
+        {current?.kind === "error" && box}
+      </div>
     </div>
   );
 }

@@ -201,35 +201,6 @@ describe("B: planQuizByFacts", () => {
     expect(s.flatMap((x) => x.facts)).toHaveLength(30);
   });
 
-  it("an explicit smaller size cuts: stressed first, then case slides, then slide order; output stays in slide order", () => {
-    const slides = [
-      ...Array.from({ length: 10 }, (_, i) => slide(i + 1, [`p${i}a`, `p${i}b`, `p${i}c`])), // plain
-      slide(11, ["case1", "case2", "case3"], { hasCase: true }),
-      slide(12, ["star1", "star2", "star3"], { emphasized: true }),
-    ]; // 36 facts → 25 slots (condensed by default; cut when asked for)
-    expect(planQuizByFacts(slides).flatMap((x) => x.facts)).toHaveLength(36);
-    const s = planQuizByFacts(slides, 25, "cut");
-    expect(s).toHaveLength(25);
-    const facts = nonNullFacts(s);
-    for (const f of ["star1", "star2", "star3", "case1", "case2", "case3"]) expect(facts).toContain(f);
-    const order = s.map((x) => x.page!);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
-    // the 19 plain facts that survive are the first ones in slide order
-    expect(facts.filter((f) => f.startsWith("p"))).toEqual(Array.from({ length: 19 }, (_, i) => `p${Math.floor(i / 3)}${"abc"[i % 3]}`));
-  });
-
-  it("emphasized+case outranks emphasized-only and case-only when an explicit size cuts", () => {
-    const slides = [
-      slide(1, Array.from({ length: 10 }, (_, i) => `a${i}`), { emphasized: true }),
-      slide(2, Array.from({ length: 10 }, (_, i) => `b${i}`), { hasCase: true }),
-      slide(3, Array.from({ length: 10 }, (_, i) => `c${i}`), { emphasized: true, hasCase: true }),
-    ];
-    const f = nonNullFacts(planQuizByFacts(slides, 25, "cut"));
-    expect(f.filter((x) => x.startsWith("c"))).toHaveLength(10);
-    expect(f.filter((x) => x.startsWith("a"))).toHaveLength(10);
-    expect(f.filter((x) => x.startsWith("b"))).toHaveLength(5);
-  });
-
   it("invariants over 4000 random section shapes: exact size, cap, every fact in one slot, unique facts, 'not' only on multi-fact slots", () => {
     let seed = 12345;
     const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n);
@@ -333,13 +304,18 @@ describe("B: planQuizByFacts", () => {
     expect(calls.filter((c) => c.purpose === "section quiz").length).toBe(3);
   });
 
-  it("a stored version-2 quiz is rewritten once; progress on it and old checks are cleared", async () => {
+  // Audit M5: an answered out-of-date quiz is kept on open; only "Write new questions" (the topic passed without its
+  // quiz, as the regenerate route does) replaces it, and then progress on it and old checks are cleared.
+  it("an answered version-2 quiz is kept on open; written again only when asked, then progress and old checks are cleared", async () => {
     const w = world(3);
     storeQuiz(w.topicId, 4, 2);
     db.prepare("INSERT INTO study_sessions (exam_id) VALUES (?)").run(w.examId);
     recordQuizAnswer(w.userId, w.topicId, 0, 1, false);
     db.prepare("INSERT INTO session_checks (session_id, topic_id, question, correct, check_index, chosen) VALUES (?, ?, 'q', 0, 0, 1)").run(w.sessionId, w.topicId);
-    const qs = await getSectionQuiz(w.topic());
+    expect(await getSectionQuiz(w.topic())).toHaveLength(4);
+    expect(calls).toHaveLength(0);
+    expect(w.topic().checks_version).toBe(2);
+    const qs = await getSectionQuiz({ ...w.topic(), checks_json: null, checks_version: null });
     expect(qs).toHaveLength(6);
     expect(w.topic().checks_version).toBe(QUIZ_VERSION);
     expect(db.prepare("SELECT COUNT(*) n FROM quiz_answers WHERE topic_id = ?").get(w.topicId)).toEqual({ n: 0 });
@@ -362,7 +338,8 @@ describe("B: planQuizByFacts", () => {
     writer = () => {
       throw new Error("writer down");
     };
-    await expect(getSectionQuiz(w.topic())).rejects.toThrow();
+    // (an answered quiz is only rewritten when she asks: the topic passed without its quiz, as "Write new questions" does)
+    await expect(getSectionQuiz({ ...w.topic(), checks_json: null, checks_version: null })).rejects.toThrow();
     expect(w.topic().checks_version).toBe(2);
     expect(quizAnswers(w.userId, w.topicId)).toEqual({ 0: 1 });
   });

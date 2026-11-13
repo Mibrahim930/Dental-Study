@@ -57,6 +57,7 @@ export function QuestionCard({
   practice = false,
   marksKey = null,
   onReport,
+  reportContext,
 }: {
   q: QuestionData;
   onChoose?: (i: number) => void;
@@ -74,6 +75,8 @@ export function QuestionCard({
    * question is flagged everywhere (daily review, an old results page) and the card hides itself.
    */
   onReport?: (reason: string) => Promise<void>;
+  /** Where a reported question leaves, for the Report dialog's wording ("this practice exam and its score", "today's review"). */
+  reportContext?: string;
 }) {
   const revealed = q.correct_index != null;
   const selected = q.chosen_index ?? pending ?? null;
@@ -182,7 +185,7 @@ export function QuestionCard({
         </div>
         {belowOptions}
         <div className="-mb-1 flex justify-end">
-          <ReportQuestion onReport={report} />
+          <ReportQuestion onReport={report} context={reportContext} />
         </div>
       </section>
 
@@ -200,7 +203,7 @@ export function QuestionCard({
           )}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
             {q.source ? (
-              <button className="text-sm font-extrabold text-hero-accent" onClick={() => setShowSource((s) => !s)}>
+              <button className="-my-2.5 min-h-11 text-left text-sm font-extrabold text-hero-accent" aria-expanded={showSource} onClick={() => setShowSource((s) => !s)}>
                 Source: {q.source.filename}, slide {q.source.page_number} {showSource ? "↑" : "→"}
               </button>
             ) : (

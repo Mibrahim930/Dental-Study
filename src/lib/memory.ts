@@ -114,21 +114,6 @@ export function searchLibrary(userId: number, query: string, limit = 6, excludeE
     .all(match, userId, ...(excludeExamId ? [excludeExamId] : []), limit) as LibraryHit[];
 }
 
-/** Most recent study-session summaries across all exams (newest first). */
-export function recentSummaries(userId: number, limit = 4): { exam_name: string; summary: string; ended_at: string }[] {
-  return db
-    .prepare(
-      `SELECT e.name AS exam_name, s.summary, s.ended_at FROM study_sessions s JOIN exams e ON e.id = s.exam_id
-       WHERE s.summary IS NOT NULL AND e.user_id = ? ORDER BY s.ended_at DESC LIMIT ?`,
-    )
-    .all(userId, limit) as { exam_name: string; summary: string; ended_at: string }[];
-}
-
-export function glossaryText(userId: number): string {
-  const rows = db.prepare("SELECT abbr, meaning FROM glossary WHERE user_id = ? ORDER BY abbr").all(userId) as { abbr: string; meaning: string }[];
-  return rows.map((r) => `${r.abbr} = ${r.meaning}`).join("; ");
-}
-
 const STOPWORDS = new Set(
   "the and for with that this what why how are was were from have has had not but can you your which when who will would should could does did into about there their them then than also its it's".split(
     " ",

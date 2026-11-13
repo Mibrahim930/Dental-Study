@@ -30,8 +30,12 @@ export function createClass(userId: number, name: string): number {
   })();
 }
 
-export function joinClass(userId: number, code: string): ClassRow | null {
-  const cls = db.prepare("SELECT * FROM classes WHERE invite_code = ?").get(code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "")) as ClassRow | undefined;
+/** The class with this invite code, now joined; null for an unknown code (or anything that isn't a string). */
+export function joinClass(userId: number, code: unknown): ClassRow | null {
+  if (typeof code !== "string") return null;
+  const clean = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!clean) return null;
+  const cls = db.prepare("SELECT * FROM classes WHERE invite_code = ?").get(clean) as ClassRow | undefined;
   if (!cls) return null;
   db.prepare("INSERT OR IGNORE INTO class_members (class_id, user_id) VALUES (?, ?)").run(cls.id, userId);
   return cls;

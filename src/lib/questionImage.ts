@@ -1,27 +1,10 @@
 // Pictures on questions. A question that talks about a picture must show one: the writer may attach any slide that
 // has an image, and anything that mentions a picture without one is dropped (or repaired, for questions already stored).
-import { db, type PageRow } from "./db";
+import { db, getMeta, setMeta, type PageRow } from "./db";
 import { parseNotes } from "./processing";
 
-/**
- * Does the question text send the student to look at a picture? Clear pointing phrases count ("in the radiograph
- * shown", "the image below", "what does the photo show"), and so does anything only a picture can carry: a diagram,
- * figure or illustration, a slide named as such ("on slide 32", "the slide's diagram"), labels ("labeled 'gp'",
- * "marked X"), arrows, and drawn things (dotted lines, shaded areas, colored outlines). A bare "radiograph" or
- * "shown" turns up in ordinary text questions ("which radiograph is best for…", "has been shown to…"), and those
- * must not lose their place.
- */
-/**
- * Two strengths, because the two uses have opposite costs:
- * - "strict" (the default; the start-up repair): a wrong "yes" deletes or hides a stored question, so only wording
- *   that can't be ordinary prose counts.
- * - "generous" (the question writers): a wrong "yes" merely attaches the slide to a question that didn't need it,
- *   while a wrong "no" is exactly the complaint (a picture question with no picture), so looser phrasing counts too
- *   ("the lesion shown", "the tip of the pointer", "the bitewing above", "which letter marks").
- * Ordinary prose that shares the words never counts in either: "blood is drawn", "the line is drawn from nasion",
- * "the patient's chart", "arrow clasp", "labeled D in Black's notation", "the probe slides apically", "outline form".
- */
-export function mentionsPicture(text: string, mode: "strict" | "generous" = "strict"): boolean {
+// The patterns are built once (they are long, and the start-up repair tests every stored question).
+const PICTURE_PATTERNS = (() => {
   const noun = "(?:image|picture|photo|photograph|radiograph|x-?ray|micrograph|photomicrograph|figure|illustration|diagram|drawing|schematic)s?";
   const det = "(?:the|this|that) (?:[\\w'’-]+ )?"; // "the image", "this clinical photo", "the slide's diagram"
   const colour = "(?:solid|double|curved|red|blue|green|yellow|orange|purple|pink|black|white|gr[ae]y|colou?red)";
@@ -78,8 +61,39 @@ export function mentionsPicture(text: string, mode: "strict" | "generous" = "str
     // "In the radiograph of tooth #19" is a picture; "on the radiograph of a healthy tooth, the PDL appears…" is prose.
     `\\b(?:in|on) ${det}(?:radiograph|x-?ray|bitewing|periapical|panoramic|film)s? of (?:tooth|teeth) #?\\d`,
   ];
-  const all = mode === "generous" ? [...patterns, ...generous] : patterns;
-  return new RegExp(all.join("|"), "i").test(text) || new RegExp(labels.join("|")).test(text);
+  return {
+    strict: new RegExp(patterns.join("|"), "i"),
+    generous: new RegExp([...patterns, ...generous].join("|"), "i"),
+    labels: new RegExp(labels.join("|")),
+  };
+})();
+
+/**
+ * Bump when mentionsPicture changes what it recognises (or the repair changes what it does), so the start-up repair
+ * runs once more over the stored questions; otherwise it is skipped (repairPictureQuestionsOnce).
+ */
+export const PICTURE_DETECTOR_VERSION = 2;
+
+/**
+ * Does the question text send the student to look at a picture? Clear pointing phrases count ("in the radiograph
+ * shown", "the image below", "what does the photo show"), and so does anything only a picture can carry: a diagram,
+ * figure or illustration, a slide named as such ("on slide 32", "the slide's diagram"), labels ("labeled 'gp'",
+ * "marked X"), arrows, and drawn things (dotted lines, shaded areas, colored outlines). A bare "radiograph" or
+ * "shown" turns up in ordinary text questions ("which radiograph is best for…", "has been shown to…"), and those
+ * must not lose their place.
+ */
+/**
+ * Two strengths, because the two uses have opposite costs:
+ * - "strict" (the default; the start-up repair): a wrong "yes" deletes or hides a stored question, so only wording
+ *   that can't be ordinary prose counts.
+ * - "generous" (the question writers): a wrong "yes" merely attaches the slide to a question that didn't need it,
+ *   while a wrong "no" is exactly the complaint (a picture question with no picture), so looser phrasing counts too
+ *   ("the lesion shown", "the tip of the pointer", "the bitewing above", "which letter marks").
+ * Ordinary prose that shares the words never counts in either: "blood is drawn", "the line is drawn from nasion",
+ * "the patient's chart", "arrow clasp", "labeled D in Black's notation", "the probe slides apically", "outline form".
+ */
+export function mentionsPicture(text: string, mode: "strict" | "generous" = "strict"): boolean {
+  return PICTURE_PATTERNS[mode].test(text) || PICTURE_PATTERNS.labels.test(text);
 }
 
 /** The slide number the question names ("on slide 32", "slide #7"), if any. */
@@ -174,9 +188,23 @@ function repairPicture(stem: string, topicId: number | null | undefined, source:
 }
 
 /**
+ * The start-up run of repairPictureQuestions: only once per PICTURE_DETECTOR_VERSION (it scans every stored
+ * question). Returns how many questions were changed, 0 when it was skipped. The Admin page still runs the repair itself.
+ */
+export function repairPictureQuestionsOnce(): number {
+  const key = `picture_repair_v${PICTURE_DETECTOR_VERSION}`;
+  if (getMeta(key)) return 0;
+  const changed = repairPictureQuestions();
+  setMeta(key, new Date().toISOString());
+  return changed;
+}
+
+/**
  * One-time repair for questions written before pictures were enforced: a question that mentions a picture but has
  * none gets the picture of the slide it was written from when that slide has one; otherwise it goes (practice
- * questions never answered are deleted, answered ones are retired; quiz questions are hidden in place).
+ * questions never answered are deleted, answered ones are retired; quiz questions are hidden in place). A case-set
+ * question gets its case's picture; in a case without one it is treated like any other question, and a set left
+ * under three questions goes whole.
  * Safe to run any number of times. Returns how many questions were changed.
  */
 export function repairPictureQuestions(): number {
@@ -191,20 +219,33 @@ export function repairPictureQuestions(): number {
     const attach = db.prepare("UPDATE questions SET image_page_id = ? WHERE id = ?");
     const retire = db.prepare("UPDATE questions SET flagged = 1, flag_note = 'No picture to show' WHERE id = ?");
     const del = db.prepare("DELETE FROM questions WHERE id = ? AND NOT EXISTS (SELECT 1 FROM attempt_questions aq WHERE aq.question_id = questions.id AND aq.chosen_index IS NOT NULL)");
+    const shortened = new Set<number>();
     for (const r of rows) {
       if (!mentionsPicture(r.stem)) continue;
-      if (r.case_id != null) {
-        // A case set's picture belongs to the case: hand it to the question, and never break up a set by removing one question.
-        if (r.case_image != null) {
-          attach.run(r.case_image, r.id);
-          changed++;
-        }
+      // A case set's picture belongs to the case: hand it to the question. A case without one is treated like a single
+      // question: its slide's picture, or the question goes (a patient no picture was written for can't be shown one).
+      if (r.case_id != null && r.case_image != null) {
+        attach.run(r.case_image, r.id);
+        changed++;
         continue;
       }
       const pic = repairPicture(r.stem, r.topic_id, r.source_page_id);
       if (pic) attach.run(pic.page_id, r.id);
-      else if (del.run(r.id).changes === 0) retire.run(r.id);
+      else {
+        if (del.run(r.id).changes === 0) retire.run(r.id);
+        if (r.case_id != null) shortened.add(r.case_id);
+      }
       changed++;
+    }
+    // A case set left with fewer than three questions isn't a set any more (the later questions build on the earlier
+    // ones): the rest of it goes too, the same way, like a case the writer delivers that short.
+    for (const caseId of shortened) {
+      const left = db.prepare("SELECT id FROM questions WHERE case_id = ? AND flagged = 0").all(caseId) as { id: number }[];
+      if (left.length >= 3) continue;
+      for (const q of left) {
+        if (del.run(q.id).changes === 0) retire.run(q.id);
+        changed++;
+      }
     }
     const topics = db.prepare("SELECT id, checks_json FROM topics WHERE checks_json IS NOT NULL").all() as { id: number; checks_json: string }[];
     const save = db.prepare("UPDATE topics SET checks_json = ? WHERE id = ?");

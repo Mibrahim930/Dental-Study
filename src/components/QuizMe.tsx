@@ -137,8 +137,8 @@ function QuizMeQuestion({
 }
 
 /**
- * "Quiz me on this": select three or more words anywhere in the page's <main> (lesson, key points, explanations,
- * explanations) and a pill offers a short quiz on exactly that: 3, 5 or 10 questions written from the matching
+ * "Quiz me on this": select three or more words anywhere in the page's <main> (lesson, key points, explanations)
+ * and a pill offers a short quiz on exactly that: 3, 5 or 10 questions written from the matching
  * slides, answered one at a time with a note on every option. Answers count toward mastery. An unfinished quiz is
  * kept and offered again ("Resume your quiz") the next time this exam's pages open.
  */
@@ -160,6 +160,9 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const panel = useRef<HTMLDivElement>(null);
+  // The selection quiz being written: a number per request. Anything that takes the panel off "writing" (a lecture
+  // review opened meanwhile) moves it on, so a quiz that comes back late can't replace what is on screen.
+  const writing = useRef(0);
 
   useEffect(() => {
     openRef.current = open;
@@ -170,6 +173,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     const onOpen = (e: Event) => {
       const q = (e as CustomEvent<QuizMeView>).detail;
       if (!q || q.examId !== examId) return;
+      writing.current++;
       setQuiz(q);
       setRound(q.round);
       setIndex(firstOpen(q));
@@ -259,7 +263,8 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     if (!open) return;
     panel.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // A dialog on top of the panel (Report) handles its own Escape first and marks it handled.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
       setOpen(false);
       window.dispatchEvent(new Event("quizme-closed"));
     };
@@ -291,6 +296,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
 
   async function start() {
     if (!draft || stage === "writing") return;
+    const req = ++writing.current;
     setWritingSize(size);
     setStage("writing");
     setError("");
@@ -300,7 +306,8 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ examId, text: draft.text, size, ...(topicId != null ? { topicId } : {}) }),
       });
-      if (!q) return;
+      if (!q || writing.current !== req) return;
+      writing.current++;
       setQuiz(q);
       setRound(q.round);
       setIndex(firstOpen(q));
@@ -308,6 +315,8 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
       setStage("quiz");
       if (!openRef.current) toast("Your quiz is ready. Tap “Resume your quiz”.");
     } catch (err) {
+      if (writing.current !== req) return;
+      writing.current++;
       setError(failureText(err, "Couldn't write the quiz. Check your connection and try again."));
       setStage("choose");
       if (!openRef.current) toast("Couldn't write that quiz. Try again.", "error");
@@ -370,6 +379,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
   const nextRound = later.length > 0 ? later : null;
 
   function done() {
+    writing.current++;
     close();
     setQuiz(null);
     setStage("choose");
@@ -492,7 +502,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
           <div className="text-[13px] font-bold text-muted-foreground">
             {quiz.kind === "lecture" && quiz.round > 1 ? `Round ${round} · ` : ""}Question {index + 1} of {total}
           </div>
-          <ReportQuestion onReport={report} />
+          <ReportQuestion onReport={report} context="this quiz and your score" />
         </div>
         <QuizMeQuestion key={`${quiz.id}:${at}`} quizId={quiz.id} at={at} q={q} picked={picked} onPick={setPicked} saving={saving} />
         {error && (
@@ -564,7 +574,7 @@ export function QuizMe({ examId, topicId, selection = true }: { examId: number; 
     );
   }
 
-  const title = stage === "quiz" && quiz ? (quiz.kind === "lecture" ? `Lecture review · ${quiz.text}` : "Quiz on what you highlighted") : "Quiz me on this";
+  const title = stage === "quiz" && quiz ? (quiz.kind === "lecture" ? `Lecture review · ${quiz.text}` : "Quiz on what you selected") : "Quiz me on this";
   const showResume = !open && (stage === "writing" || (quiz != null && !quiz.finished && quiz.left > 0));
 
   return (

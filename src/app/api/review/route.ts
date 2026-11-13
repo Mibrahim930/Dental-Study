@@ -8,7 +8,9 @@ import { apiUser, unauthorized } from "@/lib/user";
 export async function GET(request: Request) {
   const user = await apiUser();
   if (!user) return unauthorized();
-  const limit = Math.min(Number(new URL(request.url).searchParams.get("limit") ?? 20), 200);
+  // 1..200, 20 when missing or not a number (a negative LIMIT would mean "no limit" to SQLite).
+  const asked = Math.floor(Number(new URL(request.url).searchParams.get("limit") ?? 20));
+  const limit = Number.isFinite(asked) ? Math.min(200, Math.max(1, asked)) : 20;
   const cards = dueCards(user.id, limit).map((q) => ({
     card_id: q.card_id,
     id: q.id,

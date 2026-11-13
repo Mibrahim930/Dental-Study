@@ -2,6 +2,31 @@
 import * as mupdf from "mupdf";
 
 const IMAGE_WIDTH = 1280;
+/** Most pixels one rendered slide may have (a 1280-wide 16:9 slide is 0.9 MP, a portrait A4 page 2.3 MP). */
+export const MAX_RENDER_PIXELS = 4_000_000;
+/** Pages longer or thinner than this (width to height, either way) aren't slides: a strip like that is refused. */
+export const MAX_PAGE_ASPECT = 20;
+
+/** A PDF refused on purpose, with a message plain enough to show the student as-is (the upload route does). */
+export class PdfRefused extends Error {}
+
+/** A page too long and thin to show as a slide. */
+export class PageShapeError extends PdfRefused {
+  constructor() {
+    super("One page of this PDF is a very long, thin strip, which can't be shown as a slide. Export the PDF again as normal pages.");
+  }
+}
+
+/**
+ * How much to scale a page of w × h points: 1280 pixels wide, unless that would be over MAX_RENDER_PIXELS (a tall
+ * page), in which case smaller. Throws PageShapeError for empty pages and aspect ratios over MAX_PAGE_ASPECT.
+ */
+export function renderScale(w: number, h: number): number {
+  if (!(w > 0 && h > 0) || Math.max(w / h, h / w) > MAX_PAGE_ASPECT) throw new PageShapeError();
+  const scale = IMAGE_WIDTH / w;
+  // The bitmap lives in MuPDF's memory; an extreme page at 1280 wide could need gigabytes and take the server down.
+  return w * scale * h * scale > MAX_RENDER_PIXELS ? Math.sqrt(MAX_RENDER_PIXELS / (w * h)) : scale;
+}
 
 export function openPdf(bytes: Buffer | Uint8Array): mupdf.Document {
   return mupdf.Document.openDocument(bytes, "application/pdf");
@@ -61,11 +86,26 @@ export function imageDimensions(bytes: Uint8Array, kind: UploadKind): { width: n
   return null;
 }
 
-const IMAGE_MIME: Partial<Record<UploadKind, string>> = { jpeg: "image/jpeg", png: "image/png", gif: "image/gif", bmp: "image/bmp", tiff: "image/tiff" };
+// Only the kinds imageDimensions can measure before decoding: a GIF, BMP or TIFF would be decoded unchecked.
+const IMAGE_MIME: Partial<Record<UploadKind, string>> = { jpeg: "image/jpeg", png: "image/png" };
+
+const OTHER_PICTURES: Partial<Record<UploadKind, string>> = { webp: "a WebP image", gif: "a GIF", bmp: "a BMP image", tiff: "a TIFF image" };
+
+/**
+ * Why a file a student added can't be used, as a plain sentence; null when it's a JPEG or PNG (or a PDF, where `pdf`
+ * says PDFs are welcome). Shared by the report button and the schedule importer so both say the same thing.
+ */
+export function pictureRefusal(name: string, kind: UploadKind, opts: { pdf?: boolean } = {}): string | null {
+  if (kind === "jpeg" || kind === "png" || (kind === "pdf" && opts.pdf)) return null;
+  if (kind === "heic") return `"${name}" is an iPhone HEIC photo, which can't be read here yet. Take a screenshot of it (screenshots are PNG) and add that instead.`;
+  const other = OTHER_PICTURES[kind];
+  if (other) return `"${name}" is ${other}, which can't be read here. Take a screenshot of it or save it as JPG or PNG.`;
+  return opts.pdf ? `"${name}" isn't a photo or a PDF. Use a JPG or PNG photo, a PDF, or paste the text.` : `"${name}" isn't a picture. Add JPG or PNG screenshots.`;
+}
 
 /**
  * A photo or screenshot as a JPEG no bigger than `maxSide` pixels on its long side (the AI reads JPEG; phone photos are
- * often 4000+ px and several MB). Throws for formats MuPDF can't decode (HEIC, WebP): check sniffFile first.
+ * often 4000+ px and several MB). JPEG and PNG only (anything else throws): check pictureRefusal first.
  */
 export function imageToJpeg(bytes: Uint8Array, kind: UploadKind, maxSide = 1600): Uint8Array {
   const mime = IMAGE_MIME[kind];
@@ -94,7 +134,7 @@ export function imageToJpeg(bytes: Uint8Array, kind: UploadKind, maxSide = 1600)
 }
 
 /**
- * A slide rendered as a 1280px-wide JPEG, plus its text layer and aspect ratio.
+ * A slide rendered as a 1280px-wide JPEG (narrower for a tall page, see renderScale), plus its text layer and aspect ratio.
  * The page and its bitmap live in MuPDF's own memory, which JavaScript's garbage collector can't see, so they are
  * freed here explicitly: without that, a long lecture (150+ slides) grew the server by several MB per slide.
  */
@@ -102,7 +142,7 @@ export function renderPage(doc: mupdf.Document, index: number): { jpeg: Uint8Arr
   const page = doc.loadPage(index);
   try {
     const [x0, y0, x1, y1] = page.getBounds();
-    const scale = IMAGE_WIDTH / (x1 - x0);
+    const scale = renderScale(x1 - x0, y1 - y0);
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
     let jpeg: Uint8Array;
     try {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { cleanMarks, emptyMarks, isEmpty, MARKS_KEY } from "@/lib/marks";
 import { apiUser, unauthorized } from "@/lib/user";
+import { readJson } from "@/lib/http";
 
 /** Questions with marks one student can keep (thousands of questions; stops runaway scripts). */
 const MAX_ROWS = 20000;
@@ -48,11 +49,11 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const user = await apiUser();
   if (!user) return unauthorized();
-  const body = (await request.json().catch(() => null)) as { key?: unknown; marks?: unknown } | null;
-  if (!allowed(user.id, body?.key)) return NextResponse.json({ error: "Unknown question" }, { status: 400 });
-  const marks = cleanMarks(body?.marks);
+  const body = await readJson(request);
+  const key = body.key;
+  if (!allowed(user.id, key)) return NextResponse.json({ error: "Unknown question" }, { status: 400 });
+  const marks = cleanMarks(body.marks);
   if (!marks) return NextResponse.json({ error: "Bad marks" }, { status: 400 });
-  const key = body!.key as string;
   if (isEmpty(marks)) {
     db.prepare("DELETE FROM question_marks WHERE user_id = ? AND key = ?").run(user.id, key);
   } else {

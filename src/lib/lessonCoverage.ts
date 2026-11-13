@@ -71,6 +71,11 @@ export function quotedFacts(text: string, facts: string[]): { quoted: string[]; 
 
 /** How many filler lines in a row mark the point where an explanation stopped teaching. */
 export const RAMBLE_RUN = 3;
+/**
+ * The trimmer's version. Every stored lesson is checked for filler once per version at start-up (a change to what
+ * counts as filler, here or in FILLER_WORDS, bumps it so the next start checks every lesson again).
+ */
+export const FILLER_SCAN_VERSION = 1;
 
 /**
  * The words a drifting writer signs off with. A line is filler only when every word on it is one of these (or it has

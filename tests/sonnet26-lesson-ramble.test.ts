@@ -544,12 +544,12 @@ describe("stored lessons through getLesson", () => {
     }
   });
 
-  it("(documented) a stored object/string 'slides' passes getLesson but the route answers 500, not a crash", async () => {
+  it("(documented) a stored object/string 'slides' passes getLesson but the route answers 502 (aiFailure), not a crash", async () => {
     const w = world();
     currentUserId = w.userId;
     stored(w, { intro: "I", slides: "nope", key_points: [], connections: null, version: LESSON_VERSION });
     const res = await getRoute(w);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
   });
 
   it("the fallback after a failed rewrite serves the stored v3 lesson clean and saves it clean (still v3, so the rewrite is retried)", async () => {
@@ -605,13 +605,16 @@ describe("stored lessons through getLesson", () => {
     expect(lessonAiCalls()).toHaveLength(0);
   });
 
-  it("(documented) a stale topic snapshot cleaned after a newer lesson was saved overwrites the newer one", async () => {
+  // Audit R8: the clean lesson is saved only over the exact text that was read.
+  it("a stale topic snapshot cleaned after a newer lesson was saved leaves the newer one and serves it", async () => {
     const w = world();
     stored(w, { ...lessonOf(w, () => `${GOOD}\n\n${RAMBLE}`), version: LESSON_VERSION });
     const stale = w.topic();
     stored(w, { ...lessonOf(w, () => "A newer lesson text, much longer than three words.", { intro: "Newer" }), version: LESSON_VERSION });
-    await getLesson(stale);
-    expect(storedLesson(w).intro).toBe("What this section is about.");
+    const served = await getLesson(stale);
+    expect(storedLesson(w).intro).toBe("Newer");
+    expect(served.intro).toBe("Newer");
+    expect(lessonAiCalls()).toHaveLength(0);
   });
 
   it("cleaning one topic's lesson leaves another topic's identical stored lesson alone", async () => {

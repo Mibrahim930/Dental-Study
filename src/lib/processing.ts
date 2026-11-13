@@ -5,9 +5,13 @@ import { batchResults, cancelBatch, createBatch, generate, mapLimit } from "./ai
 import { credentials, type Credentials } from "./credentials";
 import { buildTopicMap } from "./topics";
 import { NOTES_SYSTEM, SlideNotes } from "./notes";
-import { openPdf, renderPage } from "./pdf";
+import { openPdf, PdfRefused, renderPage } from "./pdf";
+import { track } from "./inflight";
 
 export type { SlideNotes };
+
+/** The most pages one uploaded lecture may have: a longer PDF would fill the shared disk with slide images. */
+export const MAX_PDF_PAGES = 400;
 
 /**
  * Save an uploaded PDF and start reading it in the background. Only the page count happens here, so the browser gets
@@ -23,6 +27,7 @@ export async function addDocument(examId: number, filename: string, bytes: Buffe
     pdf.destroy();
   }
   if (count === 0) throw new Error("This PDF has no pages.");
+  if (count > MAX_PDF_PAGES) throw new PdfRefused(`This PDF has ${count} pages. The most one lecture can have is ${MAX_PDF_PAGES}. Split it and upload the parts.`);
 
   const docId = Number(
     db.prepare("INSERT INTO documents (exam_id, filename, page_count, status) VALUES (?, ?, ?, 'processing')").run(examId, filename, count).lastInsertRowid,
@@ -126,7 +131,7 @@ async function runDocument(docId: number) {
         SlideNotes,
         pages.map((p) => ({ customId: String(p.id), ...slideRequest(doc.filename, p) })),
       );
-      db.prepare("UPDATE documents SET batch_id = ? WHERE id = ?").run(batchId, docId);
+      db.prepare("UPDATE documents SET batch_id = ?, batch_at = datetime('now') WHERE id = ?").run(batchId, docId);
       return;
     } catch (err) {
       console.error(`Batch create failed for document ${docId}; processing directly`, err);
@@ -136,7 +141,12 @@ async function runDocument(docId: number) {
   finishDocument(doc);
 }
 
-async function processDirectly(creds: Credentials, doc: DocInfo, pages: PageRow[]) {
+/** Slide by slide. A deploy waits for it (lib/inflight.ts): the slides read so far are paid for by then. */
+function processDirectly(creds: Credentials, doc: DocInfo, pages: PageRow[]): Promise<void> {
+  return track(readSlides(creds, doc, pages));
+}
+
+async function readSlides(creds: Credentials, doc: DocInfo, pages: PageRow[]) {
   await mapLimit(pages, 4, async (page) => {
     try {
       const req = slideRequest(doc.filename, page);
@@ -162,7 +172,29 @@ function finishDocument(doc: DocInfo) {
 
 let polling = false;
 
-/** Check running slide batches; save finished results. Called every minute from instrumentation.ts. */
+/** A batch that still can't be collected this long after it was sent is given up on (the API keeps results 24 hours). */
+export const BATCH_GIVE_UP_HOURS = 26;
+
+/** What the student reads when collecting a lecture's slide batch is given up on. */
+export const BATCH_FAILED = {
+  noKey: "This lecture's slides couldn't be collected because there is no AI key. Add one in Settings, then press Retry.",
+  keyRefused: "Your AI key was turned down while collecting this lecture's slides. Check it in Settings, then press Retry.",
+  gone: "The AI service no longer has this lecture's slides. Press Retry to read the rest again.",
+  tooLong: "Collecting this lecture's slides kept failing for over a day. Press Retry to read the rest again.",
+};
+
+/** HTTP status of an error from the AI provider's SDK, if it has one. */
+const statusOf = (err: unknown): number | undefined => {
+  const s = (err as { status?: unknown } | null)?.status;
+  return typeof s === "number" ? s : undefined;
+};
+
+/**
+ * Check running slide batches; save finished results. Called every minute from instrumentation.ts.
+ * A batch that can never be collected (the key was removed or refused, or the API no longer knows the batch) fails its
+ * lecture at once with a plain message and is forgotten, so Retry starts afresh. Other errors (network, a busy API)
+ * are tried again next minute, until the batch is BATCH_GIVE_UP_HOURS old.
+ */
 export async function pollBatches() {
   if (polling) return;
   polling = true;
@@ -171,27 +203,56 @@ export async function pollBatches() {
     for (const { id } of docs) {
       const doc = docInfo(id);
       if (!doc?.batch_id || !doc.user_id) continue;
+      let creds: Credentials;
       try {
-        const creds = credentials(doc.user_id);
-        const results = await batchResults(creds, "read slides (batch)", SlideNotes, doc.batch_id);
-        if (!results) continue; // still running
+        creds = credentials(doc.user_id);
+      } catch (err) {
+        console.error(`Polling batch for document ${id}: no usable key`, err);
+        failDoc(id, BATCH_FAILED.noKey);
+        continue;
+      }
+      try {
+        const outcome = await batchResults(creds, "read slides (batch)", SlideNotes, doc.batch_id);
+        if (!outcome) continue; // still running
         const byId = new Map(pendingPages(id).map((p) => [String(p.id), p]));
-        for (const r of results) {
-          const page = byId.get(r.customId);
-          if (page && r.ok) savePageNotes(creds.userId, page, r.value);
-        }
-        db.prepare("UPDATE documents SET batch_id = NULL WHERE id = ?").run(id);
+        // Saving the results, forgetting the batch and recording its cost happen together, so a batch is never
+        // collected (and counted in the spending tracker) twice, whatever stops the server.
+        db.transaction(() => {
+          for (const r of outcome.results) {
+            const page = byId.get(r.customId);
+            if (!page || !r.ok) continue;
+            try {
+              savePageNotes(creds.userId, page, r.value);
+            } catch (err) {
+              console.error(`Saving slide ${page.id} from a batch failed; it is read again directly`, err);
+            }
+          }
+          db.prepare("UPDATE documents SET batch_id = NULL WHERE id = ?").run(id);
+          outcome.logUsage();
+        })();
         // Anything the batch couldn't do gets one direct retry.
         const leftover = pendingPages(id);
         if (leftover.length) await processDirectly(creds, doc, leftover);
         finishDocument(doc);
       } catch (err) {
+        const status = statusOf(err);
+        if (status === 401 || status === 403) failDoc(id, BATCH_FAILED.keyRefused);
+        else if (status === 404) failDoc(id, BATCH_FAILED.gone);
+        else if (batchAgeHours(id) > BATCH_GIVE_UP_HOURS) failDoc(id, BATCH_FAILED.tooLong);
         console.error(`Polling batch for document ${id} failed`, err);
       }
     }
   } finally {
     polling = false;
   }
+}
+
+/** Hours since a lecture's batch was sent (batches sent before that was recorded: since the upload). */
+function batchAgeHours(docId: number): number {
+  const r = db.prepare("SELECT (julianday('now') - julianday(COALESCE(batch_at, created_at))) * 24 AS h FROM documents WHERE id = ?").get(docId) as
+    | { h: number | null }
+    | undefined;
+  return r?.h ?? 0;
 }
 
 function slideRequest(lecture: string, page: PageRow) {
@@ -211,8 +272,8 @@ function savePageNotes(userId: number, page: PageRow, notes: SlideNotes) {
   if (!db.prepare("SELECT 1 FROM pages WHERE id = ?").get(page.id)) return; // lecture was removed meanwhile
   const tx = db.transaction(() => {
     db.prepare(
-      "UPDATE pages SET status = 'done', error = NULL, title = ?, notes_json = ?, emphasized = ?, has_case = ? WHERE id = ?",
-    ).run(notes.title, JSON.stringify(notes), notes.emphasized ? 1 : 0, notes.case_prompt ? 1 : 0, page.id);
+      "UPDATE pages SET status = 'done', error = NULL, title = ?, notes_json = ?, emphasized = ?, has_case = ?, is_filler = ? WHERE id = ?",
+    ).run(notes.title, JSON.stringify(notes), notes.emphasized ? 1 : 0, notes.case_prompt ? 1 : 0, notes.is_filler ? 1 : 0, page.id);
     db.prepare("DELETE FROM pages_fts WHERE page_id = ?").run(page.id);
     db.prepare("INSERT INTO pages_fts (page_id, title, content) VALUES (?, ?, ?)").run(
       page.id,
@@ -227,7 +288,12 @@ function savePageNotes(userId: number, page: PageRow, notes: SlideNotes) {
   tx();
 }
 
-/** Resume lectures that were mid-processing when the app stopped (optionally only one user's). */
+/**
+ * Resume lectures that were mid-processing when the app stopped (optionally only one user's). At start-up, topic maps
+ * that were being built are built again in "auto" mode: lectures already in the map stay as they are, only lectures
+ * with no section yet are mapped, and leftover slides join their nearest section without an AI call. (A build writes
+ * its result in one transaction at the end, so an interrupted one left the earlier map whole.)
+ */
 export function resumeUnfinished(userId?: number) {
   const docs = db
     .prepare(
@@ -236,11 +302,21 @@ export function resumeUnfinished(userId?: number) {
     )
     .all(...(userId ? [userId] : [])) as { id: number }[];
   for (const d of docs) void processDocument(d.id);
-  if (!userId) db.prepare("UPDATE exams SET topic_status = 'none' WHERE topic_status = 'building'").run();
+  if (!userId) {
+    const building = db.prepare("SELECT id FROM exams WHERE topic_status = 'building'").all() as { id: number }[];
+    for (const e of building) void buildTopicMap(e.id, "auto");
+  }
 }
 
+/** A slide's notes, or null when it has none or they are damaged (not JSON, or not an object). */
 export function parseNotes(page: Pick<PageRow, "notes_json">): SlideNotes | null {
-  return page.notes_json ? (JSON.parse(page.notes_json) as SlideNotes) : null;
+  if (!page.notes_json) return null;
+  try {
+    const n: unknown = JSON.parse(page.notes_json);
+    return n && typeof n === "object" && !Array.isArray(n) ? (n as SlideNotes) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

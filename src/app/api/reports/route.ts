@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiUser, unauthorized } from "@/lib/user";
-import { ImageTooLarge, imageToJpeg, sniffFile } from "@/lib/pdf";
+import { ImageTooLarge, imageToJpeg, pictureRefusal, sniffFile } from "@/lib/pdf";
 import { createReport, REPORT_KINDS, REPORT_MAX_CHARS, REPORT_MAX_IMAGE_MB, REPORT_MAX_IMAGES, type ReportKind, type ReportMeta } from "@/lib/reports";
 
 export const maxDuration = 60;
@@ -48,9 +48,8 @@ export async function POST(request: Request) {
     if (file.size > REPORT_MAX_IMAGE_MB * 1024 * 1024) return fail(`"${file.name}" is over ${REPORT_MAX_IMAGE_MB} MB. Try a screenshot instead of a photo.`, 413);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const fileKind = sniffFile(bytes);
-    if (fileKind === "heic") return fail(`"${file.name}" is an iPhone HEIC photo, which can't be read here yet. Take a screenshot (screenshots are PNG) and add that instead.`);
-    if (fileKind === "webp") return fail(`"${file.name}" is a WebP image, which can't be read here. Take a screenshot of it or save it as JPG or PNG.`);
-    if (!["jpeg", "png", "gif", "bmp", "tiff"].includes(fileKind)) return fail(`"${file.name}" isn't a picture. Add JPG or PNG screenshots.`);
+    const refusal = pictureRefusal(file.name, fileKind);
+    if (refusal) return fail(refusal);
     try {
       images.push(imageToJpeg(bytes, fileKind, 1600));
     } catch (err) {

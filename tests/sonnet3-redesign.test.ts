@@ -106,9 +106,8 @@ describe("proxy matcher", () => {
     }
     for (const p of ["/", "/exams/1", "/review", "/settings", "/api/review"]) expect(re.test(p), p).toBe(true);
   });
-  it.fails("KNOWN ISSUE: look-alike paths are exempt too (prefix matching; no real route affected today)", () => {
-    // Negative lookahead is prefix based: these start with an exempt name but are different routes.
-    for (const p of ["/icon.svg.bak", "/apple-icon-evil", "/manifest.webmanifest/x"]) {
+  it("guards look-alike paths: each exemption is the whole path, not a prefix", () => {
+    for (const p of ["/icon.svg.bak", "/apple-icon-evil", "/manifest.webmanifest/x", "/loginfoo", "/api/loginx", "/api/icsfoo/bar"]) {
       expect.soft(re.test(p), p).toBe(true);
     }
   });

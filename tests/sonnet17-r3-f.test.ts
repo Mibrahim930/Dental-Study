@@ -653,11 +653,15 @@ describe("quiz me: what the writer may return", () => {
     expect(stored(quiz.id).map((s) => s.question)).toEqual(["Question number 1 about hypochlorite?", "Question number 12 about hypochlorite?"]);
   });
 
-  it("questions with 2 or 6 options are kept (the section quiz uses 4): noted, not a failure", async () => {
+  it("questions with 2 or 6 options are dropped: the writer is asked for 4 (audit L2, one validator for every writer)", async () => {
     const w = world();
-    gen.questions = () => [q(1, { options: ["yes", "no"], correct_answer: "yes", option_notes: ["a", "b"] }), q(2, { options: ["a1", "b2", "c3", "d4", "e5", "f6"], correct_answer: "a1", option_notes: ["1", "2", "3", "4", "5", "6"] })];
+    gen.questions = () => [
+      q(1, { options: ["yes", "no"], correct_answer: "yes", option_notes: ["a", "b"] }),
+      q(2, { options: ["a1", "b2", "c3", "d4", "e5", "f6"], correct_answer: "a1", option_notes: ["1", "2", "3", "4", "5", "6"] }),
+      q(3),
+    ];
     const quiz = await createQuizMe({ userId: w.userId, examId: w.examId, text: TEXT, size: 3 });
-    expect(stored(quiz.id).map((s) => s.options.length)).toEqual([2, 6]);
+    expect(stored(quiz.id).map((s) => s.options.length)).toEqual([4]);
   });
 
   it("source_page_id outside the sent slides is nulled but the question stays; notes of the wrong length or with a blank are nulled, question stays", async () => {
@@ -715,25 +719,25 @@ describe("quiz me: what the writer may return", () => {
     expect(db.prepare("SELECT finished_at FROM quizme WHERE id = ?").get(quiz.id)).not.toEqual({ finished_at: null });
   });
 
-  it("zero usable questions is a 500 with a plain message and nothing stored; the in-flight guard is released after every kind of failure", async () => {
+  it("zero usable questions is a 502 with a plain message and nothing stored; the in-flight guard is released after every kind of failure", async () => {
     const w = world();
     signIn(w.userId);
     gen.questions = () => [q(1, { correct_index: 2 }), q(2, { options: ["a", "a", "b", "c"] })];
     const before = count();
     const bad = await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }));
-    expect(bad.status).toBe(500);
+    expect(bad.status).toBe(502);
     expect(((await bad.json()) as { error: string }).error).toMatch(/didn't answer in time/);
     expect(count()).toBe(before);
     // Writer throws; credentials throw; empty list.
     gen.fail = new Error("overloaded_error 529");
-    expect((await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }))).status).toBe(500);
+    expect((await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }))).status).toBe(502);
     gen.fail = null;
     credState.fail = true;
     const nokey = await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }));
-    expect(nokey.status).toBe(500);
+    expect(nokey.status).toBe(502);
     credState.fail = false;
     gen.questions = () => [];
-    expect((await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }))).status).toBe(500);
+    expect((await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }))).status).toBe(502);
     standard();
     const ok = await createPOST(post({ examId: w.examId, text: TEXT, size: 3 }));
     expect(ok.status).toBe(200); // guard was released each time
@@ -808,7 +812,7 @@ describe("quiz me: what the writer may return", () => {
     db.prepare("DELETE FROM exams WHERE id = ?").run(w.examId);
     release();
     const res = await pending;
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect(count()).toBe(before);
     gen.gate = null;
     const w2 = world(w.userId);

@@ -34,7 +34,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" data-theme={themeOf(user?.theme)} className={`${bricolage.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col font-sans">
         {signedIn && <NavBar isAdmin={!!user.is_admin} reviewsDue={countDue(user.id)} dateLabel={shortDate(todayIn(plannerSettings(user.id).timezone))} />}
-        <main className={`mx-auto w-full min-w-0 max-w-[1280px] flex-1 px-3.5 py-4 sm:px-8 sm:py-8 ${signedIn ? "pb-32 sm:pb-12" : ""}`}>{children}</main>
+        {/* Bottom room on a phone: the tab bar (to 86 px) and the Report button above it (to 144 px) float over the page,
+            so the last lines must scroll clear of both. On wider screens the Report button sits in the corner. */}
+        <main className={`mx-auto w-full min-w-0 max-w-[1280px] flex-1 px-3.5 py-4 sm:px-8 sm:py-8 ${signedIn ? "pb-[calc(160px+env(safe-area-inset-bottom))] sm:pb-24" : ""}`}>{children}</main>
         <Toaster />
         {signedIn && <ReportButton />}
       </body>

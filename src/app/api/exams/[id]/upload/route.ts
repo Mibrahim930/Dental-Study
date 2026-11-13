@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getExam } from "@/lib/db";
 import { addDocument } from "@/lib/processing";
-import { apiUser, unauthorized } from "@/lib/user";
+import { PdfRefused } from "@/lib/pdf";
+import { apiUser, notFound, unauthorized } from "@/lib/user";
 
 /** Largest PDF accepted; keep in step with proxyClientMaxBodySize in next.config.ts and MAX_UPLOAD_MB in Uploader.tsx. */
 const MAX_UPLOAD_MB = 125;
@@ -10,7 +11,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/
   const user = await apiUser();
   if (!user) return unauthorized();
   const examId = Number((await ctx.params).id);
-  if (!getExam(examId, user.id)) return NextResponse.json({ error: "Exam not found" }, { status: 404 });
+  if (!getExam(examId, user.id)) return notFound();
   // Bigger than the server will buffer (proxyClientMaxBodySize in next.config.ts): say so plainly instead of a cut-off body.
   if (Number(request.headers.get("content-length")) > MAX_UPLOAD_MB * 1024 * 1024) {
     return NextResponse.json({ error: `This file is over ${MAX_UPLOAD_MB} MB. Try exporting the PDF at a smaller size, or split it into two.` }, { status: 413 });
@@ -36,6 +37,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/exams/[id]/
         { status: 507 },
       );
     }
-    return NextResponse.json({ error: `Could not read this PDF: ${String(err)}` }, { status: 400 });
+    if (err instanceof PdfRefused) return NextResponse.json({ error: err.message }, { status: 400 });
+    // The detail (a MuPDF or file-system message) goes to the log; the student gets a plain sentence.
+    console.error(`Upload to exam ${examId} failed`, err);
+    return NextResponse.json({ error: "Could not read this PDF. Try saving it again as a PDF, or upload a different copy." }, { status: 400 });
   }
 }

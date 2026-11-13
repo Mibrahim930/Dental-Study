@@ -1,4 +1,5 @@
-// Perf fix #2: opening a topic starts its section quiz alongside the lesson (not after), once, and never for a prefetch.
+// Perf fix #2, revised by audit M4: the section quiz starts once the lesson is on screen (POST …/shown), once, and
+// never for a prefetch or a lesson GET alone.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: { purpose: string }[] = [];
@@ -48,6 +49,7 @@ vi.mock("@/lib/user", async (orig) => ({
 import { db, type Topic } from "@/lib/db";
 import { GET as lessonGET } from "@/app/api/sessions/[id]/lesson/route";
 import { GET as quizGET } from "@/app/api/sessions/[id]/quiz/route";
+import { POST as shownPOST } from "@/app/api/sessions/[id]/shown/route";
 import { makeUser } from "./helpers";
 
 const notes = (i: number) =>
@@ -72,6 +74,8 @@ function world(topics = 2) {
 const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) }) as never;
 const lesson = (sessionId: number, position: number, prefetch = false) =>
   lessonGET(new Request(`http://x/l?position=${position}${prefetch ? "&prefetch=1" : ""}`), ctx(sessionId));
+const shown = (sessionId: number, position: number) =>
+  shownPOST(new Request("http://x/s", { method: "POST", body: JSON.stringify({ position }) }), ctx(sessionId));
 const quiz = (sessionId: number, position: number) => quizGET(new Request(`http://x/q?position=${position}`), ctx(sessionId));
 const quizWrites = () => calls.filter((c) => c.purpose === "section quiz").length;
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -87,19 +91,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("section quiz starts with the lesson", () => {
-  it("one lesson GET starts the quiz while the lesson is still being written, and the quiz GET joins that run", async () => {
+  it("the lesson GET alone starts no quiz; 'shown' starts it in the background, and the quiz GET joins that run", async () => {
     const w = world();
-    let release!: () => void;
-    lessonGate = new Promise((r) => (release = r));
-    const lessonRes = lesson(w.sessionId, 0);
-    // The lesson is held back; the quiz writers must already be running.
+    expect((await lesson(w.sessionId, 0)).status).toBe(200);
+    await tick();
+    expect(quizWrites()).toBe(0);
+    expect(w.topic(w.topicIds[0]).checks_json).toBeNull();
+    // The lesson is on screen: the quiz writers start, and 'shown' answers without waiting for them.
+    expect(await (await shown(w.sessionId, 0)).json()).toEqual({ ok: true });
     await until(() => quizWrites() >= 2);
-    expect(calls.some((c) => c.purpose === "lesson")).toBe(true);
     expect(quizWrites()).toBe(2); // one generation = two parallel writes of half the plan
     // The page asks for the quiz while it's still being written: no second generation.
     const quizRes = quiz(w.sessionId, 0);
-    release();
-    expect((await lessonRes).status).toBe(200);
     const body = await (await quizRes).json();
     expect(body.questions.length).toBeGreaterThan(0);
     expect(quizWrites()).toBe(2);
@@ -138,9 +141,9 @@ describe("section quiz starts with the lesson", () => {
     const w = world();
     failQuiz = true;
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect((await lesson(w.sessionId, 0)).status).toBe(200);
-    await until(() => logged.mock.calls.some((c) => String(c[0]).includes("started with the lesson")));
-    expect(logged.mock.calls.some((c) => String(c[0]).includes("started with the lesson"))).toBe(true);
+    expect((await shown(w.sessionId, 0)).status).toBe(200);
+    await until(() => logged.mock.calls.some((c) => String(c[0]).includes("started when the lesson showed")));
+    expect(logged.mock.calls.some((c) => String(c[0]).includes("started when the lesson showed"))).toBe(true);
     failQuiz = false;
     const res = await quiz(w.sessionId, 0);
     expect(res.status).toBe(200);

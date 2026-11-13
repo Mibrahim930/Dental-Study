@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { ExamKind } from "@/lib/db";
 import { duplicateKey, EXAM_KINDS, isValidDate, KIND_LABEL } from "@/lib/calendar";
 import { Icon, ICONS } from "./ui";
+import { ServerMessage, failureText, jsonOf, signedOut } from "./clientFetch";
 
 export type DraftRow = {
   key: string;
@@ -19,7 +20,7 @@ export type DraftRow = {
 
 let keySeq = 0;
 export const newRowKey = () => `r${Date.now().toString(36)}-${keySeq++}`;
-export const blankRow = (): DraftRow => ({ key: newRowKey(), include: true, name: "", date: "", kind: "block", course: "" });
+const blankRow = (): DraftRow => ({ key: newRowKey(), include: true, name: "", date: "", kind: "block", course: "" });
 
 type Check = { errors: string[]; warnings: string[]; blank: boolean };
 
@@ -85,13 +86,15 @@ export function ExamRowsEditor({
           exams: toAdd.map((r) => ({ name: r.name, date: r.date, kind: r.kind, course: r.course.trim() || (mode === "manual" ? sameCourse : "") })),
         }),
       });
-      const data = (await res.json().catch(() => ({}))) as { added?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong. Try again.");
+      if (signedOut(res)) return;
+      const data = await jsonOf<{ added?: number; error?: string }>(res);
+      if (!res.ok) throw new ServerMessage(typeof data?.error === "string" ? data.error : "");
       const firstYear = [...toAdd].sort((a, b) => a.date.localeCompare(b.date))[0].date.slice(0, 4);
-      router.push(`/calendar?year=${firstYear}&added=${data.added ?? n}`);
+      // Stays "Adding…" on success: a second press must not add the same exams twice while the calendar loads.
+      router.push(`/calendar?year=${firstYear}&added=${typeof data?.added === "number" ? data.added : n}`);
     } catch (err) {
       setSaving(false);
-      setError(err instanceof Error && err.message !== "Failed to fetch" ? err.message : "Couldn't reach the site. Check your connection and try again.");
+      setError(failureText(err, "Couldn't reach the site. Check your connection and try again."));
     }
   }
 
@@ -105,7 +108,7 @@ export function ExamRowsEditor({
           <span>Type</span>
           <span>Course</span>
         </div>
-        <span className="w-9" />
+        <span className="w-10" />
       </div>
       <ul className="flex flex-col gap-2">
         {rows.map((r, i) => {
@@ -121,9 +124,12 @@ export function ExamRowsEditor({
                     aria-checked={r.include}
                     aria-label={`Add ${r.name || `exam ${i + 1}`}`}
                     onClick={() => update(r.key, { include: !r.include })}
-                    className={`mt-1.5 flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] ${r.include ? "bg-hero text-hero-foreground" : "bg-card"}`}
+                    className="-m-[7px] mt-0 flex h-11 w-11 shrink-0 items-center justify-center"
                   >
-                    {r.include && <Icon d={ICONS.check} size={18} />}
+                    {/* The box stays 30 px; the button around it is 44 px so it is easy to hit on a phone. */}
+                    <span className={`flex h-[30px] w-[30px] items-center justify-center rounded-[10px] ${r.include ? "bg-hero text-hero-foreground" : "bg-card"}`}>
+                      {r.include && <Icon d={ICONS.check} size={18} />}
+                    </span>
                   </button>
                 )}
                 <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-[minmax(0,2fr)_9.5rem_9rem_minmax(0,1.3fr)]">
@@ -163,7 +169,7 @@ export function ExamRowsEditor({
                 {mode === "manual" && (
                   <button
                     type="button"
-                    className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:bg-muted-strong hover:text-foreground"
+                    className="-mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:bg-muted-strong hover:text-foreground"
                     aria-label={`Remove row ${i + 1}`}
                     onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : [blankRow()]))}
                   >

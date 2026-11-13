@@ -5,6 +5,7 @@ import { rebuildPlan } from "./planner";
 import { generate, mapLimit } from "./ai";
 import { parseNotes } from "./processing";
 import { upsertConcept } from "./memory";
+import { track } from "./inflight";
 import { capSections, cleanTopics, matchTopics, MAX_SECTIONS, sameSlides, type SlideRef } from "./topicMerge";
 
 const TopicFields = {
@@ -77,7 +78,8 @@ export function buildTopicMap(examId: number, mode: Mode = "auto"): Promise<void
       if (inflight.get(examId)?.p === p) inflight.delete(examId);
     });
   inflight.set(examId, { p, mode });
-  return p;
+  // A deploy waits for it (lib/inflight.ts): the lecture maps are paid for by then.
+  return track(p);
 }
 
 type Existing = { id: number; position: number; title: string; summary: string; page_ids: string; emphasized: number; document_id: number | null };
@@ -138,8 +140,16 @@ function slideLines(pages: PageForMap[]): string {
 }
 
 const refs = (pages: PageForMap[]): SlideRef[] => pages.map((p) => ({ id: p.id, doc: p.document_id, n: p.page_number }));
-const existingConcepts = (userId: number) =>
-  (db.prepare("SELECT name FROM concepts WHERE user_id = ? ORDER BY name").all(userId) as { name: string }[]).map((c) => c.name);
+
+/** How many of the student's concepts go with each lecture-map call: her whole list grows with every exam. */
+export const MAP_CONCEPTS_MAX = 150;
+/** The concepts she met most recently (reused names matter most for the exams she is on now), newest first. */
+export const existingConcepts = (userId: number): string[] =>
+  (
+    db
+      .prepare("SELECT name FROM concepts WHERE user_id = ? ORDER BY last_seen IS NULL, last_seen DESC, created_at DESC, id DESC LIMIT ?")
+      .all(userId, MAP_CONCEPTS_MAX) as { name: string }[]
+  ).map((c) => c.name);
 
 /**
  * One AI call for one lecture, with only that lecture's slides. Ids outside the lecture are dropped and every slide
@@ -155,9 +165,13 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
     system: SYSTEM,
     effort: "medium",
     maxTokens: 32000,
-    content:
-      `Existing concepts from earlier exams (${concepts.length}):\n${concepts.join("\n") || "(none yet)"}\n\n` +
-      `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}`,
+    // The lecture's slides first and the concept list (which changes as she studies) after it, so the stable part is
+    // the cached prefix: the system prompt is shared by every lecture of a build, the slides by a retry or Rebuild.
+    cache: true,
+    content: [
+      { type: "text", text: `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}` },
+      { type: "text", text: `Existing concepts from earlier exams (${concepts.length}, most recent first):\n${concepts.join("\n") || "(none yet)"}` },
+    ],
   });
   const n = new Map(lecture.slides.map((p) => [p.id, p.page_number]));
   return capSections(inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture), MAX_SECTIONS, (id) => n.get(id) ?? Number.MAX_SAFE_INTEGER);
@@ -249,7 +263,7 @@ const linkConcept = () => db.prepare("INSERT OR IGNORE INTO topic_concepts (topi
  * New lectures on an existing map. Lectures already mapped keep their sections untouched; each lecture with no slide
  * in the map yet is split into sections (one AI call each) and appended. A mapped lecture that gained a slide (e.g. a
  * retried slide that now reads) gets it in the section holding its nearest slide, with no AI call; that section's
- * lesson is rewritten to include it.
+ * lesson is rewritten to include it, and so is its quiz unless someone already answered it (answers are kept then).
  */
 async function addLectures(examId: number, userId: number, existing: Existing[], lectures: Lecture[]) {
   const assigned = new Map<number, number>(); // slide id -> topic id
@@ -292,6 +306,7 @@ async function addLectures(examId: number, userId: number, existing: Existing[],
       const t = existing.find((e) => e.id === topicId)!;
       const ids = [...(JSON.parse(t.page_ids) as number[]), ...add].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
       db.prepare("UPDATE topics SET page_ids = ?, lesson_json = NULL WHERE id = ?").run(JSON.stringify(ids), topicId);
+      if (!db.prepare("SELECT 1 FROM quiz_answers WHERE topic_id = ? LIMIT 1").get(topicId)) resetSectionQuiz(topicId);
     }
     renumber(examId);
     refileQuestions(examId);
@@ -412,6 +427,9 @@ export async function rebuildLectureMaps(): Promise<number> {
       console.error(`Reorganising exam ${id}'s topics by lecture failed (try ${failures + 1} of ${LECTURE_MAP_TRIES}); its old topic map stays:`, why);
       setMeta(key, `failed:${failures + 1}`);
     };
+    // Counted as a try before it runs: a server stopped (or crashing) mid-way uses up a try too, so an exam can never
+    // be re-mapped in full at every start.
+    setMeta(key, `failed:${failures + 1}`);
     try {
       await buildTopicMap(id, "full");
       const s = db.prepare("SELECT topic_status, topic_error FROM exams WHERE id = ?").get(id) as { topic_status: string; topic_error: string | null } | undefined;

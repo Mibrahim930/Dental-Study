@@ -10,23 +10,38 @@ const REASON_MAX = 500;
 /**
  * "Report" on any question. A tap opens a small dialog that asks "Are you sure?" (a mis-tap removes nothing), with an
  * optional one-line reason. On yes, `onReport` does the removing (the question leaves the quiz or exam she's in, and its
- * score) and the record goes to the site owner. `tone` matches the surface: "hero" on the dark explanation block,
- * "card" on a light one.
+ * score) and the record goes to the site owner. `context` says where it leaves ("this quiz and your score", "today's
+ * review"); without it the wording doesn't name a place, which reads right anywhere.
  */
-export function ReportQuestion({ onReport, tone = "card", label = "Report" }: { onReport: (reason: string) => Promise<void>; tone?: "hero" | "card"; label?: string }) {
+export function ReportQuestion({ onReport, context }: { onReport: (reason: string) => Promise<void>; context?: string }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const box = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLInputElement>(null);
+
+  /** Closes the dialog and gives focus back to the Report button (if it is still on the page). */
+  function shut() {
+    setOpen(false);
+    trigger.current?.focus();
+  }
 
   useEffect(() => {
     if (!open) return;
     field.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !busy && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Escape closes this dialog only: caught first (capture) and stopped, so a panel under it (the quiz-me panel)
+    // stays open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (busy) return;
+      setOpen(false);
+      trigger.current?.focus();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, busy]);
 
   async function confirm() {
@@ -35,9 +50,9 @@ export function ReportQuestion({ onReport, tone = "card", label = "Report" }: { 
     setError("");
     try {
       await onReport(reason.trim().slice(0, REASON_MAX));
-      setOpen(false);
+      shut();
       setReason("");
-      toast("Reported. It's out of this quiz and your score.");
+      toast(context ? `Reported. It's out of ${context}.` : "Reported. It won't come up again.");
     } catch {
       setError("The report didn't go through. Check your connection and try again.");
     } finally {
@@ -48,22 +63,20 @@ export function ReportQuestion({ onReport, tone = "card", label = "Report" }: { 
   return (
     <>
       <button
+        ref={trigger}
         type="button"
         onClick={() => setOpen(true)}
-        className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-[13px] font-bold ${
-          tone === "hero" ? "text-hero-muted hover:bg-white/10 hover:text-hero-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        }`}
-        aria-label={`${label} this question`}
+        className="inline-flex h-11 items-center gap-1.5 rounded-xl px-2.5 text-[13px] font-bold text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label="Report this question"
       >
         <Icon d={ICONS.flag} size={15} />
-        {label}
+        Report
       </button>
       {open &&
         createPortal(
           <div>
-            <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => !busy && setOpen(false)} aria-hidden />
+            <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => !busy && shut()} aria-hidden />
             <div
-              ref={box}
               role="alertdialog"
               aria-modal="true"
               aria-labelledby="report-q-title"
@@ -74,7 +87,8 @@ export function ReportQuestion({ onReport, tone = "card", label = "Report" }: { 
                 Report this question?
               </h2>
               <p id="report-q-text" className="text-[15px] leading-snug text-muted-foreground">
-                It will be removed from this quiz and from your score, and sent to the site owner so questions like it stop coming up.
+                {context ? `It will be removed from ${context}. ` : "It won't come up for you again. "}
+                It also goes to the site owner so questions like it stop coming up.
               </p>
               <label className="flex flex-col gap-1">
                 <span className="text-[13px] font-bold text-muted-foreground">What&apos;s wrong with it? (optional)</span>
@@ -95,7 +109,7 @@ export function ReportQuestion({ onReport, tone = "card", label = "Report" }: { 
                 </p>
               )}
               <div className="flex justify-end gap-2">
-                <button type="button" className="btn-secondary btn-lg" disabled={busy} onClick={() => setOpen(false)}>
+                <button type="button" className="btn-secondary btn-lg" disabled={busy} onClick={shut}>
                   No, keep it
                 </button>
                 <button type="button" className="btn-primary btn-lg" disabled={busy} onClick={() => void confirm()}>

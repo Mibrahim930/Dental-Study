@@ -3,6 +3,8 @@
   "deploy": {
     "startCommand": "node node_modules/next/dist/bin/next start",
     "healthcheckPath": "/login",
-    "restartPolicyType": "ON_FAILURE"
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
   }
 }

@@ -8,7 +8,7 @@ import { toast } from "./Toaster";
 type Status = { missed: number; open: QuizMeView | null };
 
 /** Opens a quiz in the QuizMe panel (which listens for this on every page that mounts it). */
-export function openQuizPanel(quiz: QuizMeView) {
+function openQuizPanel(quiz: QuizMeView) {
   window.dispatchEvent(new CustomEvent("quizme-open", { detail: quiz }));
 }
 

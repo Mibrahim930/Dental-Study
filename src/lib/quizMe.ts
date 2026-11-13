@@ -7,7 +7,8 @@ import { db, type PageRow, type Topic } from "./db";
 import { generate } from "./ai";
 import { credentials } from "./credentials";
 import { recordConceptResult, upsertConcept } from "./memory";
-import { checkedAnswer, isValidChoice, shuffle } from "./practicePlan";
+import { shuffle } from "./practicePlan";
+import { validateMcq } from "./mcq";
 import { normStem } from "./quizPlan";
 import { EXAM_STYLE, NO_COVER_RULE } from "./examStyle";
 import { markPictures, mentionsPicture, pictureFor, pictureForIds, PICTURE_RULES, type Picture } from "./questionImage";
@@ -275,30 +276,26 @@ export async function createQuizMe(input: { userId: number; examId: number; topi
 
     const seen = new Set<string>();
     const questions: QuizMeQuestion[] = [];
-    for (const q of out.questions) {
+    for (const raw of out.questions) {
       if (questions.length >= size) break;
-      const correct = checkedAnswer(q.options, q.correct_index, q.correct_answer);
-      if (!isValidChoice(q.options, correct)) continue;
-      const key = normStem(q.question);
-      if (!key || seen.has(key)) continue;
       // The slide it tests must be one it was given; otherwise it was written from the passage alone.
-      const page = q.source_page_id != null && valid.has(q.source_page_id) ? q.source_page_id : null;
+      const q = validateMcq(raw, { optionCount: 4, validPageIds: valid });
+      if (typeof q === "string") continue;
+      const key = normStem(q.stem);
+      if (!key || seen.has(key)) continue;
       // A question that talks about a picture must have one to show ("generous": attaching a slide costs little).
-      const wantsPicture = q.image_page_id != null || mentionsPicture(q.question, "generous");
-      const picture = wantsPicture ? pictureFor(pages, q.image_page_id != null && valid.has(q.image_page_id) ? q.image_page_id : null, page, q.question) : null;
+      const wantsPicture = raw.image_page_id != null || mentionsPicture(q.stem, "generous");
+      const picture = wantsPicture ? pictureFor(pages, raw.image_page_id != null && valid.has(raw.image_page_id) ? raw.image_page_id : null, q.source_page_id, q.stem) : null;
       if (wantsPicture && !picture) continue;
       seen.add(key);
-      const notes = Array.isArray(q.option_notes) && q.option_notes.length === q.options.length && q.option_notes.every((n) => typeof n === "string" && n.trim()) ? q.option_notes : null;
-      // Shuffle so the answer isn't biased to one position; the notes move with their options.
-      const order = shuffle(q.options.map((_, i) => i));
       questions.push({
-        question: q.question,
-        options: order.map((i) => q.options[i]),
-        correct_index: order.indexOf(correct),
-        explanation: q.explanation,
-        option_notes: notes ? order.map((i) => notes[i]) : null,
-        concept: q.concept?.trim() ?? "",
-        source_page_id: page,
+        question: q.stem,
+        options: q.options,
+        correct_index: q.correct_index,
+        explanation: raw.explanation,
+        option_notes: q.option_notes,
+        concept: raw.concept?.trim() ?? "",
+        source_page_id: q.source_page_id,
         image_page_id: picture?.page_id ?? null,
       });
     }
