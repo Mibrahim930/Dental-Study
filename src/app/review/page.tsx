@@ -40,6 +40,8 @@ export default function ReviewPage() {
   const [chosen, setChosen] = useState<number | null>(null);
   const [done, setDone] = useState(0);
   const [right, setRight] = useState(0);
+  // Cards reported as wrong this round: taken off the list, so the end screen says so instead of "You reviewed 0".
+  const [reported, setReported] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -159,10 +161,13 @@ export default function ReviewPage() {
     return (
       <div className="mx-auto flex max-w-xl flex-col gap-3">
         <section className="tile cb-lilac flex flex-col gap-3 rounded-[28px]">
-          <div className="text-[30px] leading-tight font-extrabold tracking-tight">{done > 0 ? "Nice. That's your review done." : "Nothing to review."}</div>
+          <div className="text-[30px] leading-tight font-extrabold tracking-tight">
+            {done > 0 ? "Nice. That's your review done." : reported > 0 ? "That's this round done." : "Nothing to review."}
+          </div>
           <p className="text-[15px] font-medium">
-            {done > 0 ? `${Math.round((right / done) * 100)}% · ${right}/${done} right. ` : ""}
-            You reviewed {done} question{done === 1 ? "" : "s"}. They&apos;ll come back right before you&apos;d forget them.
+            {done > 0 &&
+              `${Math.round((right / done) * 100)}% · ${right}/${done} right. You reviewed ${done} question${done === 1 ? "" : "s"}. They'll come back right before you'd forget them. `}
+            {reported > 0 && `You reported ${reported} question${reported === 1 ? "" : "s"}; ${reported === 1 ? "it won't" : "they won't"} come back in your review.`}
           </p>
           <div className="flex flex-wrap gap-2">
             <Link href="/" className="btn-primary btn-sm">Back to my exams</Link>
@@ -218,6 +223,7 @@ export default function ReviewPage() {
           if (!res.ok) throw new Error(String(res.status));
           // Out of today's list (and never back: it's flagged). The next card slides into this spot.
           setChosen(null);
+          setReported((n) => n + 1);
           setCards((cs) => cs && cs.filter((x) => x.card_id !== c.card_id));
         }}
       />

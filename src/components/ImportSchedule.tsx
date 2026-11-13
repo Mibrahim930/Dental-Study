@@ -9,12 +9,12 @@ import { Icon, ICONS } from "./ui";
 const MAX_IMPORT_MB = 20;
 const MAX_FILES = 4;
 
-export type FoundExam = { name: string; date: string | null; course: string | null; kind: ExamKind; confidence: "high" | "medium" | "low"; note: string | null };
+type FoundExam = { name: string; date: string | null; course: string | null; kind: ExamKind; confidence: "high" | "medium" | "low"; note: string | null };
 
 type Found = { rows: DraftRow[]; notes: string[]; source: "ai" | "ics" };
 
 /** Turn what an importer found into editable rows: exams already on the calendar, or without a date, start unticked. */
-export function toRows(found: FoundExam[], existingKeys: Set<string>): DraftRow[] {
+function toRows(found: FoundExam[], existingKeys: Set<string>): DraftRow[] {
   return found.map((e) => ({
     key: newRowKey(),
     include: e.date != null && !existingKeys.has(duplicateKey(e.name, e.date)),

@@ -6,6 +6,7 @@ import { KeyForm } from "@/components/KeyForm";
 import { SignOutButton } from "@/components/SignOutButton";
 import { ThemePicker } from "@/components/ThemePicker";
 import { themeOf } from "@/lib/themes";
+import { modelName } from "@/components/modelName";
 
 export const dynamic = "force-dynamic";
 
@@ -65,15 +66,19 @@ export default async function SettingsPage() {
       <section className="card space-y-3">
         <h2 className="section-title ">AI provider and key</h2>
         <p className="text-sm text-muted-foreground">
-          Using <strong>{user.provider === "openai" ? "ChatGPT" : "Claude"}</strong> ({MODELS[user.provider ?? "anthropic"]}) with the key ending in{" "}
-          <code className="rounded bg-muted px-1">…{user.api_key_last4}</code>.
+          Using <strong>{modelName(MODELS[user.provider ?? "anthropic"])}</strong> with the key ending in <code className="rounded bg-muted px-1">…{user.api_key_last4}</code>.
           {user.provider !== "openai" && (
             <>
               {" "}
-              Quiz and exam questions are written with <strong>{QUALITY_MODELS.anthropic}</strong> (about twice the price per token); lessons, slide reading and checking use{" "}
-              {MODELS.anthropic}.
+              Quiz and exam questions are written with <strong>{modelName(QUALITY_MODELS.anthropic)}</strong> (about twice the price per token); lessons, slide reading
+              and checking use {modelName(MODELS.anthropic)}.
             </>
           )}
+        </p>
+        {/* The exact ids, in small print, for when the site owner asks which model she is on. */}
+        <p className="text-xs text-subtle">
+          Model ids: {MODELS[user.provider ?? "anthropic"]}
+          {user.provider !== "openai" && QUALITY_MODELS.anthropic !== MODELS.anthropic ? `, ${QUALITY_MODELS.anthropic}` : ""}
         </p>
         <details>
           <summary className="cursor-pointer text-sm font-medium text-primary">Replace key or switch provider</summary>

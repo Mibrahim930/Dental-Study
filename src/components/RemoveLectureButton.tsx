@@ -32,7 +32,7 @@ export function RemoveLectureButton({ docId, name, reading }: { docId: number; n
         {reading ? "Stop reading and remove" : "Remove"} “{name}”?
       </p>
       <p className="text-[13px] text-muted-foreground">
-        Its slides leave the topic map. Questions you&apos;ve already answered stay in your history but won&apos;t come back.
+        Its slides leave your sections. Questions you&apos;ve already answered stay in your history but won&apos;t come back.
       </p>
       <div className="flex gap-2">
         <button type="button" className="btn-danger btn-sm" disabled={busy} onClick={remove}>

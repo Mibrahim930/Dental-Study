@@ -90,7 +90,7 @@ export function InviteCode({ code }: { code: string }) {
 export function ShareExamForm({ classId, exams }: { classId: number; exams: { id: number; name: string }[] }) {
   const router = useRouter();
   const [error, setError] = useState("");
-  if (exams.length === 0) return <p className="text-xs text-muted-foreground">Exams appear here to share once their topic map is ready.</p>;
+  if (exams.length === 0) return <p className="text-xs text-muted-foreground">Exams appear here to share once their lectures are split into sections.</p>;
   return (
     <form
       className="flex flex-wrap gap-2"

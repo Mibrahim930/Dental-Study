@@ -165,13 +165,12 @@ async function mapLecture(userId: number, lecture: Lecture, concepts: string[]):
     system: SYSTEM,
     effort: "medium",
     maxTokens: 32000,
-    // The lecture's slides first and the concept list (which changes as she studies) after it, so the stable part is
-    // the cached prefix: the system prompt is shared by every lecture of a build, the slides by a retry or Rebuild.
+    // Cached: the system prompt is the same for every lecture of a build, and a Rebuild or retry soon after sends the
+    // same lecture again. The lecture's slides come first and the concept list (which changes as she studies) after.
     cache: true,
-    content: [
-      { type: "text", text: `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}` },
-      { type: "text", text: `Existing concepts from earlier exams (${concepts.length}, most recent first):\n${concepts.join("\n") || "(none yet)"}` },
-    ],
+    content:
+      `Lecture: ${lecture.filename}\nSlides of this lecture (IDs in brackets):\n${slideLines(lecture.slides)}\n\n` +
+      `Existing concepts from earlier exams (${concepts.length}, most recent first):\n${concepts.join("\n") || "(none yet)"}`,
   });
   const n = new Map(lecture.slides.map((p) => [p.id, p.page_number]));
   return capSections(inSlideOrder(cleanTopics(out.topics, refs(lecture.slides)), lecture), MAX_SECTIONS, (id) => n.get(id) ?? Number.MAX_SAFE_INTEGER);

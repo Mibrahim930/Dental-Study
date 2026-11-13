@@ -23,9 +23,13 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const settings = plannerSettings(user.id);
   const today = todayIn(settings.timezone);
   const q = await props.searchParams;
+  const h = await headers();
+  // On a phone the year view's day cells are too small to read or tap, so with no choice made it opens on this month.
+  const phone = h.get("sec-ch-ua-mobile") === "?1" || /Mobi|Android|iPhone|iPod/i.test(h.get("user-agent") ?? "");
 
-  // ?month=YYYY-MM shows a month; otherwise ?year=YYYY shows the whole year.
-  const monthParam = typeof q.month === "string" && /^\d{4}-\d{2}$/.test(q.month) ? q.month : null;
+  // ?month=YYYY-MM shows a month; ?year=YYYY shows the whole year; neither: the year (this month on a phone).
+  const monthParam =
+    typeof q.month === "string" && /^\d{4}-\d{2}$/.test(q.month) ? q.month : phone && typeof q.year !== "string" ? today.slice(0, 7) : null;
   const year = monthParam ? Number(monthParam.slice(0, 4)) : typeof q.year === "string" ? Number(q.year) || Number(today.slice(0, 4)) : Number(today.slice(0, 4));
   const month = monthParam ? Number(monthParam.slice(5, 7)) - 1 : null;
   const selected = typeof q.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.day) ? q.day : month != null ? (today.startsWith(monthParam!) ? today : ymd(year, month, 1)) : today;
@@ -64,13 +68,31 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
   const usualMinutes = (d: string) => weekdayMinutes[(new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7] ?? 0;
   const missed = missedSummary(user.id);
 
-  const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
   const icsUrl = `${h.get("x-forwarded-proto") === "https" || !host.startsWith("localhost") ? "https" : "http"}://${host}/api/ics/${icsToken(user.id)}.ics`;
 
   const prev = month != null ? `?month=${month === 0 ? `${year - 1}-12` : `${year}-${String(month).padStart(2, "0")}`}` : `?year=${year - 1}`;
   const next = month != null ? `?month=${month === 11 ? `${year + 1}-01` : `${year}-${String(month + 2).padStart(2, "0")}`}` : `?year=${year + 1}`;
-  const dayHref = (d: string) => `?month=${d.slice(0, 7)}&day=${d}`;
+  // "#day" brings the day's panel into view: on a phone it sits below the calendar.
+  const dayHref = (d: string) => `?month=${d.slice(0, 7)}&day=${d}#day`;
+  // Everything on a day in words, for screen readers (the hover title alone reaches no one on a phone).
+  const dayText = (d: string) =>
+    [formatDay(d), ...examsOn(d).map(examLabel), ...busyOn(d).map((b) => b.label), minutesOn(d) ? `${Math.round(minutesOn(d) / 6) / 10} h study` : ""].filter(Boolean).join(", ");
+  // The month view on a phone has no room for names in the cells: this month's exams and busy days are listed under it.
+  const monthItems: { date: string; key: string; label: string; cls: string; href: string }[] = [];
+  if (month != null) {
+    const seenBusy = new Set<number>();
+    for (const week of monthWeeks(year, month))
+      for (const d of week) {
+        if (!d) continue;
+        for (const e of examsOn(d)) monthItems.push({ date: d, key: `e${e.id}`, label: examLabel(e), cls: KIND_STYLE[e.kind], href: `/exams/${e.id}` });
+        for (const b of busyOn(d)) {
+          if (seenBusy.has(b.id)) continue;
+          seenBusy.add(b.id);
+          monthItems.push({ date: d, key: `b${b.id}`, label: isRepeating(b) ? `${b.label} (${repeatLabel(b.weekdays)})` : b.label, cls: "bg-stone text-on-stone", href: dayHref(d) });
+        }
+      }
+  }
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
@@ -81,9 +103,21 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
             <h1 className="page-title">{month != null ? `${MONTHS[month]} ${year}` : year}</h1>
             <Link href={next} className="btn-ghost px-2" aria-label="Next">→</Link>
           </div>
-          <div className="flex rounded-lg bg-muted p-1 text-sm">
-            <Link href={`?year=${year}`} className={`rounded-md px-3 py-1 ${month == null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Year</Link>
-            <Link href={`?month=${month != null ? monthParam : today.slice(0, 7)}`} className={`rounded-md px-3 py-1 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}>Month</Link>
+          <div className="flex rounded-[14px] bg-muted p-1 text-sm">
+            <Link
+              href={`?year=${year}`}
+              aria-current={month == null ? "page" : undefined}
+              className={`flex min-h-11 items-center rounded-[10px] px-4 ${month == null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
+            >
+              Year
+            </Link>
+            <Link
+              href={`?month=${month != null ? monthParam : today.slice(0, 7)}`}
+              aria-current={month != null ? "page" : undefined}
+              className={`flex min-h-11 items-center rounded-[10px] px-4 ${month != null ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
+            >
+              Month
+            </Link>
           </div>
         </div>
 
@@ -171,7 +205,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                           key={j}
                           href={dayHref(d)}
                           title={[...dayExams.map(examLabel), ...busyOn(d).map((b) => b.label), study ? `${Math.round(study / 6) / 10}h study` : ""].filter(Boolean).join(" · ")}
-                          aria-label={dayExams.length > 1 ? `${d}: ${dayExams.length} exams` : undefined}
+                          aria-label={dayText(d)}
                           className={`relative flex aspect-square items-center justify-center rounded-lg text-[11px] font-semibold ${
                             ex ? `${KIND_STYLE[ex.kind]} font-extrabold` : isBusy ? "bg-stone text-on-stone" : d < today ? "text-subtle hover:bg-muted" : "hover:bg-muted"
                           } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
@@ -205,6 +239,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                       key={j}
                       href={dayHref(d)}
                       title={[...examsOn(d).map(examLabel), ...isBusy.map((b) => b.label), study ? `${Math.round(study / 6) / 10} h study` : "", overrides.has(d) ? (overrides.get(d) === 0 ? "day off" : `${Math.round((overrides.get(d)! / 60) * 100) / 100} h set for this day`) : ""].filter(Boolean).join(" · ")}
+                      aria-label={dayText(d)}
                       className={`relative flex min-h-12 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[14px] p-1 text-[15px] font-bold sm:min-h-24 sm:items-start sm:justify-start sm:p-2 ${
                         ex ? KIND_STYLE[ex.kind] : isBusy.length ? "bg-stone text-on-stone" : d < today ? "bg-muted/50 text-subtle hover:bg-muted" : "bg-muted hover:bg-muted-strong"
                       } ${d === today || d === selected ? "ring-2 ring-foreground" : ""}`}
@@ -231,6 +266,19 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
                 })}
               </div>
             ))}
+            {/* Phone only: the names the cells have no room for, in date order. Tapping one opens the exam or the day. */}
+            {monthItems.length > 0 && (
+              <ul className="mt-2 flex flex-col gap-1.5 border-t border-border pt-3 sm:hidden" aria-label="This month">
+                {monthItems.map((it) => (
+                  <li key={it.key}>
+                    <Link href={it.href} className="flex min-h-11 items-center gap-3 rounded-[14px] px-2 py-1.5 hover:bg-muted">
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-[15px] font-extrabold ${it.cls}`}>{Number(it.date.slice(8))}</span>
+                      <span className="min-w-0 flex-1 text-[15px] font-semibold">{it.label}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
@@ -253,7 +301,7 @@ export default async function CalendarPage(props: PageProps<"/calendar">) {
       </section>
 
       <aside className="space-y-4">
-        <section className="card space-y-3">
+        <section id="day" className="card scroll-mt-4 space-y-3">
           <h2 className="section-title">{formatDay(selected)}</h2>
           {examsOn(selected).map((e) => (
             <Link key={e.id} href={`/exams/${e.id}`} className={`block rounded-[20px] px-4 py-3 text-[15px] font-extrabold ${KIND_STYLE[e.kind]}`}>

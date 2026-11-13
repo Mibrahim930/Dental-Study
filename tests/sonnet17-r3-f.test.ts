@@ -314,17 +314,18 @@ describe("reports: what a student can send", () => {
     expect(truncated.status).toBe(400);
   });
 
-  it("GIF, BMP and TIFF are accepted and stored as JPEG", async () => {
+  // Audit S5: these used to be accepted, but their size can't be checked before decoding, so they're refused plainly.
+  it("GIF, BMP and TIFF are refused with a plain message naming the kind", async () => {
     signIn(apiReadyUser());
-    for (const [name, type, bytes] of [
-      ["a.gif", "image/gif", GIF],
-      ["a.bmp", "image/bmp", bmp()],
-      ["a.tif", "image/tiff", tiff()],
-    ] as [string, string, Buffer][]) {
+    for (const [name, type, bytes, kind] of [
+      ["a.gif", "image/gif", GIF, "GIF"],
+      ["a.bmp", "image/bmp", bmp(), "BMP"],
+      ["a.tif", "image/tiff", tiff(), "TIFF"],
+    ] as [string, string, Buffer, string][]) {
       const res = await reportPOST(form({ message: `format ${name}` }, [{ name, type, bytes }]));
       const body = (await res.json()) as { id?: number; error?: string };
-      expect(res.status, `${name}: ${body.error}`).toBe(200);
-      expect(isJpeg(reportImagePath(body.id!, 1)!)).toBe(true);
+      expect(res.status, `${name}: ${body.error}`).toBe(400);
+      expect(body.error).toContain(kind);
     }
   });
 

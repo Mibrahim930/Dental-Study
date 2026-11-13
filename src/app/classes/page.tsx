@@ -27,7 +27,7 @@ export default async function ClassesPage() {
       <div>
         <h1 className="page-title">Classes</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Study with classmates. When someone shares an exam, you can add it to your account with its lectures, topic map, lessons and
+          Study with classmates. When someone shares an exam, you can add it to your account with its lectures, sections, lessons and
           question bank already done, so <strong>you pay nothing for slide reading</strong>. Your progress, scores and review stay private.
           Please keep lecture slides within your class.
         </p>

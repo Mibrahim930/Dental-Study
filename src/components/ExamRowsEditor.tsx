@@ -89,9 +89,10 @@ export function ExamRowsEditor({
       if (signedOut(res)) return;
       const data = await jsonOf<{ added?: number; error?: string }>(res);
       if (!res.ok) throw new ServerMessage(typeof data?.error === "string" ? data.error : "");
-      const firstYear = [...toAdd].sort((a, b) => a.date.localeCompare(b.date))[0].date.slice(0, 4);
+      // The month of the first exam added, where its name can be read (also on a phone).
+      const firstMonth = [...toAdd].sort((a, b) => a.date.localeCompare(b.date))[0].date.slice(0, 7);
       // Stays "Adding…" on success: a second press must not add the same exams twice while the calendar loads.
-      router.push(`/calendar?year=${firstYear}&added=${typeof data?.added === "number" ? data.added : n}`);
+      router.push(`/calendar?month=${firstMonth}&added=${typeof data?.added === "number" ? data.added : n}`);
     } catch (err) {
       setSaving(false);
       setError(failureText(err, "Couldn't reach the site. Check your connection and try again."));

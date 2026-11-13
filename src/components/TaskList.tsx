@@ -87,11 +87,16 @@ export function TaskList({ tasks, empty = "Nothing planned." }: { tasks: TaskIte
               aria-label={done ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`}
               disabled={busy === t.id || t.status === "missed"}
               onClick={() => toggle(t)}
-              className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] transition-colors ${
-                done ? "bg-hero text-hero-foreground" : "bg-muted hover:bg-muted-strong"
-              }`}
+              className="group -mx-[7px] flex h-11 w-11 shrink-0 items-center justify-center"
             >
-              {done && <Icon d={ICONS.check} size={18} />}
+              {/* A 30 px box inside a 44 px button: easy to hit on a phone without changing the look. */}
+              <span
+                className={`flex h-[30px] w-[30px] items-center justify-center rounded-[10px] transition-colors ${
+                  done ? "bg-hero text-hero-foreground" : "bg-muted group-hover:bg-muted-strong"
+                }`}
+              >
+                {done && <Icon d={ICONS.check} size={18} />}
+              </span>
             </button>
             <div className="min-w-0 flex-1">
               <div className={`truncate text-base font-semibold ${done ? "text-muted-foreground line-through" : ""}`}>{t.title}</div>

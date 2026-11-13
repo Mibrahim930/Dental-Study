@@ -1042,7 +1042,7 @@ describe("the daily-review flag route and the export", () => {
     const w = world();
     saveReportedQuestion({ userId: w.userId, examId: w.examId, topicId: null, source: "review", ref: "question:1", question: { question: 'He said "hi"\n</script>   émoji 🦷', options: ["a"], correct_index: null }, reason: null });
     signIn(w.userId);
-    expect((await exportGET()).status).toBe(404);
+    expect((await exportGET()).status).toBe(401); // answered like the other admin routes (audit consistency item)
     signIn(apiReadyUser(true));
     const res = await exportGET();
     expect(res.headers.get("Content-Type")).toContain("application/json");
