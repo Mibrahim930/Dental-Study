@@ -33,9 +33,11 @@ export default defineConfig({
   // Not *.spec.ts / *.test.ts: Vitest would pick those up as unit tests.
   testMatch: "**/*.e2e.ts",
   outputDir: "e2e/.results",
+  globalSetup: "./e2e/support/warmup.ts",
   globalTeardown: "./e2e/support/teardown.ts",
   timeout: 90_000,
-  expect: { timeout: 15_000 },
+  // CI machines are slower, and `next dev` compiles on first use.
+  expect: { timeout: CI ? 30_000 : 15_000 },
   fullyParallel: false,
   workers: 1,
   retries: CI ? 1 : 0,

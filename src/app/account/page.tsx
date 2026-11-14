@@ -35,7 +35,8 @@ export default function AccountPage() {
     <div className="mx-auto mt-8 sm:mt-14 max-w-sm">
       <Brand />
       <form onSubmit={submit} className="card space-y-4">
-        <div className="flex rounded-2xl bg-muted p-1 text-sm">
+        <h1 className="sr-only">{mode === "signin" ? "Sign in to your account" : "Create your account"}</h1>
+        <div className="flex rounded-2xl bg-muted p-1 text-sm" role="group" aria-label="Sign in or create an account">
           {(["signin", "signup"] as const).map((m) => (
             <button
               key={m}

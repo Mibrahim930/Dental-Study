@@ -4,20 +4,12 @@ import { test, expect, expectNoOverflow, pickOption } from "./support/fixtures";
 import { db, seedExam } from "./support/seed";
 import type { ExamPlan } from "@/lib/examPlan";
 
-test.fixme("a practice exam whose writing fails part-way comes up short and finishes itself", async () => {
-  // Needs a failure knob in the fake AI (src/lib/aiFake.ts has none): e.g. AI_FAKE_FAIL="practice questions:2" making
-  // the 2nd "practice questions" call of the server's life throw a busy-service error (a 529 "overloaded", which
-  // lib/practice.ts counts as busy, not as a key problem), plus a way not to wait RESUME_SPACING_SEC (120 s) before the
-  // rest is written (e.g. AI_FAKE_RESUME_SPACING_SEC=0, or the test moving attempts.resumed_at back). With the knob:
-  //   start a 10-question exam (Mixed) → it opens with fewer than 10 → "N of 10 questions so far. The rest will be
-  //   written shortly." → within ~20 s (two 10 s polls) the toast "M more questions were added at the end", the
-  //   question grid has 10 squares, "All 10 questions are in." → finish → results "… · a/10".
-});
-
+// The failure itself (a call failing part-way, the key rule, the retry limits) is covered call by call in
+// tests/w3-writer.test.ts and tests/sonnet28-exam-plan.test.ts. Here the short state is seeded, because the fake AI's
+// failure switch (AI_FAKE_FAIL) counts calls for the whole server and would disturb the other journeys.
 test("a short exam (rest seeded as not yet written) finishes itself while she answers", async ({ page, signIn }) => {
   const w = seedExam({ name: "Endodontics block (short exam)" });
   await signIn(w.userId);
-  await page.request.get("/attempts/0"); // compile the exam screen first (next dev)
 
   // A complete 10-question exam, written by the fake AI through the real form.
   await page.goto(`/exams/${w.examId}`);

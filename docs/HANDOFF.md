@@ -415,6 +415,19 @@ requests that stay silent. Hence background slide rendering and the 125 MB uploa
   sections tapped past still cost nothing), while her place and "studied" are set only by `shown`; `shown` on an ended
   session does nothing; an attempt still being written is reused for ten minutes; toasts show above dialogs; option
   notes are announced by screen readers.
+- **Practice exams are written to a plan** (`docs/EXAM-PLAN.md`, the owner's request): `src/lib/examPlan.ts` lists
+  every question (section, slide, fact, kind) before anything is written, in the order missed, unsure, never tested,
+  starred, then least recently tested, spread across sections, a fact at most once; `src/lib/practice.ts` writes one
+  question per slot and accepts a question only for the slot it names; each question records `fact_key`. A short
+  exam finishes itself (`resumeAttempt`, called when she opens the exam), with a three-try limit per slot and a
+  growing wait for a busy service; the exam screen, its results and the exam page say how much of the material is
+  covered (`examCoverage`). Exams made before this have no plan and behave as before.
+- **AI activity**: every AI call is logged with what it was for (`ai_usage.ref`), failed ones too (`ok`, `error`);
+  the Admin page shows the last 7 days (`src/lib/aiActivity.ts`).
+- **Fake AI and browser tests**: `AI_FAKE=1` (`src/lib/aiFake.ts`, refused in production) answers every AI call from
+  built-in writers. `npm run e2e` runs the Playwright journeys in `e2e/` at 375 px against a throwaway database
+  (study, skipping, practice exam, a short exam finishing itself, quiz me and report, lecture review rounds, access
+  guards); the GitHub workflow runs them on every push.
 - **Lesson marks in one request**: `GET /api/marks?prefix=lesson:<topicId>:` behind `MarksProvider` in `useMarks.ts`.
 - **Schema in one place**: the tables `quizMe.ts`, `reports.ts` and `reportedQuestions.ts` used to create at import
   now live only in `db.ts`. Title/agenda slides are counted from `pages.is_filler` (`examSlideKinds`).

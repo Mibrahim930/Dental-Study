@@ -142,6 +142,7 @@ export function startAttempt(examId: number, opts: AttemptOptions) {
   );
   queued(examId, () =>
     generateAttempt(attemptId, examId, stored).catch((err) => {
+      console.error(`Practice exam ${attemptId} could not be written`, err);
       db.prepare("UPDATE attempts SET status = 'error', error = ? WHERE id = ?").run(storedError(err), attemptId);
     }),
   );

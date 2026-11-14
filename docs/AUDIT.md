@@ -257,3 +257,15 @@ choice" and these, left as they are with reasons:
 
 Result: 84 test files, 1,955 tests, none failing and none expected to fail; typecheck, lint and production build
 clean; no known vulnerable dependencies.
+
+### Follow-up (wave 3)
+
+The gaps listed above were closed: practice exams are written to a plan and finish themselves
+(`docs/EXAM-PLAN.md`), every AI call is logged and shown on the Admin page, browser tests cover the main journeys
+(`e2e/`), focus is restored after dialogs, the quiz panel no longer locks page scroll on wide screens, and a recap
+slide can no longer fail a lesson. Still open: not-found pages answer with status 200 because the loading screen is
+streamed first (the page shown is right); the real AI has not been exercised from this environment (the Admin "AI
+activity" card is how to watch it after publishing).
+
+Result: 91 unit test files with 2,135 tests and 9 browser journeys, all passing; typecheck, lint and production
+build clean; no known vulnerable dependencies.

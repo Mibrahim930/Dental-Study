@@ -38,8 +38,6 @@ async function examOpens(page: Page, attemptId: number) {
 test("practice exam: plan, answer some, finish, results, a second exam without the first one's right answers", async ({ page, signIn }) => {
   const w = seedExam({ name: "Endodontics block (practice)" });
   await signIn(w.userId);
-  // The first visit to a page compiles it (next dev): warm the exam screen so the writing screen is caught in time.
-  await page.request.get("/attempts/0");
 
   const firstId = await startExam(page, w.examId);
   // The writing screen, with the plan: 10 questions over the 4 sections.

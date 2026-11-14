@@ -3,12 +3,8 @@
 import { test as base, expect, type BrowserContext, type Page, type Request } from "@playwright/test";
 import { cookiesFor } from "./seed";
 
-/** Console errors that are not the app's fault. Each entry says why it is harmless. */
-const ALLOWED_CONSOLE: RegExp[] = [
-  // Chrome logs every non-2xx response as a console error. Pages that are meant to answer 404 (the not-found page a
-  // stranger gets) or 401 (an API call after signing out) trigger it; the tests that visit them assert the page itself.
-  /^Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
-];
+/** Console errors that are not the app's fault, allowed in every test. Each entry says why it is harmless. (None so far.) */
+const ALLOWED_CONSOLE: RegExp[] = [];
 
 type Fixtures = {
   /** Console error patterns allowed in this test only (push one, with a comment saying why it is expected). */
@@ -19,27 +15,28 @@ type Fixtures = {
   apiLog: string[];
 };
 
+// Each fixture's callback is called `provide`, not Playwright's usual `use`: the React lint rules take `use` for a hook.
 export const test = base.extend<Fixtures>({
-  allowedConsole: async ({}, use) => {
-    await use([...ALLOWED_CONSOLE]);
+  allowedConsole: async ({}, provide) => {
+    await provide([...ALLOWED_CONSOLE]);
   },
   apiLog: [
-    async ({ page }, use) => {
+    async ({ page }, provide) => {
       const log: string[] = [];
       page.on("request", (r: Request) => {
         const u = new URL(r.url());
         if (u.pathname.startsWith("/api/")) log.push(`${r.method()} ${u.pathname}${u.search}`);
       });
-      await use(log);
+      await provide(log);
     },
     { auto: true },
   ],
-  signIn: async ({ context }, use) => {
-    await use(async (userId, opts = {}) => {
+  signIn: async ({ context }, provide) => {
+    await provide(async (userId, opts = {}) => {
       await (opts.context ?? context).addCookies(cookiesFor(userId, { gate: opts.gate }));
     });
   },
-  page: async ({ page, allowedConsole: allowed }, use) => {
+  page: async ({ page, allowedConsole: allowed }, provide) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
     page.on("console", (m) => {
@@ -48,7 +45,7 @@ export const test = base.extend<Fixtures>({
       if (allowed.some((re) => re.test(text))) return;
       errors.push(`console error: ${text.slice(0, 400)}`);
     });
-    await use(page);
+    await provide(page);
     expect(errors, "uncaught page errors and console errors").toEqual([]);
   },
 });

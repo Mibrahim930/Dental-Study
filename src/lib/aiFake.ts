@@ -8,6 +8,7 @@
 // distractors that say they are fake.
 //
 // AI_FAKE_DELAY_MS (default 0) makes every fake answer wait that long, so a browser test can see "writing…" states.
+// AI_FAKE_FAIL="<purpose>:<n>" makes the n-th fake call with that purpose fail like a busy service (see fakeFailure).
 //
 // It is never a fallback, and it is refused in production: the server will not start with AI_FAKE set there
 // (instrumentation.ts), and generate() refuses it too. Fake calls still need a signed-in student with a key on file
@@ -44,7 +45,27 @@ export const promptText = (content: Content): string =>
  */
 export async function fakeAnswer<S extends z.ZodType>(opts: { purpose: string; schema: S; system: string; content: Content }): Promise<z.infer<S>> {
   await fakeDelay();
+  fakeFailure(opts.purpose);
   return fakeAnswerNow(opts);
+}
+
+// Calls answered so far per purpose (per server process), for AI_FAKE_FAIL.
+const fakeCalls = new Map<string, number>();
+
+/**
+ * AI_FAKE_FAIL="practice questions:2" makes the 2nd fake call with that purpose throw like a busy AI service (not a
+ * key problem), so a browser test can watch an exam come up short and finish itself. Several can be given, separated
+ * by commas. Unset: nothing ever fails.
+ */
+export function fakeFailure(purpose: string, env: NodeJS.ProcessEnv = process.env) {
+  const spec = env.AI_FAKE_FAIL;
+  if (!spec) return;
+  const n = (fakeCalls.get(purpose) ?? 0) + 1;
+  fakeCalls.set(purpose, n);
+  for (const part of spec.split(",")) {
+    const at = part.lastIndexOf(":");
+    if (at > 0 && part.slice(0, at).trim() === purpose && Number(part.slice(at + 1)) === n) throw new Error("Fake AI: overloaded (529)");
+  }
 }
 
 /** fakeAnswer without the delay (the batch helpers answer a whole batch at once). */

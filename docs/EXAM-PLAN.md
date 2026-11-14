@@ -151,3 +151,13 @@ for previews; it is never a fallback.
 - The coverage line counts what the exam PLANS to cover: pass every slot of the plan to `examCoverage`, whatever its
   state, and count its distinct in-scope keys.
 - `attemptView` therefore also carries `planned: number` (slots in the plan).
+- Facts already in the plan of another unfinished exam of hers from the last 24 hours rank last (`keysInOpenExams`),
+  so two exams started back to back cover different facts.
+- An exam always reaches a final state. A slot is "dropped" (not pending, not counted in `planned`) when its section
+  or slide was removed, when its question row is gone, or after `MAX_TRIES` (3) tries; a key problem or a missing key
+  does not count as a try. A finished exam reports `pending: 0` and `short: null`.
+- A busy exam is retried less and less often: `options_json.busyWait` doubles after a resume that writes nothing
+  (2, 4, 8 … minutes, capped at 60) and resets when one makes progress.
+- `attemptView` also carries `smaller: boolean` (for case sets: fewer cases than aimed for) and `dropped: number`;
+  the screens say so in one sentence.
+- A slot of kind "case" needs a patient box; a question is never stored with a slide or section that no longer exists.

@@ -30,3 +30,26 @@ jobs:
       - run: npx eslint .
       - run: npx vitest run
       - run: npm audit --omit=dev --audit-level=high
+
+  # Browser tests (e2e/): the student journeys on a phone-sized screen, against `next dev` with the fake AI (no keys,
+  # no network calls to an AI) and a throwaway data folder. Traces and screenshots of any failure are uploaded.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failures
+          path: |
+            e2e/.results/
+            e2e/.report/
+          retention-days: 14
